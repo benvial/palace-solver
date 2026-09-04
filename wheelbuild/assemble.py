@@ -202,13 +202,46 @@ def build(
     )
     raw_wheel = _single_wheel(raw_dir)
 
+    # Wheels from earlier runs may still be in the output directory, so each
+    # step is identified by the file it adds rather than by what is there.
+    before_repair = _wheels(output_dir)
     check_call(repair_command(wheel=raw_wheel, output_dir=output_dir))
-    repaired = _single_wheel(output_dir)
-    check_call(retag_command(repaired))
+    repaired = pick_wheel(
+        before=before_repair, after=_wheels(output_dir), fallback=raw_wheel
+    )
 
-    final = _single_wheel(output_dir)
+    before_retag = _wheels(output_dir)
+    check_call(retag_command(repaired))
+    final = pick_wheel(
+        before=before_retag, after=_wheels(output_dir), fallback=repaired
+    )
     print(size_report(final).text, flush=True)
     return final
+
+
+def _wheels(directory: Path) -> set[Path]:
+    return set(directory.glob("*.whl"))
+
+
+def pick_wheel(*, before: set[Path], after: set[Path], fallback: Path) -> Path:
+    """Return the wheel a build step produced.
+
+    Args:
+        before: Wheels present before the step.
+        after: Wheels present after it.
+        fallback: The wheel to assume when the step renamed nothing — retagging
+            an already correctly tagged wheel leaves the filename unchanged.
+
+    Returns:
+        The wheel the step left behind.
+
+    Raises:
+        RuntimeError: If the step added more than one wheel.
+    """
+    added = after - before
+    if len(added) > 1:
+        raise RuntimeError(f"ambiguous build step output: added {sorted(added)}")
+    return added.pop() if added else fallback
 
 
 def _single_wheel(directory: Path) -> Path:

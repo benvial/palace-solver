@@ -141,3 +141,29 @@ def test_stage_leaves_out_the_mpi_compiler_wrappers(tmp_path):
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
     assert not (package_dir / "bin" / "mpicc").exists()
+
+
+def testpick_wheel_returns_the_file_the_step_added(tmp_path):
+    old = tmp_path / "old.whl"
+    new = tmp_path / "new.whl"
+
+    picked = assemble.pick_wheel(before={old}, after={old, new}, fallback=old)
+
+    assert picked == new
+
+
+def testpick_wheel_falls_back_when_the_step_added_nothing(tmp_path):
+    """Retagging an already correctly tagged wheel leaves the same filename."""
+    wheel = tmp_path / "wheel.whl"
+
+    picked = assemble.pick_wheel(before={wheel}, after={wheel}, fallback=wheel)
+
+    assert picked == wheel
+
+
+def testpick_wheel_refuses_an_ambiguous_result(tmp_path):
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+
+    with pytest.raises(RuntimeError, match="ambiguous"):
+        assemble.pick_wheel(before=set(), after={first, second}, fallback=first)
