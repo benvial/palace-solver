@@ -70,5 +70,10 @@ def mpiexec_path() -> Path:
 
 
 def lib_dir() -> Path:
-    """Return the directory holding the vendored shared libraries."""
-    return _PACKAGE_DIR / "lib"
+    """Return the directory holding the vendored shared libraries.
+
+    ``auditwheel`` puts them in a ``pypalace_solver.libs`` directory beside the
+    package, and the binary finds them through its RPATH; the path is exposed
+    for callers that want to set ``LD_LIBRARY_PATH`` themselves.
+    """
+    return _PACKAGE_DIR.parent / "pypalace_solver.libs"

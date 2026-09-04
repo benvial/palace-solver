@@ -37,3 +37,13 @@ def test_mpiexec_path_raises_when_the_wheel_carries_no_launcher(tmp_path, monkey
 
     with pytest.raises(FileNotFoundError, match="mpiexec"):
         pypalace_solver.mpiexec_path()
+
+
+def test_lib_dir_points_at_the_auditwheel_vendor_directory(tmp_path, monkeypatch):
+    package_dir = tmp_path / "pypalace_solver"
+    package_dir.mkdir()
+    vendored = tmp_path / "pypalace_solver.libs"
+    vendored.mkdir()
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", package_dir)
+
+    assert pypalace_solver.lib_dir() == vendored

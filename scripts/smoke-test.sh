@@ -15,12 +15,19 @@ config="${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}"
 venv="$(mktemp -d)/venv"
 
 echo "==> the wheel vendors MPICH"
-for library in libmpi libmpifort; do
-  if ! unzip -l "$wheel" | grep -q "$library"; then
-    echo "ERROR: $library is missing from the wheel" >&2
-    exit 1
-  fi
-done
+# Read the archive with Python: `unzip -l | grep -q` exits early, SIGPIPEs
+# unzip, and trips `set -o pipefail`.
+python3 - "$wheel" <<'PYTHON'
+import sys, zipfile
+
+names = zipfile.ZipFile(sys.argv[1]).namelist()
+for library in ("libmpi", "libmpifort", "libopenblas"):
+    if not any(library in name for name in names):
+        sys.exit(f"ERROR: {library} is missing from the wheel")
+for executable in ("bin/palace-real", "bin/mpiexec"):
+    if not any(name.endswith(executable) for name in names):
+        sys.exit(f"ERROR: {executable} is missing from the wheel")
+PYTHON
 
 python3 -m venv "$venv"
 "$venv/bin/pip" install --quiet --upgrade pip

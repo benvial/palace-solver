@@ -1,9 +1,9 @@
 """Assemble, repair and retag the pypalace-solver platform wheel.
 
-Pipeline: stage the superbuild install tree into the package directory, set
-RPATHs, build a wheel, run ``auditwheel repair`` to vendor every shared library
-it needs — MPI included, since the wheel carries its own — and retag the result
-``py3-none`` because the payload is a binary with no Python ABI.
+Pipeline: stage the executables into the package directory, build a wheel, run
+``auditwheel repair`` to vendor every shared library they need — MPI and BLAS
+included, since the wheel carries its own — and retag the result ``py3-none``
+because the payload is a binary with no Python ABI.
 """
 
 from __future__ import annotations
@@ -15,7 +15,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pypalace_solver import BINARY_NAME, LAUNCHER_NAME
-from wheelbuild import linkage
 from wheelbuild._process import check_call, is_elf
 
 #: Wheel platform tag, per the spec (manylinux_2_28, x86_64 first).
@@ -105,13 +104,9 @@ def stage(
 
     for launcher in _process_manager_binaries(install_prefix):
         destination = binary_dir / launcher.name
-        shutil.copy2(launcher, destination)
+        # Wheels cannot carry symlinks, and MPICH installs mpiexec as one.
+        shutil.copy2(launcher.resolve(), destination)
         destination.chmod(destination.stat().st_mode | 0o111)
-
-    for path in sorted((install_prefix / "lib").iterdir()):
-        if path.is_dir() or path.is_symlink() or not _is_shared_library(path):
-            continue
-        shutil.copy2(path, library_dir / path.name)
 
     if notices is not None:
         shutil.copy2(notices, package_dir / "THIRD-PARTY-NOTICES")
@@ -141,7 +136,6 @@ def _process_manager_binaries(install_prefix: Path) -> list[Path]:
         path
         for path in (install_prefix / "bin").iterdir()
         if path.is_file()
-        and not path.is_symlink()
         and is_elf(path)
         and (path.name == LAUNCHER_NAME or path.name.startswith(("mpiexec", "hydra_")))
     )
@@ -200,7 +194,6 @@ def build(
     """
     package_dir = project_dir / "pypalace_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
-    linkage.set_rpaths(package_dir)
 
     raw_dir = output_dir / "raw"
     shutil.rmtree(raw_dir, ignore_errors=True)
@@ -223,10 +216,6 @@ def _single_wheel(directory: Path) -> Path:
     if len(wheels) != 1:
         raise RuntimeError(f"expected exactly one wheel in {directory}, found {wheels}")
     return wheels[0]
-
-
-def _is_shared_library(path: Path) -> bool:
-    return ".so" in path.name and path.is_file() and is_elf(path)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

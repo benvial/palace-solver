@@ -12,8 +12,10 @@ def _install_tree(root: Path) -> Path:
     (root / "bin").mkdir(parents=True)
     (root / "bin" / "palace").write_text('#!/bin/sh\nexec palace-x86_64.bin "$@"\n')
     (root / "bin" / "palace-x86_64.bin").write_bytes(ELF_MAGIC + b"binary")
-    for launcher in ("mpiexec", "mpiexec.hydra", "hydra_pmi_proxy", "mpichversion"):
+    for launcher in ("mpiexec.hydra", "hydra_pmi_proxy", "mpichversion"):
         (root / "bin" / launcher).write_bytes(ELF_MAGIC + b"launcher")
+    # MPICH installs mpiexec as a symlink to the Hydra binary.
+    (root / "bin" / "mpiexec").symlink_to("mpiexec.hydra")
     (root / "bin" / "mpicc").write_text("#!/bin/sh\n# compiler wrapper\n")
     (root / "lib").mkdir()
     (root / "lib" / "libmfem.so.4.7").write_bytes(ELF_MAGIC + b"lib")
@@ -34,14 +36,14 @@ def test_stage_copies_the_real_elf_binary_as_palace_real(tmp_path):
     assert staged.stat().st_mode & 0o111
 
 
-def test_stage_copies_shared_libraries_and_skips_build_system_files(tmp_path):
+def test_stage_leaves_the_shared_libraries_to_auditwheel(tmp_path):
+    """auditwheel vendors the dependency closure; staging it too doubles the wheel."""
     install_prefix = _install_tree(tmp_path / "install")
     package_dir = tmp_path / "pkg" / "pypalace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
-    staged = {path.name for path in (package_dir / "lib").iterdir()}
-    assert staged == {"libmfem.so.4.7", "libHYPRE.so"}
+    assert list((package_dir / "lib").iterdir()) == []
 
 
 def test_stage_fails_when_the_install_tree_has_no_palace_binary(tmp_path):
@@ -118,6 +120,18 @@ def test_stage_ships_the_process_manager_so_multi_rank_runs_work(tmp_path):
 
     staged = {path.name for path in (package_dir / "bin").iterdir()}
     assert {"mpiexec", "mpiexec.hydra", "hydra_pmi_proxy"} <= staged
+
+
+def test_stage_materialises_the_mpiexec_symlink_as_a_real_binary(tmp_path):
+    """Wheels cannot carry symlinks, so the launcher must be a real file."""
+    install_prefix = _install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "pypalace_solver"
+
+    assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
+
+    staged = package_dir / "bin" / "mpiexec"
+    assert not staged.is_symlink()
+    assert staged.read_bytes().startswith(ELF_MAGIC)
 
 
 def test_stage_leaves_out_the_mpi_compiler_wrappers(tmp_path):
