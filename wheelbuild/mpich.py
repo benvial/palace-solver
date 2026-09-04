@@ -35,9 +35,7 @@ REQUIRED_ARTEFACTS = (
 
 def source_url(version: str = MPICH_VERSION) -> str:
     """Return the download URL of the pinned MPICH source tarball."""
-    return (
-        f"https://www.mpich.org/static/downloads/{version}/mpich-{version}.tar.gz"
-    )
+    return f"https://www.mpich.org/static/downloads/{version}/mpich-{version}.tar.gz"
 
 
 def configure_arguments(*, source_dir: Path, prefix: Path) -> list[str]:

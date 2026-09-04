@@ -25,6 +25,10 @@ venv="$build_root/venv"
 
 mkdir -p "$build_root" "$CCACHE_DIR" "$output_dir"
 
+# ZFP and friends install into lib64 on RHEL-family systems while Palace links
+# <prefix>/lib, so the two spellings are made the same directory up front.
+PYTHONPATH="$repo_root" python3 -m wheelbuild.prefix --prefix "$install_prefix"
+
 echo "==> toolchain"
 dnf install -y ccache patchelf >/dev/null
 

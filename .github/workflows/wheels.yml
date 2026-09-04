@@ -49,9 +49,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /build
-          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py') }}-${{ github.sha }}
+          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-${{ github.sha }}
           restore-keys: |
-            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py') }}-
+            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-
             superbuild-${{ env.PALACE_VERSION }}-
 
       - name: Build wheel
