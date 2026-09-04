@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+.venv/
+.build-cache/
+build/
+dist/
+wheelhouse/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Binary payload staged into the package by the wheel build
+pypalace_solver/bin/*
+pypalace_solver/lib/*
+pypalace_solver/THIRD-PARTY-NOTICES
+!pypalace_solver/bin/.gitkeep
+!pypalace_solver/lib/.gitkeep

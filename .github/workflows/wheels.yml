@@ -1,0 +1,100 @@
+name: wheels
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install dev dependencies
+        run: python -m pip install --upgrade pip pytest ruff mypy
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy pypalace_solver wheelbuild
+      - run: python -m pytest -q
+
+  wheel:
+    name: build manylinux_2_28 x86_64 wheel
+    runs-on: ubuntu-latest
+    container: quay.io/pypa/manylinux_2_28_x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      # pypalace_solver.__version__ mirrors the Palace release, and is the only
+      # place the version is written down.
+      - name: Resolve Palace version
+        run: |
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('pypalace_solver/__init__.py').read_text()).group(1))")
+          echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # The superbuild compiles hypre, MFEM, libCEED, SuperLU_DIST, STRUMPACK,
+      # MUMPS, SLEPc, ARPACK, LIBXSMM and GSLIB: 30-60+ minutes cold. The cache
+      # holds the Palace sources, the superbuild tree and ccache.
+      - name: Restore build cache
+        uses: actions/cache@v4
+        with:
+          path: /build
+          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py') }}-${{ github.sha }}
+          restore-keys: |
+            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py') }}-
+            superbuild-${{ env.PALACE_VERSION }}-
+
+      - name: Build wheel
+        run: scripts/build-wheel.sh "$PALACE_VERSION"
+        env:
+          BUILD_ROOT: /build
+          OUTPUT_DIR: ${{ github.workspace }}/wheelhouse
+
+      - name: Smoke test in a clean virtual environment
+        run: |
+          scripts/smoke-test.sh \
+            "$(ls "${{ github.workspace }}"/wheelhouse/*.whl)" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      - name: Report wheel size
+        run: |
+          python3 -c "
+          import pathlib, sys
+          sys.path.insert(0, '.')
+          from wheelbuild.assemble import size_report
+          wheel = next(pathlib.Path('${{ github.workspace }}/wheelhouse').glob('*.whl'))
+          report = size_report(wheel)
+          print(report.text)
+          pathlib.Path('${GITHUB_STEP_SUMMARY}').write_text(report.text + '\n')
+          sys.exit(0)
+          "
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pypalace-solver-manylinux_2_28_x86_64
+          path: wheelhouse/*.whl
+
+  publish:
+    name: publish to PyPI
+    needs: [checks, wheel]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      # Trusted publishing: no API token stored in the repository.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: pypalace-solver-manylinux_2_28_x86_64
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1

@@ -1,0 +1,95 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools>=64", "wheel"]
+
+[project]
+authors = [{name = "oslumen community", email = "contact@oslumen.org"}]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: Scientific/Engineering :: Physics"
+]
+description = "Palace 3D finite-element electromagnetics solver, packaged as a binary wheel"
+keywords = ["electromagnetics", "finite element", "palace", "solver"]
+license = {text = "Apache-2.0"}
+maintainers = [{name = "Benjamin Vial", email = "benjamin.vial84@gmail.com"}]
+name = "pypalace-solver"
+readme = "README.md"
+dynamic = ["version"]
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff", "mypy", "auditwheel>=6.0", "wheel", "build"]
+
+[project.scripts]
+palace = "pypalace_solver._exec:main"
+
+[project.urls]
+"Bug Tracker" = "https://github.com/oslumen/pypalace-solver/issues"
+Homepage = "https://github.com/oslumen/pypalace-solver"
+Repository = "https://github.com/oslumen/pypalace-solver"
+
+[tool.mypy]
+check_untyped_defs = true
+disallow_untyped_decorators = true
+disallow_incomplete_defs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+python_version = "3.10"
+strict_equality = true
+warn_no_return = true
+warn_redundant_casts = true
+warn_return_any = true
+warn_unreachable = true
+warn_unused_configs = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+python_files = ["test_*.py"]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.ruff.lint]
+ignore = [
+  "ANN",  # flake8-annotations (docstrings carry the argument docs)
+  "COM812",  # missing-trailing-comma (formatter owns this)
+  "CPY001",  # missing copyright notice
+  "D203",
+  "D213",
+  "EM101",
+  "EM102",
+  "PLR0913",  # too-many-arguments (keyword-only build entry points)
+  "PERF401",
+  "PLR2004",
+  "S603",  # subprocess call (build tooling drives cmake/auditwheel)
+  "S607",
+  "TC003",  # typing-only-standard-library-import
+  "TRY003"
+]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"pypalace_solver/_exec.py" = ["S606", "T201"]  # os.execv is the point of the wrapper
+"tests/**/*.py" = ["D", "INP001", "S101", "PLC0415", "PT011"]
+"wheelbuild/*.py" = ["T201"]  # build steps report progress on stdout
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.setuptools.dynamic]
+version = {attr = "pypalace_solver.__version__"}
+
+[tool.setuptools.package-data]
+pypalace_solver = ["bin/*", "lib/*", "lib/**/*", "THIRD-PARTY-NOTICES"]
+
+[tool.setuptools.packages.find]
+include = ["pypalace_solver", "pypalace_solver.*"]

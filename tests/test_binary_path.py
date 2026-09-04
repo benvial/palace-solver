@@ -1,0 +1,21 @@
+import pytest
+
+import pypalace_solver
+
+
+def test_binary_path_points_at_packaged_binary(tmp_path, monkeypatch):
+    package_dir = tmp_path / "pypalace_solver"
+    binary = package_dir / "bin" / "palace-real"
+    binary.parent.mkdir(parents=True)
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", package_dir)
+
+    assert pypalace_solver.binary_path() == binary
+
+
+def test_binary_path_raises_when_binary_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="palace-real"):
+        pypalace_solver.binary_path()
