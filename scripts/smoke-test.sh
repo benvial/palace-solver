@@ -10,9 +10,14 @@
 # under the vendored launcher.
 set -euo pipefail
 
-wheel="${1:?usage: smoke-test.sh WHEEL PALACE_CONFIG}"
-config="${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}"
-venv="$(mktemp -d)/venv"
+wheel="$(realpath "${1:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
+config="$(realpath "${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
+workdir="$(mktemp -d)"
+venv="$workdir/venv"
+
+# Run from outside the repository: a source checkout's pypalace_solver package
+# shadows the installed one, and the test must exercise what the wheel ships.
+cd "$workdir"
 
 echo "==> the wheel vendors MPICH"
 # Read the archive with Python: `unzip -l | grep -q` exits early, SIGPIPEs
@@ -48,10 +53,17 @@ ldd "$binary" | grep -E "libmpi" || {
   exit 1
 }
 
+# Palace resolves the mesh path relative to the working directory, and writes
+# its output beside the config, so the example is copied somewhere writable.
+example_dir="$workdir/example"
+cp -r "$(dirname "$config")" "$example_dir"
+chmod -R u+w "$example_dir"
+cd "$example_dir"
+
 echo "==> single rank"
-"$venv/bin/palace" --dry-run "$config"
+"$venv/bin/palace" --dry-run "$(basename "$config")"
 
 echo "==> two ranks, under the vendored process manager"
-"$venv/bin/palace-mpiexec" -n 2 "$venv/bin/palace" --dry-run "$config"
+"$venv/bin/palace-mpiexec" -n 2 "$venv/bin/palace" --dry-run "$(basename "$config")"
 
 echo "==> smoke test passed"
