@@ -44,7 +44,7 @@ export LD_LIBRARY_PATH="$install_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 echo "==> MPICH (vendored into the wheel)"
 # The PyPI mpich wheel is C-only, and Palace needs Fortran MPI for MUMPS,
 # ARPACK and STRUMPACK, so MPICH is built here and shipped in the wheel.
-mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.mpich import MPICH_VERSION; print(MPICH_VERSION)')"
+mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from pypalace_solver import MPICH_VERSION; print(MPICH_VERSION)')"
 mpich_source="$build_root/mpich-$mpich_version"
 if [[ ! -d "$mpich_source" ]]; then
   curl -fsSL "https://www.mpich.org/static/downloads/$mpich_version/mpich-$mpich_version.tar.gz" \

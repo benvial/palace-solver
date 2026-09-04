@@ -21,11 +21,19 @@ jobs:
         with:
           python-version: "3.13"
       - name: Install dev dependencies
-        run: python -m pip install --upgrade pip pytest ruff mypy
+        run: python -m pip install --upgrade pip pytest ruff mypy packaging
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy pypalace_solver wheelbuild
+      - run: mypy pypalace_solver
+      # The build tooling runs on the container's Python, not on the 3.10 floor
+      # the wheel itself keeps, so it may use tomllib.
+      - run: mypy --python-version 3.11 wheelbuild
       - run: python -m pytest -q
+      # Fails when the vendored MPICH leaves the mpich range pypalace pins.
+      # Only this side is checked: pypalace is not reachable from CI here, so
+      # its own pin moving is caught by running this with --pypalace against a
+      # checkout. See wheelbuild/pin_check.py.
+      - run: python -m wheelbuild.pin_check
 
   wheel:
     name: build manylinux_2_28 x86_64 wheel
@@ -63,6 +71,15 @@ jobs:
       - name: Smoke test in a clean virtual environment
         run: |
           scripts/smoke-test.sh \
+            "$(ls "${{ github.workspace }}"/wheelhouse/*.whl)" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      # The smoke test stops at --dry-run. This solves the example for real on
+      # two ranks under both launchers, so collective communication is
+      # exercised and the two results must agree.
+      - name: Launcher interoperability
+        run: |
+          scripts/interop-test.sh \
             "$(ls "${{ github.workspace }}"/wheelhouse/*.whl)" \
             "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
 

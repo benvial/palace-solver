@@ -22,7 +22,7 @@ dynamic = ["version"]
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff", "mypy", "auditwheel>=6.0", "wheel", "build"]
+dev = ["pytest>=7.0", "ruff", "mypy", "auditwheel>=6.0", "packaging", "wheel", "build"]
 
 [project.scripts]
 palace = "pypalace_solver._exec:main"
@@ -82,6 +82,11 @@ select = ["ALL"]
 "pypalace_solver/_exec.py" = ["S606", "T201"]  # os.execv is the point of the wrapper
 "tests/**/*.py" = ["D", "INP001", "S101", "PLC0415", "PT011"]
 "wheelbuild/*.py" = ["T201"]  # build steps report progress on stdout
+
+[tool.ruff.lint.isort]
+# The build tooling runs on the container's Python (3.11+), above the 3.10
+# floor the wheel itself keeps, so tomllib is stdlib there.
+extra-standard-library = ["tomllib"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

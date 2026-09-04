@@ -36,9 +36,23 @@ Palace needs for MUMPS, ARPACK and STRUMPACK — the PyPI
 them (see `docs/adr/0002-vendor-mpich-in-the-solver-wheel.md`). Nothing else
 needs installing, and `palace-mpiexec` is the vendored Hydra launcher.
 
-MPICH is pinned to the version pypalace depends on, so Palace also runs
-correctly when started by an `mpiexec` from that wheel. Palace is a separate
-process, so its MPI never shares an address space with the one `mpi4py` uses.
+MPICH is pinned to the version pypalace depends on (`mpich<5`), so Palace also
+runs correctly when started by an `mpiexec` from that wheel. Palace is a
+separate process, so its MPI never shares an address space with the one
+`mpi4py` uses.
+
+`palace-mpiexec` is the supported launcher, and single-node runs are the
+supported shape — clusters keep building Palace themselves. Another process
+manager still works while it belongs to the same MPICH major series; one from a
+different major series is refused before the solver starts, since that mismatch
+fails silently rather than loudly. `PYPALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER=1`
+runs anyway, and a launcher that cannot be identified as MPICH — Slurm's
+`srun` — is left alone. The reasoning is in
+`docs/adr/0004-the-vendored-launcher-is-the-supported-one.md`.
+
+The check belongs to the `palace` console script. Code that launches
+`binary_path()` itself should call `pypalace_solver.launcher_conflict()` before
+spawning ranks to make the same check.
 
 ## Python API
 
@@ -47,6 +61,7 @@ import pypalace_solver
 
 pypalace_solver.binary_path()  # -> .../site-packages/pypalace_solver/bin/palace-real
 pypalace_solver.lib_dir()  # -> .../site-packages/pypalace_solver/lib
+pypalace_solver.launcher_conflict()  # -> None, or why this launcher is refused
 ```
 
 ## Building the wheel
@@ -55,8 +70,17 @@ The wheel is built inside a `manylinux_2_28` container. Locally:
 
 ```bash
 scripts/build-in-container.sh 0.17.0      # docker, caches in ./.build-cache
-scripts/smoke-test.sh wheelhouse/*.whl    # clean venv, 1 rank and mpiexec -n 2
+scripts/smoke-test.sh wheelhouse/*.whl CONFIG   # clean venv, 1 rank and -n 2
+scripts/interop-test.sh wheelhouse/*.whl CONFIG # real solve under both launchers
 ```
+
+`scripts/interop-test.sh` solves a real example on two ranks under both
+`palace-mpiexec` and the `mpiexec` from the PyPI `mpich` wheel, requires the
+results to agree, and checks that a launcher from the next MPICH major series
+is refused. `python -m wheelbuild.pin_check` checks the vendored MPICH against
+the `mpich` pin recorded for pypalace; pass `--pypalace <checkout>` to also
+check that pypalace still declares it — CI cannot, so that half is a release-
+time step.
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS → superbuild →
 notice harvest → wheel assembly → `auditwheel repair` → retag to

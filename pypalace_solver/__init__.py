@@ -9,7 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-__all__ = ["__version__", "binary_path", "lib_dir", "mpiexec_path"]
+__all__ = [
+    "MPICH_VERSION",
+    "__version__",
+    "binary_path",
+    "launcher_conflict",
+    "lib_dir",
+    "mpiexec_path",
+]
 
 #: Single source of the version, mirroring the Palace release this wheel ships
 #: (with a ``.postN`` segment for packaging-only fixes). ``pyproject.toml``,
@@ -25,11 +32,22 @@ BINARY_NAME = "palace-real"
 #: Name of the vendored MPICH process manager inside the same directory.
 LAUNCHER_NAME = "mpiexec"
 
+#: MPICH release vendored in this wheel, matching the ``mpich`` pin pypalace
+#: declares for mpi4py. The build step and the runtime launcher guard both read
+#: it from here; ``wheelbuild.interop`` checks it against pypalace's pin.
+MPICH_VERSION = "4.3.2"
+
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 
 def binary_path() -> Path:
     """Return the path of the packaged Palace executable.
+
+    Callers that launch this path themselves bypass the ``palace`` console
+    script, and with it the launcher guard that refuses a process manager from
+    another MPICH major series. Call :func:`launcher_conflict` from the
+    launching process to make the same check, or launch the ``palace`` console
+    script instead.
 
     Returns:
         Absolute path to the ``palace-real`` binary shipped in this wheel.
@@ -67,6 +85,27 @@ def mpiexec_path() -> Path:
             "of pypalace-solver does not contain the MPICH process manager"
         )
     return candidate
+
+
+def launcher_conflict() -> str | None:
+    """Return why this process must not launch the solver, if there is one.
+
+    The wheel vendors its own MPICH, and a process manager from a different
+    MPICH major series cannot be trusted to start it: the PMI handshake may
+    fail, and its failure is silent. The ``palace`` console script makes this
+    check for itself; a caller that launches :func:`binary_path` directly —
+    which is how pypalace's runner resolves the solver — has to make it here,
+    before spawning the ranks.
+
+    Returns:
+        An operator-facing message naming the conflict, or ``None`` when the
+        launch is allowed. Launching under a process manager that cannot be
+        identified as MPICH is allowed: the check proves a mismatch, never a
+        match.
+    """
+    from pypalace_solver import _launcher  # noqa: PLC0415
+
+    return _launcher.refusal_reason()
 
 
 def lib_dir() -> Path:

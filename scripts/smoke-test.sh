@@ -8,15 +8,17 @@
 # finds the payload, and Palace runs PALACE_CONFIG (--dry-run: config parsing,
 # mesh partitioning and FE space setup, no solve) on one rank and on two ranks
 # under the vendored launcher.
+#
+# scripts/interop-test.sh carries this further, into a real solve under a
+# launcher that did not ship with the wheel.
 set -euo pipefail
+
+source "$(dirname "${BASH_SOURCE[0]}")/_wheel_venv.sh"
 
 wheel="$(realpath "${1:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
 config="$(realpath "${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
 workdir="$(mktemp -d)"
 venv="$workdir/venv"
-
-# Run from outside the repository: a source checkout's pypalace_solver package
-# shadows the installed one, and the test must exercise what the wheel ships.
 cd "$workdir"
 
 echo "==> the wheel vendors MPICH"
@@ -34,10 +36,8 @@ for executable in ("bin/palace-real", "bin/mpiexec"):
         sys.exit(f"ERROR: {executable} is missing from the wheel")
 PYTHON
 
-python3 -m venv "$venv"
-"$venv/bin/pip" install --quiet --upgrade pip
 # Nothing but the wheel: it must bring its own MPI.
-"$venv/bin/pip" install --quiet "$wheel"
+make_wheel_venv "$venv" "$wheel"
 
 binary="$("$venv/bin/python" -c 'import pypalace_solver; print(pypalace_solver.binary_path())')"
 echo "==> packaged binary: $binary"
@@ -53,11 +53,8 @@ ldd "$binary" | grep -E "libmpi" || {
   exit 1
 }
 
-# Palace resolves the mesh path relative to the working directory, and writes
-# its output beside the config, so the example is copied somewhere writable.
 example_dir="$workdir/example"
-cp -r "$(dirname "$config")" "$example_dir"
-chmod -R u+w "$example_dir"
+copy_example "$config" "$example_dir"
 cd "$example_dir"
 
 echo "==> single rank"

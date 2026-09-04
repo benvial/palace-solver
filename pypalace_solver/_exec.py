@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from pypalace_solver import binary_path, mpiexec_path
+from pypalace_solver import _launcher, binary_path, mpiexec_path
 
 
 def mpiexec(argv: Sequence[str] | None = None) -> None:
@@ -26,13 +26,21 @@ def mpiexec(argv: Sequence[str] | None = None) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     """Replace this process with the packaged Palace binary.
 
+    A rank started by a process manager from another MPICH major series is
+    refused here rather than left to fail silently; see :mod:`._launcher`.
+
     Args:
         argv: Arguments to forward to Palace. Defaults to the arguments this
             console script was invoked with.
 
     Raises:
-        SystemExit: If the wheel carries no Palace binary.
+        SystemExit: If the wheel carries no Palace binary, or the launcher is
+            incompatible with the vendored MPICH.
     """
+    conflict = _launcher.refusal_reason()
+    if conflict is not None:
+        print(f"palace: {conflict}", file=sys.stderr)
+        raise SystemExit(1)
     _exec_payload(binary_path, argv, name="palace")
 
 
