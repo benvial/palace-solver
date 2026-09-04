@@ -19,3 +19,21 @@ def test_binary_path_raises_when_binary_missing(tmp_path, monkeypatch):
 
     with pytest.raises(FileNotFoundError, match="palace-real"):
         pypalace_solver.binary_path()
+
+
+def test_mpiexec_path_points_at_the_vendored_process_manager(tmp_path, monkeypatch):
+    package_dir = tmp_path / "pypalace_solver"
+    launcher = package_dir / "bin" / "mpiexec"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", package_dir)
+
+    assert pypalace_solver.mpiexec_path() == launcher
+
+
+def test_mpiexec_path_raises_when_the_wheel_carries_no_launcher(tmp_path, monkeypatch):
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", tmp_path)
+
+    with pytest.raises(FileNotFoundError, match="mpiexec"):
+        pypalace_solver.mpiexec_path()

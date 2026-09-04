@@ -1,9 +1,9 @@
 """Drive Palace's CMake superbuild with the feature set the spec pins.
 
 The flag set is deliberately maximal and mirrors ``pypalace/_cli/build.py``;
-packaging concerns never trim a solver feature. MPI comes from the ``mpich``
-wheel installed into the build environment, so the superbuild compiles against
-the same MPICH the runtime wheel will link to.
+packaging concerns never trim a solver feature. MPI comes from the MPICH built by
+:mod:`wheelbuild.mpich`, which is the same MPICH the wheel vendors, so the
+solver runs against exactly what it was compiled against.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
+from wheelbuild import mpich
 from wheelbuild._process import check_call
 
 #: Palace feature flags, in spec order. Never trimmed for packaging reasons.
@@ -37,30 +38,22 @@ FEATURE_FLAGS = (
 
 
 def mpi_home(prefix: Path) -> Path:
-    """Validate that ``prefix`` holds the payload of the PyPI ``mpich`` wheel.
+    """Validate the MPICH install Palace is compiled against.
 
-    The wheel is a data wheel: it installs ``lib/libmpi.so.12``,
-    ``include/mpi.h`` and ``bin/mpiexec`` directly under the environment
-    prefix, which is exactly the layout CMake's ``MPI_HOME`` expects.
+    Palace needs Fortran MPI (MUMPS, ARPACK and STRUMPACK are Fortran), which
+    the PyPI ``mpich`` wheel does not provide, so this is the MPICH built by
+    :mod:`wheelbuild.mpich` and later vendored into the wheel.
 
     Args:
-        prefix: Environment prefix the ``mpich`` wheel was installed into.
+        prefix: MPICH install prefix.
 
     Returns:
         The validated prefix.
 
     Raises:
-        FileNotFoundError: If the mpich wheel payload is not there.
+        FileNotFoundError: If the install lacks anything the build needs.
     """
-    library = prefix / "lib" / "libmpi.so.12"
-    header = prefix / "include" / "mpi.h"
-    missing = [path for path in (library, header) if not path.is_file()]
-    if missing:
-        raise FileNotFoundError(
-            f"no mpich wheel payload under {prefix}: missing "
-            + ", ".join(str(path) for path in missing)
-        )
-    return prefix
+    return mpich.validate(prefix)
 
 
 def cmake_arguments(
@@ -75,7 +68,7 @@ def cmake_arguments(
     Args:
         source_dir: Palace source tree (the superbuild's top-level CMake dir).
         install_prefix: Where the built Palace tree is installed.
-        mpi_home: Prefix of the mpich wheel to compile against.
+        mpi_home: MPICH install prefix to compile against.
         ccache: Route the compilers through ccache.
 
     Returns:
@@ -114,7 +107,7 @@ def run(
         build_dir: Scratch directory for the superbuild (reuse it to benefit
             from the cached dependency tree).
         install_prefix: Install destination for the Palace tree.
-        prefix: Environment prefix holding the mpich wheel.
+        prefix: MPICH install prefix.
         jobs: Parallel build jobs.
         ccache: Route the compilers through ccache.
     """
@@ -139,7 +132,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--prefix",
         type=Path,
         default=Path(sys.prefix),
-        help="environment prefix holding the mpich wheel (default: sys.prefix)",
+        help="MPICH install prefix (default: sys.prefix)",
     )
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--no-ccache", action="store_true")

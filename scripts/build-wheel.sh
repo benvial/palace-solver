@@ -28,15 +28,33 @@ mkdir -p "$build_root" "$CCACHE_DIR" "$output_dir"
 echo "==> toolchain"
 dnf install -y ccache patchelf >/dev/null
 
-echo "==> build environment (python + mpich wheel)"
+echo "==> build environment (python tooling)"
 python3 -m venv "$venv"
 "$venv/bin/pip" install --quiet --upgrade pip
-# The binary links against this exact mpich wheel; users get it from the
-# pypalace dependency tree at install time.
-"$venv/bin/pip" install --quiet "mpich<5" build auditwheel wheel
+"$venv/bin/pip" install --quiet build auditwheel wheel
 export PATH="$venv/bin:$PATH"
-# auditwheel resolves libmpi here before excluding it from the wheel.
-export LD_LIBRARY_PATH="$venv/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+# The vendored MPICH and Palace share one install prefix; auditwheel resolves
+# the payload's libraries from there.
+export LD_LIBRARY_PATH="$install_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+echo "==> MPICH (vendored into the wheel)"
+# The PyPI mpich wheel is C-only, and Palace needs Fortran MPI for MUMPS,
+# ARPACK and STRUMPACK, so MPICH is built here and shipped in the wheel.
+mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.mpich import MPICH_VERSION; print(MPICH_VERSION)')"
+mpich_source="$build_root/mpich-$mpich_version"
+if [[ ! -d "$mpich_source" ]]; then
+  curl -fsSL "https://www.mpich.org/static/downloads/$mpich_version/mpich-$mpich_version.tar.gz" \
+    -o "$build_root/mpich-$mpich_version.tar.gz"
+  tar -xzf "$build_root/mpich-$mpich_version.tar.gz" -C "$build_root"
+fi
+if [[ ! -f "$install_prefix/lib/libmpifort.so.12" ]]; then
+  PYTHONPATH="$repo_root" python3 -m wheelbuild.mpich \
+    --source-dir "$mpich_source" \
+    --build-dir "$build_root/mpich-build" \
+    --prefix "$install_prefix" \
+    --jobs "$jobs"
+fi
+export PATH="$install_prefix/bin:$PATH"
 
 echo "==> Palace $palace_version sources"
 if [[ ! -d "$source_dir" ]]; then
@@ -52,7 +70,7 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.superbuild \
   --source-dir "$source_dir" \
   --build-dir "$superbuild_dir" \
   --install-prefix "$install_prefix" \
-  --prefix "$venv" \
+  --prefix "$install_prefix" \
   --jobs "$jobs"
 
 echo "==> third-party notices"

@@ -12,6 +12,9 @@ def _install_tree(root: Path) -> Path:
     (root / "bin").mkdir(parents=True)
     (root / "bin" / "palace").write_text('#!/bin/sh\nexec palace-x86_64.bin "$@"\n')
     (root / "bin" / "palace-x86_64.bin").write_bytes(ELF_MAGIC + b"binary")
+    for launcher in ("mpiexec", "mpiexec.hydra", "hydra_pmi_proxy", "mpichversion"):
+        (root / "bin" / launcher).write_bytes(ELF_MAGIC + b"launcher")
+    (root / "bin" / "mpicc").write_text("#!/bin/sh\n# compiler wrapper\n")
     (root / "lib").mkdir()
     (root / "lib" / "libmfem.so.4.7").write_bytes(ELF_MAGIC + b"lib")
     (root / "lib" / "libHYPRE.so").write_bytes(ELF_MAGIC + b"lib")
@@ -49,15 +52,14 @@ def test_stage_fails_when_the_install_tree_has_no_palace_binary(tmp_path):
         assemble.stage(install_prefix=empty, package_dir=tmp_path / "pkg")
 
 
-def test_repair_command_excludes_libmpi_and_targets_the_spec_platform(tmp_path):
+def test_repair_command_vendors_every_library_including_mpi(tmp_path):
     command = assemble.repair_command(
         wheel=tmp_path / "dist" / "pypalace_solver-0.17.0-py3-none-linux_x86_64.whl",
         output_dir=tmp_path / "wheelhouse",
     )
 
     assert command[:2] == ["auditwheel", "repair"]
-    assert "--exclude" in command
-    assert command[command.index("--exclude") + 1] == "libmpi*"
+    assert "--exclude" not in command
     assert command[command.index("--plat") + 1] == assemble.PLATFORM_TAG
 
 
@@ -106,3 +108,22 @@ def test_stage_replaces_the_payload_but_keeps_directory_placeholders(tmp_path):
     assert (package_dir / "bin" / ".gitkeep").exists()
     assert (package_dir / "lib" / ".gitkeep").exists()
     assert not (package_dir / "lib" / "libstale.so").exists()
+
+
+def test_stage_ships_the_process_manager_so_multi_rank_runs_work(tmp_path):
+    install_prefix = _install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "pypalace_solver"
+
+    assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
+
+    staged = {path.name for path in (package_dir / "bin").iterdir()}
+    assert {"mpiexec", "mpiexec.hydra", "hydra_pmi_proxy"} <= staged
+
+
+def test_stage_leaves_out_the_mpi_compiler_wrappers(tmp_path):
+    install_prefix = _install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "pypalace_solver"
+
+    assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
+
+    assert not (package_dir / "bin" / "mpicc").exists()

@@ -1,32 +1,16 @@
-"""Make the packaged binary find ``libmpi`` inside the installed mpich wheel.
+"""Set the RPATHs of the payload before ``auditwheel repair`` vendors its deps.
 
-The wheel never vendors an MPI implementation. ``auditwheel repair`` is run
-with ``--exclude 'libmpi*'``, which leaves ``libmpi.so.12`` as an unresolved
-external reference; these RPATH entries are what resolve it at runtime.
-
-Layout the entries encode, as pip installs both wheels into one environment::
-
-    <prefix>/lib/libmpi.so.12                                     (mpich wheel)
-    <prefix>/lib/pythonX.Y/site-packages/pypalace_solver/bin/     (this wheel)
-    <prefix>/lib/pythonX.Y/site-packages/pypalace_solver/lib/     (this wheel)
-
-So from either package directory, ``$ORIGIN/../../../..`` is ``<prefix>/lib``.
-The pypalace runner injects ``LD_LIBRARY_PATH`` as a fallback for layouts that
-do not nest site-packages two levels under ``<prefix>/lib`` (Debian's
-``dist-packages``, ``--target`` installs).
+The wheel carries its own MPI, so every shared library the binary needs ends up
+inside the wheel and ``auditwheel`` handles the vendored ones. These entries
+only let the binary find the libraries staged next to it.
 """
 
 from __future__ import annotations
 
-import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
 from wheelbuild._process import check_call, is_elf
-
-#: From ``pypalace_solver/{bin,lib}`` up to the environment's ``lib`` directory,
-#: where the mpich wheel drops ``libmpi.so.12``.
-MPI_LIB_RPATH = "$ORIGIN/../../../.."
 
 
 @dataclass(frozen=True)
@@ -37,21 +21,15 @@ class _Component:
     rpath: tuple[str, ...]
 
 
-#: The payload directories. ``libs`` is where ``auditwheel repair`` drops the
-#: vendored libraries: it sits at the site-packages level, one directory closer
-#: to the prefix than the package's own ``bin`` and ``lib``.
+#: The payload directories of the wheel and the RPATH each one needs.
 _COMPONENTS = {
     "bin": _Component(
         directory=Path("pypalace_solver/bin"),
-        rpath=("$ORIGIN/../lib", MPI_LIB_RPATH),
+        rpath=("$ORIGIN/../lib",),
     ),
     "lib": _Component(
         directory=Path("pypalace_solver/lib"),
-        rpath=("$ORIGIN", MPI_LIB_RPATH),
-    ),
-    "libs": _Component(
-        directory=Path("pypalace_solver.libs"),
-        rpath=("$ORIGIN", "$ORIGIN/../../.."),
+        rpath=("$ORIGIN",),
     ),
 }
 
@@ -90,57 +68,6 @@ def _set_rpath_command(target: Path, entries: list[str]) -> list[str]:
         ":".join(entries),
         str(target),
     ]
-
-
-def append_rpath_command(target: Path, *, existing: str, component: str) -> list[str]:
-    """Return the ``patchelf`` call that re-adds the mpich entry to an RPATH.
-
-    ``auditwheel repair`` rewrites RPATHs to point at its vendor directory and
-    drops ours, so the mpich entry is appended again afterwards. Existing
-    entries are preserved and the mpich entry is never duplicated.
-
-    Args:
-        target: ELF file inside the unpacked wheel.
-        existing: RPATH ``auditwheel`` left on the file, ``:``-separated.
-        component: Payload component the file belongs to.
-
-    Returns:
-        The ``patchelf`` argument vector.
-    """
-    mpi_entry = rpath_entries(component)[-1]
-    entries = [entry for entry in existing.split(":") if entry]
-    if mpi_entry not in entries:
-        entries.append(mpi_entry)
-    return _set_rpath_command(target, entries)
-
-
-def elf_targets(root: Path) -> list[tuple[Path, str]]:
-    """List the ELF files of an unpacked wheel with their component.
-
-    Args:
-        root: Directory an unpacked wheel was extracted into.
-
-    Returns:
-        ``(path, component)`` pairs, in component then path order.
-    """
-    targets = []
-    for component, spec in _COMPONENTS.items():
-        directory = root / spec.directory
-        if not directory.is_dir():
-            continue
-        for path in sorted(directory.rglob("*")):
-            if path.is_file() and not path.is_symlink() and is_elf(path):
-                targets.append((path, component))
-    return targets
-
-
-def restore_mpi_rpaths(root: Path) -> None:
-    """Re-add the mpich RPATH entry to every ELF file of an unpacked wheel."""
-    for path, component in elf_targets(root):
-        existing = subprocess.check_output(
-            ["patchelf", "--print-rpath", str(path)], text=True
-        ).strip()
-        check_call(append_rpath_command(path, existing=existing, component=component))
 
 
 def set_rpaths(package_dir: Path) -> None:

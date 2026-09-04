@@ -33,3 +33,23 @@ def test_main_reports_missing_binary_as_exit_error(tmp_path, monkeypatch, capsys
 
     assert excinfo.value.code == 1
     assert "palace-real" in capsys.readouterr().err
+
+
+def test_mpiexec_execs_the_vendored_launcher_with_forwarded_arguments(
+    tmp_path, monkeypatch
+):
+    launcher = tmp_path / "bin" / "mpiexec"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/bin/sh\n")
+    launcher.chmod(0o755)
+    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", tmp_path)
+    calls = []
+    monkeypatch.setattr(
+        _exec.os, "execv", lambda path, argv: calls.append((path, argv))
+    )
+
+    _exec.mpiexec(["-n", "2", "palace", "config.json"])
+
+    assert calls == [
+        (str(launcher), [str(launcher), "-n", "2", "palace", "config.json"])
+    ]

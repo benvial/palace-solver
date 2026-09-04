@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from wheelbuild import superbuild
+from wheelbuild import mpich, superbuild
 
 SPEC_FEATURE_FLAGS = [
     "-DCMAKE_BUILD_TYPE=Release",
@@ -76,15 +76,18 @@ def test_cmake_arguments_enable_ccache_when_requested():
     assert not [flag for flag in without_ccache if "COMPILER_LAUNCHER" in flag]
 
 
-def test_mpi_home_is_the_prefix_holding_the_mpich_wheel_payload(tmp_path):
-    (tmp_path / "lib").mkdir()
-    (tmp_path / "lib" / "libmpi.so.12").write_text("")
-    (tmp_path / "include").mkdir()
-    (tmp_path / "include" / "mpi.h").write_text("")
+def test_mpi_home_is_the_prefix_of_the_vendored_mpich_build(tmp_path):
+    for relative in mpich.REQUIRED_ARTEFACTS:
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
 
     assert superbuild.mpi_home(tmp_path) == tmp_path
 
 
-def test_mpi_home_rejects_a_prefix_without_the_mpich_wheel(tmp_path):
-    with pytest.raises(FileNotFoundError, match="mpich"):
+def test_mpi_home_rejects_an_mpi_without_fortran_bindings(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "libmpi.so.12").write_text("")
+
+    with pytest.raises(FileNotFoundError, match="libmpifort"):
         superbuild.mpi_home(tmp_path)

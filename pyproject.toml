@@ -26,6 +26,7 @@ dev = ["pytest>=7.0", "ruff", "mypy", "auditwheel>=6.0", "wheel", "build"]
 
 [project.scripts]
 palace = "pypalace_solver._exec:main"
+palace-mpiexec = "pypalace_solver._exec:mpiexec"
 
 [project.urls]
 "Bug Tracker" = "https://github.com/oslumen/pypalace-solver/issues"

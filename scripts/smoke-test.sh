@@ -3,25 +3,29 @@
 #
 #   scripts/smoke-test.sh WHEEL PALACE_CONFIG
 #
-# Checks: the wheel vendors no MPI, libmpi resolves into the mpich wheel,
-# pypalace_solver.binary_path() finds the payload, and Palace runs PALACE_CONFIG
-# (--dry-run: config parsing, mesh partitioning and FE space setup, no solve)
-# on one rank and under `mpiexec -n 2`.
+# Checks: the wheel is self-contained (it vendors MPICH, so nothing else needs
+# installing), every shared library resolves, pypalace_solver.binary_path()
+# finds the payload, and Palace runs PALACE_CONFIG (--dry-run: config parsing,
+# mesh partitioning and FE space setup, no solve) on one rank and on two ranks
+# under the vendored launcher.
 set -euo pipefail
 
 wheel="${1:?usage: smoke-test.sh WHEEL PALACE_CONFIG}"
 config="${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}"
 venv="$(mktemp -d)/venv"
 
-echo "==> no MPI vendored into the wheel"
-if unzip -l "$wheel" | grep -E "libmpi"; then
-  echo "ERROR: the wheel vendors an MPI implementation" >&2
-  exit 1
-fi
+echo "==> the wheel vendors MPICH"
+for library in libmpi libmpifort; do
+  if ! unzip -l "$wheel" | grep -q "$library"; then
+    echo "ERROR: $library is missing from the wheel" >&2
+    exit 1
+  fi
+done
 
 python3 -m venv "$venv"
 "$venv/bin/pip" install --quiet --upgrade pip
-"$venv/bin/pip" install --quiet "mpich<5" "$wheel"
+# Nothing but the wheel: it must bring its own MPI.
+"$venv/bin/pip" install --quiet "$wheel"
 
 binary="$("$venv/bin/python" -c 'import pypalace_solver; print(pypalace_solver.binary_path())')"
 echo "==> packaged binary: $binary"
@@ -40,7 +44,7 @@ ldd "$binary" | grep -E "libmpi" || {
 echo "==> single rank"
 "$venv/bin/palace" --dry-run "$config"
 
-echo "==> two ranks"
-"$venv/bin/mpiexec" -n 2 "$venv/bin/palace" --dry-run "$config"
+echo "==> two ranks, under the vendored process manager"
+"$venv/bin/palace-mpiexec" -n 2 "$venv/bin/palace" --dry-run "$config"
 
 echo "==> smoke test passed"

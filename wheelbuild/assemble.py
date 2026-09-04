@@ -1,21 +1,20 @@
 """Assemble, repair and retag the pypalace-solver platform wheel.
 
 Pipeline: stage the superbuild install tree into the package directory, set
-RPATHs so ``libmpi`` resolves into the mpich wheel, build a wheel, run
-``auditwheel repair --exclude 'libmpi*'`` to vendor everything else, and retag
-the result ``py3-none`` because the payload is a binary with no Python ABI.
+RPATHs, build a wheel, run ``auditwheel repair`` to vendor every shared library
+it needs — MPI included, since the wheel carries its own — and retag the result
+``py3-none`` because the payload is a binary with no Python ABI.
 """
 
 from __future__ import annotations
 
 import argparse
 import shutil
-import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pypalace_solver import BINARY_NAME
+from pypalace_solver import BINARY_NAME, LAUNCHER_NAME
 from wheelbuild import linkage
 from wheelbuild._process import check_call, is_elf
 
@@ -104,6 +103,11 @@ def stage(
     shutil.copy2(source_binary, staged_binary)
     staged_binary.chmod(staged_binary.stat().st_mode | 0o111)
 
+    for launcher in _process_manager_binaries(install_prefix):
+        destination = binary_dir / launcher.name
+        shutil.copy2(launcher, destination)
+        destination.chmod(destination.stat().st_mode | 0o111)
+
     for path in sorted((install_prefix / "lib").iterdir()):
         if path.is_dir() or path.is_symlink() or not _is_shared_library(path):
             continue
@@ -126,19 +130,34 @@ def _clear_payload(directory: Path) -> None:
             path.unlink()
 
 
+def _process_manager_binaries(install_prefix: Path) -> list[Path]:
+    """Return the Hydra process manager executables to ship.
+
+    ``mpiexec`` and its ``hydra_*`` helpers are what run the solver on several
+    ranks; the ``mpicc``-style compiler wrappers are build-time only shell
+    scripts and stay out of the wheel.
+    """
+    return sorted(
+        path
+        for path in (install_prefix / "bin").iterdir()
+        if path.is_file()
+        and not path.is_symlink()
+        and is_elf(path)
+        and (path.name == LAUNCHER_NAME or path.name.startswith(("mpiexec", "hydra_")))
+    )
+
+
 def repair_command(*, wheel: Path, output_dir: Path) -> list[str]:
     """Return the ``auditwheel repair`` invocation for a built wheel.
 
-    ``libmpi`` stays external: it is provided by the mpich wheel and located
-    through the RPATH entries in :mod:`wheelbuild.linkage`.
+    Nothing is excluded: the vendored MPICH is part of the payload, so the
+    wheel is self-contained and needs no MPI installed beside it.
     """
     return [
         "auditwheel",
         "repair",
         "--plat",
         PLATFORM_TAG,
-        "--exclude",
-        "libmpi*",
         "--wheel-dir",
         str(output_dir),
         str(wheel),
@@ -192,43 +211,11 @@ def build(
 
     check_call(repair_command(wheel=raw_wheel, output_dir=output_dir))
     repaired = _single_wheel(output_dir)
-    repack_with_mpi_rpaths(repaired)
-    check_call(retag_command(_single_wheel(output_dir)))
+    check_call(retag_command(repaired))
 
     final = _single_wheel(output_dir)
     print(size_report(final).text, flush=True)
     return final
-
-
-def repack_with_mpi_rpaths(wheel: Path) -> Path:
-    """Re-add the mpich RPATH entry that ``auditwheel repair`` stripped.
-
-    The repaired wheel is unpacked, every ELF file is patched, and the wheel is
-    packed again so its RECORD hashes match the patched files.
-
-    Args:
-        wheel: The repaired wheel, replaced in place.
-
-    Returns:
-        The path of the repacked wheel.
-    """
-    with tempfile.TemporaryDirectory() as scratch:
-        unpacked = Path(scratch)
-        check_call(["wheel", "unpack", "--dest", str(unpacked), str(wheel)])
-        root = _single_directory(unpacked)
-        linkage.restore_mpi_rpaths(root)
-        wheel.unlink()
-        check_call(["wheel", "pack", "--dest-dir", str(wheel.parent), str(root)])
-    return _single_wheel(wheel.parent)
-
-
-def _single_directory(parent: Path) -> Path:
-    directories = sorted(path for path in parent.iterdir() if path.is_dir())
-    if len(directories) != 1:
-        raise RuntimeError(
-            f"expected one unpacked wheel in {parent}, found {directories}"
-        )
-    return directories[0]
 
 
 def _single_wheel(directory: Path) -> Path:
