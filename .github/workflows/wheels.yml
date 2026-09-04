@@ -41,7 +41,7 @@ jobs:
           version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('pypalace_solver/__init__.py').read_text()).group(1))")
           echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
 
-      # The build compiles MPICH plus the Palace superbuild (hypre, MFEM,
+      # The build compiles MPICH, OpenBLAS and the Palace superbuild (hypre, MFEM,
       # libCEED, SuperLU_DIST, STRUMPACK, MUMPS, SLEPc, ARPACK, LIBXSMM,
       # GSLIB): 30-60+ minutes cold. The cache holds the sources, the build
       # trees, the shared install prefix and ccache.
@@ -49,9 +49,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /build
-          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py') }}-${{ github.sha }}
+          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py') }}-${{ github.sha }}
           restore-keys: |
-            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py') }}-
+            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py') }}-
             superbuild-${{ env.PALACE_VERSION }}-
 
       - name: Build wheel

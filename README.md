@@ -19,8 +19,9 @@ an explicit executable argument or `PYPALACE_PALACE_EXE`.
 - `palace-real`, the Palace binary, built with the full feature set: OpenMP,
   SuperLU_DIST, STRUMPACK (with ZFP), MUMPS, SLEPc, ARPACK, LIBXSMM and GSLIB.
   No GPU support, 32-bit integers.
-- Every shared library that build needs, vendored by `auditwheel`, MPI
-  included, plus MPICH's Hydra process manager.
+- Every shared library that build needs, vendored by `auditwheel` — including
+  MPICH (with Hydra) and OpenBLAS, neither of which the manylinux image
+  provides.
 - `THIRD-PARTY-NOTICES`, harvested from the superbuild's own source checkouts.
 
 The package version mirrors the Palace release it ships (`.postN` for
@@ -57,7 +58,7 @@ scripts/build-in-container.sh 0.17.0      # docker, caches in ./.build-cache
 scripts/smoke-test.sh wheelhouse/*.whl    # clean venv, 1 rank and mpiexec -n 2
 ```
 
-`scripts/build-wheel.sh` is the in-container pipeline: MPICH → superbuild →
+`scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS → superbuild →
 notice harvest → wheel assembly → `auditwheel repair` → retag to
 `py3-none-manylinux_2_28_x86_64`. The steps are Python modules under
 `wheelbuild/` and are unit-tested with `pytest`.

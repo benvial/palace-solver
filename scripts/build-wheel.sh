@@ -56,6 +56,25 @@ if [[ ! -f "$install_prefix/lib/libmpifort.so.12" ]]; then
 fi
 export PATH="$install_prefix/bin:$PATH"
 
+echo "==> OpenBLAS (vendored into the wheel)"
+# Palace requires a system BLAS/LAPACK and the manylinux image has none, so
+# OpenBLAS is built here with DYNAMIC_ARCH so one wheel runs on any x86-64 CPU.
+openblas_version="$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.openblas import OPENBLAS_VERSION; print(OPENBLAS_VERSION)')"
+openblas_source="$build_root/OpenBLAS-$openblas_version"
+if [[ ! -d "$openblas_source" ]]; then
+  curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v$openblas_version/OpenBLAS-$openblas_version.tar.gz" \
+    -o "$build_root/OpenBLAS-$openblas_version.tar.gz"
+  tar -xzf "$build_root/OpenBLAS-$openblas_version.tar.gz" -C "$build_root"
+fi
+if [[ ! -f "$install_prefix/lib/libopenblas.so" ]]; then
+  PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
+    --source-dir "$openblas_source" \
+    --prefix "$install_prefix" \
+    --jobs "$jobs"
+fi
+# Palace's ExternalBLASLAPACK.cmake keys off this to select the OpenBLAS vendor.
+export OPENBLAS_DIR="$install_prefix"
+
 echo "==> Palace $palace_version sources"
 if [[ ! -d "$source_dir" ]]; then
   curl -fsSL "https://github.com/awslabs/palace/archive/refs/tags/v$palace_version.tar.gz" \
@@ -76,6 +95,8 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.superbuild \
 echo "==> third-party notices"
 PYTHONPATH="$repo_root" python3 -m wheelbuild.notices \
   --source-root "$superbuild_dir" \
+  --source-root "$mpich_source" \
+  --source-root "$openblas_source" \
   --output "$build_root/THIRD-PARTY-NOTICES"
 
 echo "==> wheel assembly, repair, retag"

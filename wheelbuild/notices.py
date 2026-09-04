@@ -17,8 +17,9 @@ from collections.abc import Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 
-#: Dependencies the superbuild compiles into the wheel. A missing license file
-#: for any of these fails the build.
+#: Dependencies compiled into the wheel. A missing license file for any of
+#: these fails the build. ``mpich`` and ``openblas`` are built beside the
+#: superbuild rather than by it, and are vendored just the same.
 REQUIRED_DEPENDENCIES = (
     "arpack",
     "gslib",
@@ -26,7 +27,9 @@ REQUIRED_DEPENDENCIES = (
     "libceed",
     "libxsmm",
     "mfem",
+    "mpich",
     "mumps",
+    "openblas",
     "petsc",
     "slepc",
     "strumpack",
@@ -53,9 +56,10 @@ _HEADER = """\
 THIRD-PARTY NOTICES for pypalace-solver
 =======================================
 
-This wheel redistributes the Palace solver (Apache-2.0) together with the
-libraries its superbuild compiles. The license of each redistributed component
-is reproduced below.
+This wheel redistributes the Palace solver (Apache-2.0) together with every
+library it links: the dependencies built by Palace's superbuild, plus the MPICH
+and OpenBLAS builds the wheel vendors. The license of each redistributed
+component is reproduced below.
 """
 
 
@@ -74,8 +78,8 @@ class MissingLicenseError(RuntimeError):
     """Raised when a dependency of the superbuild contributes no license file."""
 
 
-def collect(source_root: Path) -> dict[str, list[Path]]:
-    """Collect every license file below ``source_root``, by checkout.
+def collect(source_roots: Sequence[Path]) -> dict[str, list[Path]]:
+    """Collect every license file below the given trees, by checkout.
 
     The superbuild keeps a source checkout and a build directory per
     dependency, and the build directory often copies the license file, so
@@ -84,23 +88,25 @@ def collect(source_root: Path) -> dict[str, list[Path]]:
     pulls in prerequisites (ScaLAPACK, METIS, ...) whose notices must ship too.
 
     Args:
-        source_root: Superbuild directory holding the source checkouts.
+        source_roots: Trees to walk — the superbuild directory plus the source
+            trees of the runtimes built beside it (MPICH, OpenBLAS).
 
     Returns:
-        Mapping of checkout path (relative to ``source_root``) to its license
-        files, in walk order.
+        Mapping of checkout name to its license files, in walk order.
     """
     collected: dict[str, list[Path]] = {}
     seen_texts: set[str] = set()
-    for path in sorted(source_root.rglob("*")):
-        if not path.is_file() or path.is_symlink() or not _is_license_file(path):
-            continue
-        digest = hashlib.sha256(path.read_bytes()).hexdigest()
-        if digest in seen_texts:
-            continue
-        seen_texts.add(digest)
-        checkout = str(path.parent.relative_to(source_root))
-        collected.setdefault(checkout, []).append(path)
+    for root in source_roots:
+        for path in sorted(root.rglob("*")):
+            if not path.is_file() or path.is_symlink() or not _is_license_file(path):
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if digest in seen_texts:
+                continue
+            seen_texts.add(digest)
+            relative = path.parent.relative_to(root)
+            checkout = str(root.name / relative) if str(relative) != "." else root.name
+            collected.setdefault(checkout, []).append(path)
     return collected
 
 
@@ -119,11 +125,11 @@ def _mumps_checkouts(collected: dict[str, list[Path]]) -> list[str]:
     return sorted(name for name in collected if "mumps" in name.lower())
 
 
-def render(source_root: Path) -> str:
+def render(source_roots: Sequence[Path]) -> str:
     """Render the THIRD-PARTY-NOTICES body.
 
     Args:
-        source_root: Superbuild directory holding the source checkouts.
+        source_roots: Trees to harvest.
 
     Returns:
         The complete notices text.
@@ -131,11 +137,12 @@ def render(source_root: Path) -> str:
     Raises:
         MissingLicenseError: If a required dependency has no license file.
     """
-    collected = collect(source_root)
+    collected = collect(source_roots)
     missing = _missing_dependencies(collected)
     if missing:
+        searched = ", ".join(str(root) for root in source_roots)
         raise MissingLicenseError(
-            f"no license file found under {source_root} for: {', '.join(missing)}"
+            f"no license file found under {searched} for: {', '.join(missing)}"
         )
     sections = [_HEADER]
     for checkout, files in collected.items():
@@ -163,17 +170,17 @@ def _section(title: str, body: str) -> str:
     return f"\n{rule}\n{title}\n{rule}\n\n{body.rstrip()}\n"
 
 
-def harvest(*, source_root: Path, output: Path) -> Path:
+def harvest(*, source_roots: Sequence[Path], output: Path) -> Path:
     """Write the harvested notices to ``output``.
 
     Args:
-        source_root: Superbuild directory holding the source checkouts.
+        source_roots: Trees to harvest.
         output: Destination file.
 
     Returns:
         The path written.
     """
-    text = render(source_root)
+    text = render(source_roots)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output
@@ -182,10 +189,17 @@ def harvest(*, source_root: Path, output: Path) -> Path:
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point for the notice harvester."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source-root", type=Path, required=True)
+    parser.add_argument(
+        "--source-root",
+        type=Path,
+        required=True,
+        action="append",
+        dest="source_roots",
+        help="tree to harvest; repeat for the runtimes built beside the superbuild",
+    )
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    path = harvest(source_root=args.source_root, output=args.output)
+    path = harvest(source_roots=args.source_roots, output=args.output)
     print(f"wrote {path} ({path.stat().st_size} bytes)")
     return 0
 
