@@ -167,3 +167,20 @@ def testpick_wheel_refuses_an_ambiguous_result(tmp_path):
 
     with pytest.raises(RuntimeError, match="ambiguous"):
         assemble.pick_wheel(before=set(), after={first, second}, fallback=first)
+
+
+def test_clean_build_tree_removes_setuptools_stale_payload(tmp_path):
+    """setuptools reuses build/, so yesterday's libraries would ship again."""
+    stale = tmp_path / "build" / "lib.linux-x86_64-cpython-312" / "pypalace_solver"
+    stale.mkdir(parents=True)
+    (stale / "libstale.so").write_bytes(ELF_MAGIC)
+
+    assemble.clean_build_tree(tmp_path)
+
+    assert not (tmp_path / "build").exists()
+
+
+def test_clean_build_tree_is_fine_with_a_clean_project(tmp_path):
+    assemble.clean_build_tree(tmp_path)
+
+    assert not (tmp_path / "build").exists()

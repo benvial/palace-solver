@@ -195,6 +195,7 @@ def build(
     package_dir = project_dir / "pypalace_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
 
+    clean_build_tree(project_dir)
     raw_dir = output_dir / "raw"
     shutil.rmtree(raw_dir, ignore_errors=True)
     check_call(
@@ -221,6 +222,19 @@ def build(
 
 def _wheels(directory: Path) -> set[Path]:
     return set(directory.glob("*.whl"))
+
+
+def clean_build_tree(project_dir: Path) -> None:
+    """Delete setuptools' ``build/`` directory.
+
+    setuptools copies package data into ``build/lib.*/`` and reuses whatever is
+    already there, so a payload staged by an earlier run would be shipped again
+    even after the staging step stopped producing it.
+
+    Args:
+        project_dir: Repository root.
+    """
+    shutil.rmtree(project_dir / "build", ignore_errors=True)
 
 
 def pick_wheel(*, before: set[Path], after: set[Path], fallback: Path) -> Path:
