@@ -37,15 +37,29 @@ def unify_lib_directories(prefix: Path) -> Path:
     if alias.is_symlink():
         alias.unlink()
     elif alias.is_dir():
-        for path in alias.iterdir():
-            destination = library_dir / path.name
-            if destination.exists() or destination.is_symlink():
-                continue
-            shutil.move(str(path), str(destination))
+        _merge_into(alias, library_dir)
         shutil.rmtree(alias)
 
     alias.symlink_to("lib", target_is_directory=True)
     return library_dir
+
+
+def _merge_into(source: Path, destination: Path) -> None:
+    """Move everything from ``source`` into ``destination``, merging directories.
+
+    Directories present on both sides are merged recursively — replacing one
+    wholesale, or skipping it, would drop the files only the other side has
+    (the CMake package configuration directories, for instance). A file that
+    already exists in ``destination`` wins, since that is where the build has
+    been looking all along.
+    """
+    destination.mkdir(parents=True, exist_ok=True)
+    for path in source.iterdir():
+        target = destination / path.name
+        if path.is_dir() and not path.is_symlink():
+            _merge_into(path, target)
+        elif not target.exists() and not target.is_symlink():
+            shutil.move(str(path), str(target))
 
 
 def main(argv: Sequence[str] | None = None) -> int:
