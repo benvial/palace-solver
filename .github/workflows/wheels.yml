@@ -34,6 +34,13 @@ jobs:
       # its own pin moving is caught by running this with --palais against a
       # checkout. See wheelbuild/pin_check.py.
       - run: python -m wheelbuild.pin_check
+      # A tag that does not name palace_solver.__version__ would publish a
+      # release under a number nobody chose, and PyPI never lets a filename be
+      # reused. Checked here rather than in the wheel job so it fails in
+      # seconds instead of after the build.
+      - name: Check the release tag against the packaged version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python -m wheelbuild.tag_check "$GITHUB_REF_NAME"
 
   wheel:
     name: build manylinux_2_28 x86_64 wheel
