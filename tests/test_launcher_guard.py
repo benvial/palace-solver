@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-import palais_solver
-from palais_solver import _exec, _launcher
+import palace_solver
+from palace_solver import _exec, _launcher
 
 HYDRA_OUTPUT = """HYDRA build details:
     Version:                                 5.0.1
@@ -173,7 +173,7 @@ def _fake_binary(tmp_path):
 
 def test_palace_refuses_to_start_without_a_rendezvous(tmp_path, monkeypatch, capsys):
     _fake_binary(tmp_path)
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
     monkeypatch.setattr(_exec.os, "execv", lambda *_: pytest.fail("exec'd"))
     monkeypatch.setattr(_launcher, "version_note", lambda *_, **__: None)
     monkeypatch.setattr(
@@ -189,7 +189,7 @@ def test_palace_refuses_to_start_without_a_rendezvous(tmp_path, monkeypatch, cap
 
 def test_palace_reports_a_version_remark_and_still_runs(tmp_path, monkeypatch, capsys):
     binary = _fake_binary(tmp_path)
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
     monkeypatch.setattr(_launcher, "version_note", lambda *_, **__: "another MPICH")
     monkeypatch.setattr(_launcher, "refusal_reason", lambda *_, **__: None)
     calls = []
@@ -208,7 +208,7 @@ def test_the_vendored_launcher_itself_is_not_guarded(tmp_path, monkeypatch):
     launcher.parent.mkdir(parents=True)
     launcher.write_text("#!/bin/sh\n")
     launcher.chmod(0o755)
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
     monkeypatch.setattr(
         _launcher, "refusal_reason", lambda *_, **__: pytest.fail("guarded")
     )

@@ -11,8 +11,8 @@ wheelhouse/
 .mypy_cache/
 
 # Binary payload staged into the package by the wheel build
-palais_solver/bin/*
-palais_solver/lib/*
-palais_solver/THIRD-PARTY-NOTICES
-!palais_solver/bin/.gitkeep
-!palais_solver/lib/.gitkeep
+palace_solver/bin/*
+palace_solver/lib/*
+palace_solver/THIRD-PARTY-NOTICES
+!palace_solver/bin/.gitkeep
+!palace_solver/lib/.gitkeep

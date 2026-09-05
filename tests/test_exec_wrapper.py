@@ -1,7 +1,7 @@
 import pytest
 
-import palais_solver
-from palais_solver import _exec
+import palace_solver
+from palace_solver import _exec
 
 
 def _fake_binary(tmp_path):
@@ -14,7 +14,7 @@ def _fake_binary(tmp_path):
 
 def test_main_execs_real_binary_with_forwarded_arguments(tmp_path, monkeypatch):
     binary = _fake_binary(tmp_path)
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
     calls = []
     monkeypatch.setattr(
         _exec.os, "execv", lambda path, argv: calls.append((path, argv))
@@ -26,7 +26,7 @@ def test_main_execs_real_binary_with_forwarded_arguments(tmp_path, monkeypatch):
 
 
 def test_main_reports_missing_binary_as_exit_error(tmp_path, monkeypatch, capsys):
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
 
     with pytest.raises(SystemExit) as excinfo:
         _exec.main([])
@@ -42,7 +42,7 @@ def test_mpiexec_execs_the_vendored_launcher_with_forwarded_arguments(
     launcher.parent.mkdir(parents=True)
     launcher.write_text("#!/bin/sh\n")
     launcher.chmod(0o755)
-    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
     calls = []
     monkeypatch.setattr(
         _exec.os, "execv", lambda path, argv: calls.append((path, argv))

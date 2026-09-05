@@ -2,7 +2,7 @@ import textwrap
 
 import pytest
 
-from palais_solver import MPICH_VERSION
+from palace_solver import MPICH_VERSION
 from wheelbuild import pin_check
 
 PYPROJECT = textwrap.dedent("""

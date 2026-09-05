@@ -30,7 +30,7 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from palais_solver import MPICH_VERSION
+from palace_solver import MPICH_VERSION
 
 #: Environment variables through which a process manager tells a rank how to
 #: reach its peers. Any one of them means the rendezvous was handed over.
@@ -71,7 +71,7 @@ PROCESS_MANAGERS = frozenset(
 RANK_COUNT_VARIABLES = ("MPI_LOCALNRANKS", "SLURM_NTASKS", "OMPI_COMM_WORLD_SIZE")
 
 #: Set to a non-empty value to launch anyway.
-OVERRIDE_ENV = "PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER"
+OVERRIDE_ENV = "PALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER"
 
 #: How long to wait for a foreign ``mpiexec --version`` to answer.
 PROBE_TIMEOUT_SECONDS = 10
@@ -230,7 +230,7 @@ def version_note(
     if not launched_by_process_manager(parent_exe) or parent_exe is None:
         return None
     if vendored_bin is None:
-        from palais_solver import mpiexec_path  # noqa: PLC0415
+        from palace_solver import mpiexec_path  # noqa: PLC0415
 
         try:
             vendored_bin = mpiexec_path().parent

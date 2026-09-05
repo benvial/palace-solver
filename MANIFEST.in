@@ -1,5 +1,5 @@
 include LICENSE
 include README.md
-recursive-include palais_solver/bin *
-recursive-include palais_solver/lib *
-include palais_solver/THIRD-PARTY-NOTICES
+recursive-include palace_solver/bin *
+recursive-include palace_solver/lib *
+include palace_solver/THIRD-PARTY-NOTICES

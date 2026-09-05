@@ -68,7 +68,7 @@ def binary_path() -> Path:
     if not candidate.is_file():
         raise FileNotFoundError(
             f"{BINARY_NAME} is missing from {candidate.parent}; this install of "
-            "palais-solver does not contain a Palace binary"
+            "palace-solver does not contain a Palace binary"
         )
     return candidate
 
@@ -90,7 +90,7 @@ def mpiexec_path() -> Path:
     if not candidate.is_file():
         raise FileNotFoundError(
             f"{LAUNCHER_NAME} is missing from {candidate.parent}; this install "
-            "of palais-solver does not contain the MPICH process manager"
+            "of palace-solver does not contain the MPICH process manager"
         )
     return candidate
 
@@ -166,7 +166,7 @@ def launcher_conflict() -> str | None:
     """
     import os  # noqa: PLC0415
 
-    from palais_solver import _launcher  # noqa: PLC0415
+    from palace_solver import _launcher  # noqa: PLC0415
 
     return _launcher.refusal_reason(os.environ, _launcher.parent_executable())
 
@@ -174,8 +174,8 @@ def launcher_conflict() -> str | None:
 def lib_dir() -> Path:
     """Return the directory holding the vendored shared libraries.
 
-    ``auditwheel`` puts them in a ``palais_solver.libs`` directory beside the
+    ``auditwheel`` puts them in a ``palace_solver.libs`` directory beside the
     package, and the binary finds them through its RPATH; the path is exposed
     for callers that want to set ``LD_LIBRARY_PATH`` themselves.
     """
-    return _PACKAGE_DIR.parent / "palais_solver.libs"
+    return _PACKAGE_DIR.parent / "palace_solver.libs"

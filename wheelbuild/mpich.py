@@ -9,7 +9,7 @@ vendored into the wheel together with the Hydra process manager, so
 
 The version is pinned to the one palais depends on, so a Palace launched by
 either process manager speaks the same PMI wire protocol. The pin itself lives
-in ``palais_solver`` because the wheel needs it at run time too, for the
+in ``palace_solver`` because the wheel needs it at run time too, for the
 launcher guard; ``wheelbuild.pin_check`` checks it against palais's.
 """
 
@@ -20,7 +20,7 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
-from palais_solver import MPICH_VERSION
+from palace_solver import MPICH_VERSION
 from wheelbuild._process import check_call
 
 #: Files an MPICH install must have for Palace to configure and run against it.

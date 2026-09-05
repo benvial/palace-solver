@@ -7,7 +7,7 @@ otherwise links them, so a version bump on either side would pass unnoticed.
 
 Two checks, and they are not equally strong:
 
-- :func:`vendored_problem` compares ``palais_solver.MPICH_VERSION`` against
+- :func:`vendored_problem` compares ``palace_solver.MPICH_VERSION`` against
   :data:`PALAIS_MPICH_REQUIREMENT`, the ``mpich`` pin recorded here as the
   one palais declares. It needs nothing but this repository, so CI runs it on
   every push — but it only catches drift on *this* side.
@@ -34,7 +34,7 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 
-from palais_solver import MPICH_VERSION
+from palace_solver import MPICH_VERSION
 
 #: The ``mpich`` requirement palais declares for mpi4py. Bumping the wheel's
 #: vendored MPICH past this range, or palais moving its pin, must fail here.
@@ -113,7 +113,7 @@ def vendored_problem(vendored_version: str, expected: str) -> str | None:
         f"the vendored MPICH {vendored_version} does not satisfy {expected!r}: a "
         "rank launched by the mpiexec from the mpich wheel palais installs "
         "would be talking to a different MPICH major series. Bump "
-        "palais_solver.MPICH_VERSION back into range, or move both pins "
+        "palace_solver.MPICH_VERSION back into range, or move both pins "
         "together."
     )
 
@@ -140,7 +140,7 @@ def declared_problem(expected: str, declared: str | None) -> str | None:
         return (
             f"palais now declares {declared!r} but this repository records "
             f"{expected!r}. Update PALAIS_MPICH_REQUIREMENT and check that "
-            "palais_solver.MPICH_VERSION still satisfies the new pin."
+            "palace_solver.MPICH_VERSION still satisfies the new pin."
         )
     return None
 

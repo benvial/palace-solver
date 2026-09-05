@@ -24,7 +24,7 @@ jobs:
         run: python -m pip install --upgrade pip pytest ruff mypy packaging
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy palais_solver
+      - run: mypy palace_solver
       # The build tooling runs on the container's Python, not on the 3.10 floor
       # the wheel itself keeps, so it may use tomllib.
       - run: mypy --python-version 3.11 wheelbuild
@@ -42,11 +42,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # palais_solver.__version__ mirrors the Palace release, and is the only
+      # palace_solver.__version__ mirrors the Palace release, and is the only
       # place the version is written down.
       - name: Resolve Palace version
         run: |
-          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palais_solver/__init__.py').read_text()).group(1))")
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1))")
           echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
 
       # The build compiles MPICH, OpenBLAS and the Palace superbuild (hypre, MFEM,
@@ -108,7 +108,7 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: palais-solver-manylinux_2_28_x86_64
+          name: palace-solver-manylinux_2_28_x86_64
           path: wheelhouse/*.whl
 
   publish:
@@ -123,6 +123,6 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: palais-solver-manylinux_2_28_x86_64
+          name: palace-solver-manylinux_2_28_x86_64
           path: dist
       - uses: pypa/gh-action-pypi-publish@release/v1

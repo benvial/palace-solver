@@ -1,10 +1,10 @@
-# palais-solver
+# palace-solver
 
 The [Palace](https://github.com/awslabs/palace) 3D finite-element
 electromagnetics solver, packaged as a Linux binary wheel.
 
 ```bash
-pip install palais-solver
+pip install palace-solver
 palace config.json
 palace-mpiexec -n 4 palace config.json
 ```
@@ -49,7 +49,7 @@ that a process manager started **without an MPI rendezvous** — none of
 `PMIX_SERVER_URI` or `OMPI_COMM_WORLD_RANK` passed down. That case is
 worth stopping because it does not fail: every rank would initialise as its own
 `MPI_COMM_WORLD`, solve the whole problem alone, overwrite the others' output
-and exit 0. `PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER=1` runs anyway. The reasoning
+and exit 0. `PALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER=1` runs anyway. The reasoning
 is in `docs/adr/0004-the-vendored-launcher-is-the-supported-one.md`.
 
 The check belongs to the `palace` console script, so that is what a caller
@@ -60,12 +60,12 @@ unguarded.
 ## Python API
 
 ```python
-import palais_solver
+import palace_solver
 
-palais_solver.executable_path()  # -> what to launch: the guarded console script
-palais_solver.binary_path()  # -> .../site-packages/palais_solver/bin/palace-real
-palais_solver.lib_dir()  # -> .../site-packages/palais_solver/lib
-palais_solver.launcher_conflict()  # -> None, or why this launcher is refused
+palace_solver.executable_path()  # -> what to launch: the guarded console script
+palace_solver.binary_path()  # -> .../site-packages/palace_solver/bin/palace-real
+palace_solver.lib_dir()  # -> .../site-packages/palace_solver/lib
+palace_solver.launcher_conflict()  # -> None, or why this launcher is refused
 ```
 
 ## Building the wheel

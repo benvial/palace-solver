@@ -27,7 +27,7 @@ def _install_tree(root: Path) -> Path:
 
 def test_stage_copies_the_real_elf_binary_as_palace_real(tmp_path):
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
@@ -39,7 +39,7 @@ def test_stage_copies_the_real_elf_binary_as_palace_real(tmp_path):
 def test_stage_leaves_the_shared_libraries_to_auditwheel(tmp_path):
     """auditwheel vendors the dependency closure; staging it too doubles the wheel."""
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
@@ -56,7 +56,7 @@ def test_stage_fails_when_the_install_tree_has_no_palace_binary(tmp_path):
 
 def test_repair_command_vendors_every_library_including_mpi(tmp_path):
     command = assemble.repair_command(
-        wheel=tmp_path / "dist" / "palais_solver-0.17.0-py3-none-linux_x86_64.whl",
+        wheel=tmp_path / "dist" / "palace_solver-0.17.0-py3-none-linux_x86_64.whl",
         output_dir=tmp_path / "wheelhouse",
     )
 
@@ -66,7 +66,7 @@ def test_repair_command_vendors_every_library_including_mpi(tmp_path):
 
 
 def test_retag_command_forces_the_python_agnostic_tag(tmp_path):
-    wheel = tmp_path / "palais_solver-0.17.0-cp313-cp313-manylinux_2_28_x86_64.whl"
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-manylinux_2_28_x86_64.whl"
     command = assemble.retag_command(wheel)
 
     assert command[:2] == ["wheel", "tags"]
@@ -98,7 +98,7 @@ def test_size_report_accepts_a_wheel_under_the_pypi_upload_limit(tmp_path):
 
 def test_stage_replaces_the_payload_but_keeps_directory_placeholders(tmp_path):
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
     (package_dir / "bin").mkdir(parents=True)
     (package_dir / "lib").mkdir()
     (package_dir / "bin" / ".gitkeep").write_text("")
@@ -114,7 +114,7 @@ def test_stage_replaces_the_payload_but_keeps_directory_placeholders(tmp_path):
 
 def test_stage_ships_the_process_manager_so_multi_rank_runs_work(tmp_path):
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
@@ -125,7 +125,7 @@ def test_stage_ships_the_process_manager_so_multi_rank_runs_work(tmp_path):
 def test_stage_materialises_the_mpiexec_symlink_as_a_real_binary(tmp_path):
     """Wheels cannot carry symlinks, so the launcher must be a real file."""
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
@@ -136,7 +136,7 @@ def test_stage_materialises_the_mpiexec_symlink_as_a_real_binary(tmp_path):
 
 def test_stage_leaves_out_the_mpi_compiler_wrappers(tmp_path):
     install_prefix = _install_tree(tmp_path / "install")
-    package_dir = tmp_path / "pkg" / "palais_solver"
+    package_dir = tmp_path / "pkg" / "palace_solver"
 
     assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
 
@@ -171,7 +171,7 @@ def testpick_wheel_refuses_an_ambiguous_result(tmp_path):
 
 def test_clean_build_tree_removes_setuptools_stale_payload(tmp_path):
     """setuptools reuses build/, so yesterday's libraries would ship again."""
-    stale = tmp_path / "build" / "lib.linux-x86_64-cpython-312" / "palais_solver"
+    stale = tmp_path / "build" / "lib.linux-x86_64-cpython-312" / "palace_solver"
     stale.mkdir(parents=True)
     (stale / "libstale.so").write_bytes(ELF_MAGIC)
 
