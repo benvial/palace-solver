@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the pypalace-solver wheel. Runs *inside* a manylinux_2_28 container.
+# Build the palais-solver wheel. Runs *inside* a manylinux_2_28 container.
 #
 #   scripts/build-wheel.sh [PALACE_VERSION]
 #
@@ -12,7 +12,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"PALACE_VERSION = \"([^\"]+)\"", pathlib.Path("'"$repo_root"'/pypalace_solver/__init__.py").read_text()).group(1))')}"
+palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"PALACE_VERSION = \"([^\"]+)\"", pathlib.Path("'"$repo_root"'/palais_solver/__init__.py").read_text()).group(1))')}"
 build_root="${BUILD_ROOT:-/build}"
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 jobs="${JOBS:-$(nproc)}"
@@ -44,7 +44,7 @@ export LD_LIBRARY_PATH="$install_prefix/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
 echo "==> MPICH (vendored into the wheel)"
 # The PyPI mpich wheel is C-only, and Palace needs Fortran MPI for MUMPS,
 # ARPACK and STRUMPACK, so MPICH is built here and shipped in the wheel.
-mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from pypalace_solver import MPICH_VERSION; print(MPICH_VERSION)')"
+mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from palais_solver import MPICH_VERSION; print(MPICH_VERSION)')"
 mpich_source="$build_root/mpich-$mpich_version"
 if [[ ! -d "$mpich_source" ]]; then
   curl -fsSL "https://www.mpich.org/static/downloads/$mpich_version/mpich-$mpich_version.tar.gz" \

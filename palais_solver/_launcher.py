@@ -2,8 +2,8 @@
 
 The wheel vendors its own MPICH (ADR-0002), so a Palace rank can be started by
 an ``mpiexec`` that did not ship with it — most often the one from the PyPI
-``mpich`` wheel, which pypalace pulls in for mpi4py. That works only while both
-sides belong to the same MPICH major series, which is what pypalace's
+``mpich`` wheel, which palais pulls in for mpi4py. That works only while both
+sides belong to the same MPICH major series, which is what palais's
 ``mpich<5`` pin encodes. Across a major bump the PMI handshake between the
 launcher and the rank is not guaranteed, and its failure mode is silent: every
 rank initialises as its own ``MPI_COMM_WORLD``, the solve runs to completion
@@ -25,14 +25,14 @@ import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
-from pypalace_solver import MPICH_VERSION, mpiexec_path
+from palais_solver import MPICH_VERSION, mpiexec_path
 
 #: Environment variables MPICH's Hydra sets in every rank it starts. Their
 #: presence is what separates a launched rank from a direct single-rank run.
 PROCESS_MANAGER_MARKERS = ("PMI_RANK", "PMI_SIZE", "PMI_FD")
 
 #: Set to a non-empty value to run under a mismatching launcher regardless.
-OVERRIDE_ENV = "PYPALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER"
+OVERRIDE_ENV = "PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER"
 
 #: How long to wait for a foreign ``mpiexec --version`` to answer.
 PROBE_TIMEOUT_SECONDS = 10
@@ -79,7 +79,7 @@ def incompatibility(vendored: str, launcher: str) -> str | None:
     return (
         f"refusing to run: this rank was started by an MPICH {launcher} process "
         f"manager, but the solver is linked against the MPICH {vendored} vendored "
-        "in pypalace-solver. Across a major version the PMI handshake is not "
+        "in palais-solver. Across a major version the PMI handshake is not "
         "guaranteed, and when it fails every rank runs as its own MPI_COMM_WORLD "
         "and the results are silently wrong. Use the launcher shipped with this "
         f"wheel:\n    palace-mpiexec -n <ranks> palace <config>\nSet "

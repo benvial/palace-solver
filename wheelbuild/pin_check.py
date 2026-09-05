@@ -1,26 +1,27 @@
-"""Keep the vendored MPICH and pypalace's ``mpich`` pin from drifting apart.
+"""Keep the vendored MPICH and palais's ``mpich`` pin from drifting apart.
 
-The wheel vendors its own MPICH while pypalace depends on the PyPI ``mpich``
+The wheel vendors its own MPICH while palais depends on the PyPI ``mpich``
 wheel for mpi4py, and the two only interoperate within one MPICH major series;
 see ``docs/adr/0004-the-vendored-launcher-is-the-supported-one.md``. Nothing
 otherwise links them, so a version bump on either side would pass unnoticed.
 
 Two checks, and they are not equally strong:
 
-- :func:`vendored_problem` compares ``pypalace_solver.MPICH_VERSION`` against
-  :data:`PYPALACE_MPICH_REQUIREMENT`, the ``mpich`` pin recorded here as the
-  one pypalace declares. It needs nothing but this repository, so CI runs it on
+- :func:`vendored_problem` compares ``palais_solver.MPICH_VERSION`` against
+  :data:`PALAIS_MPICH_REQUIREMENT`, the ``mpich`` pin recorded here as the
+  one palais declares. It needs nothing but this repository, so CI runs it on
   every push — but it only catches drift on *this* side.
-- :func:`declared_problem` compares that recorded pin against what a pypalace
-  source checkout actually declares, and is what catches drift on pypalace's
-  side. It needs a checkout passed with ``--pypalace``, so it does not run in
+- :func:`declared_problem` compares that recorded pin against what a palais
+  source checkout actually declares, and is what catches drift on palais's
+  side. It needs a checkout passed with ``--palais``, so it does not run in
   CI here.
 
-The second is deliberately not resolved from PyPI: the ``pypalace`` project
-published there is an unrelated package, so installing it would compare this
-wheel against the wrong project's dependencies. Until pypalace is reachable
-from this repository's CI, keeping the two pins together is a manual step at
-release time.
+The second is deliberately not resolved from PyPI. palais is not published
+there yet, and the name this project used to carry, ``pypalace``, now belongs
+to a different Palace frontend, so resolving either name would compare this
+wheel against another project's dependencies. Until palais is reachable from
+this repository's CI, keeping the two pins together is a manual step at release
+time.
 """
 
 from __future__ import annotations
@@ -33,11 +34,11 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 
-from pypalace_solver import MPICH_VERSION
+from palais_solver import MPICH_VERSION
 
-#: The ``mpich`` requirement pypalace declares for mpi4py. Bumping the wheel's
-#: vendored MPICH past this range, or pypalace moving its pin, must fail here.
-PYPALACE_MPICH_REQUIREMENT = "mpich<5"
+#: The ``mpich`` requirement palais declares for mpi4py. Bumping the wheel's
+#: vendored MPICH past this range, or palais moving its pin, must fail here.
+PALAIS_MPICH_REQUIREMENT = "mpich<5"
 
 #: Distribution name of the dependency the pin belongs to.
 MPICH_DISTRIBUTION = "mpich"
@@ -71,11 +72,11 @@ def mpich_requirement(dependencies: Iterable[str]) -> str | None:
     return None
 
 
-def checkout_dependencies(pypalace_dir: Path) -> list[str]:
-    """Read the runtime dependencies a pypalace source checkout declares.
+def checkout_dependencies(palais_dir: Path) -> list[str]:
+    """Read the runtime dependencies a palais source checkout declares.
 
     Args:
-        pypalace_dir: Root of a pypalace checkout, or its ``pyproject.toml``.
+        palais_dir: Root of a palais checkout, or its ``pyproject.toml``.
 
     Returns:
         The ``[project] dependencies`` list.
@@ -84,9 +85,9 @@ def checkout_dependencies(pypalace_dir: Path) -> list[str]:
         FileNotFoundError: If there is no ``pyproject.toml`` to read.
     """
     pyproject = (
-        pypalace_dir
-        if pypalace_dir.name == "pyproject.toml"
-        else pypalace_dir / "pyproject.toml"
+        palais_dir
+        if palais_dir.name == "pyproject.toml"
+        else palais_dir / "pyproject.toml"
     )
     if not pyproject.is_file():
         raise FileNotFoundError(f"no pyproject.toml at {pyproject}")
@@ -101,7 +102,7 @@ def vendored_problem(vendored_version: str, expected: str) -> str | None:
 
     Args:
         vendored_version: MPICH release the wheel builds and ships.
-        expected: The ``mpich`` pin this repository records for pypalace.
+        expected: The ``mpich`` pin this repository records for palais.
 
     Returns:
         A message, or ``None`` when the release is inside the range.
@@ -110,19 +111,19 @@ def vendored_problem(vendored_version: str, expected: str) -> str | None:
         return None
     return (
         f"the vendored MPICH {vendored_version} does not satisfy {expected!r}: a "
-        "rank launched by the mpiexec from the mpich wheel pypalace installs "
+        "rank launched by the mpiexec from the mpich wheel palais installs "
         "would be talking to a different MPICH major series. Bump "
-        "pypalace_solver.MPICH_VERSION back into range, or move both pins "
+        "palais_solver.MPICH_VERSION back into range, or move both pins "
         "together."
     )
 
 
 def declared_problem(expected: str, declared: str | None) -> str | None:
-    """Report a pypalace whose ``mpich`` pin no longer matches the recorded one.
+    """Report a palais whose ``mpich`` pin no longer matches the recorded one.
 
     Args:
-        expected: The ``mpich`` pin this repository records for pypalace.
-        declared: The ``mpich`` requirement pypalace actually declares, or
+        expected: The ``mpich`` pin this repository records for palais.
+        declared: The ``mpich`` requirement palais actually declares, or
             ``None`` if it declares none at all.
 
     Returns:
@@ -130,16 +131,16 @@ def declared_problem(expected: str, declared: str | None) -> str | None:
     """
     if declared is None:
         return (
-            f"pypalace declares no mpich requirement, but this repository "
-            f"records {expected!r}. Either pypalace dropped the dependency, in "
-            "which case PYPALACE_MPICH_REQUIREMENT is stale, or the wrong "
+            f"palais declares no mpich requirement, but this repository "
+            f"records {expected!r}. Either palais dropped the dependency, in "
+            "which case PALAIS_MPICH_REQUIREMENT is stale, or the wrong "
             "project was inspected."
         )
     if Requirement(declared).specifier != Requirement(expected).specifier:
         return (
-            f"pypalace now declares {declared!r} but this repository records "
-            f"{expected!r}. Update PYPALACE_MPICH_REQUIREMENT and check that "
-            "pypalace_solver.MPICH_VERSION still satisfies the new pin."
+            f"palais now declares {declared!r} but this repository records "
+            f"{expected!r}. Update PALAIS_MPICH_REQUIREMENT and check that "
+            "palais_solver.MPICH_VERSION still satisfies the new pin."
         )
     return None
 
@@ -147,28 +148,28 @@ def declared_problem(expected: str, declared: str | None) -> str | None:
 def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point for the pin check.
 
-    Without ``--pypalace`` only the vendored release is checked, against the
-    pin recorded here. That half needs no pypalace and is what CI runs; it
-    cannot see pypalace moving its own pin, and says so.
+    Without ``--palais`` only the vendored release is checked, against the
+    pin recorded here. That half needs no palais and is what CI runs; it
+    cannot see palais moving its own pin, and says so.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--pypalace",
+        "--palais",
         type=Path,
-        help="root of a pypalace checkout to compare the recorded pin against",
+        help="root of a palais checkout to compare the recorded pin against",
     )
     args = parser.parse_args(argv)
 
-    found = [vendored_problem(MPICH_VERSION, PYPALACE_MPICH_REQUIREMENT)]
-    if args.pypalace is None:
+    found = [vendored_problem(MPICH_VERSION, PALAIS_MPICH_REQUIREMENT)]
+    if args.palais is None:
         verdict = (
-            "NOT compared against pypalace: pass --pypalace <checkout> to check "
-            f"that it still declares {PYPALACE_MPICH_REQUIREMENT!r}"
+            "NOT compared against palais: pass --palais <checkout> to check "
+            f"that it still declares {PALAIS_MPICH_REQUIREMENT!r}"
         )
     else:
-        declared = mpich_requirement(checkout_dependencies(args.pypalace))
-        found.append(declared_problem(PYPALACE_MPICH_REQUIREMENT, declared))
-        verdict = f"pypalace at {args.pypalace} declares {declared!r}"
+        declared = mpich_requirement(checkout_dependencies(args.palais))
+        found.append(declared_problem(PALAIS_MPICH_REQUIREMENT, declared))
+        verdict = f"palais at {args.palais} declares {declared!r}"
 
     reported = [problem for problem in found if problem is not None]
     if reported:
@@ -177,7 +178,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     print(
         f"vendored MPICH {MPICH_VERSION} satisfies "
-        f"{PYPALACE_MPICH_REQUIREMENT!r}; {verdict}"
+        f"{PALAIS_MPICH_REQUIREMENT!r}; {verdict}"
     )
     return 0
 

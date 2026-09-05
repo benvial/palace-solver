@@ -1,4 +1,4 @@
-"""Build-time tooling for the pypalace-solver wheel.
+"""Build-time tooling for the palais-solver wheel.
 
 Nothing in this package ships inside the wheel: it drives Palace's CMake
 superbuild, harvests third-party notices, and assembles and repairs the

@@ -7,7 +7,7 @@ import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from pypalace_solver import _launcher, binary_path, mpiexec_path
+from palais_solver import _launcher, binary_path, mpiexec_path
 
 
 def mpiexec(argv: Sequence[str] | None = None) -> None:

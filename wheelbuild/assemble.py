@@ -1,4 +1,4 @@
-"""Assemble, repair and retag the pypalace-solver platform wheel.
+"""Assemble, repair and retag the palais-solver platform wheel.
 
 Pipeline: stage the executables into the package directory, build a wheel, run
 ``auditwheel repair`` to vendor every shared library they need — MPI and BLAS
@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from pypalace_solver import BINARY_NAME, LAUNCHER_NAME
+from palais_solver import BINARY_NAME, LAUNCHER_NAME
 from wheelbuild._process import check_call, is_elf
 
 #: Wheel platform tag, per the spec (manylinux_2_28, x86_64 first).
@@ -86,7 +86,7 @@ def stage(
 
     Args:
         install_prefix: Superbuild install prefix.
-        package_dir: The ``pypalace_solver`` package directory to fill.
+        package_dir: The ``palais_solver`` package directory to fill.
         notices: Optional THIRD-PARTY-NOTICES file to ship alongside.
 
     Returns:
@@ -192,7 +192,7 @@ def build(
     Returns:
         Path of the final wheel.
     """
-    package_dir = project_dir / "pypalace_solver"
+    package_dir = project_dir / "palais_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
 
     clean_build_tree(project_dir)

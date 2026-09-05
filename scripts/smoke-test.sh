@@ -4,7 +4,7 @@
 #   scripts/smoke-test.sh WHEEL PALACE_CONFIG
 #
 # Checks: the wheel is self-contained (it vendors MPICH, so nothing else needs
-# installing), every shared library resolves, pypalace_solver.binary_path()
+# installing), every shared library resolves, palais_solver.binary_path()
 # finds the payload, and Palace runs PALACE_CONFIG (--dry-run: config parsing,
 # mesh partitioning and FE space setup, no solve) on one rank and on two ranks
 # under the vendored launcher.
@@ -39,7 +39,7 @@ PYTHON
 # Nothing but the wheel: it must bring its own MPI.
 make_wheel_venv "$venv" "$wheel"
 
-binary="$("$venv/bin/python" -c 'import pypalace_solver; print(pypalace_solver.binary_path())')"
+binary="$("$venv/bin/python" -c 'import palais_solver; print(palais_solver.binary_path())')"
 echo "==> packaged binary: $binary"
 
 echo "==> shared library resolution"

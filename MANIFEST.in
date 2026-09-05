@@ -1,5 +1,5 @@
 include LICENSE
 include README.md
-recursive-include pypalace_solver/bin *
-recursive-include pypalace_solver/lib *
-include pypalace_solver/THIRD-PARTY-NOTICES
+recursive-include palais_solver/bin *
+recursive-include palais_solver/lib *
+include palais_solver/THIRD-PARTY-NOTICES

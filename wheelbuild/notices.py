@@ -53,7 +53,7 @@ LICENSE_FILE_PATTERNS = (
 _CECILL_C_TEXT = Path(__file__).resolve().parent / "data" / "CeCILL-C-V1-en.txt"
 
 _HEADER = """\
-THIRD-PARTY NOTICES for pypalace-solver
+THIRD-PARTY NOTICES for palais-solver
 =======================================
 
 This wheel redistributes the Palace solver (Apache-2.0) together with every

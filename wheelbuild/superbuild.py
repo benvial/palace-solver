@@ -1,6 +1,6 @@
 """Drive Palace's CMake superbuild with the feature set the spec pins.
 
-The flag set is deliberately maximal and mirrors ``pypalace/_cli/build.py``;
+The flag set is deliberately maximal and mirrors ``palais/_cli/build.py``;
 packaging concerns never trim a solver feature. MPI comes from the MPICH built by
 :mod:`wheelbuild.mpich`, which is the same MPICH the wheel vendors, so the
 solver runs against exactly what it was compiled against.

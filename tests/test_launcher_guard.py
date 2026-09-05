@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-import pypalace_solver
-from pypalace_solver import _exec, _launcher
+import palais_solver
+from palais_solver import _exec, _launcher
 
 HYDRA_OUTPUT = """HYDRA build details:
     Version:                                 5.0.1
@@ -42,7 +42,7 @@ def test_a_different_major_series_is_reported_with_the_supported_launcher():
 
 
 def test_the_vendored_process_manager_is_not_a_foreign_launcher(tmp_path):
-    vendored_bin = tmp_path / "pypalace_solver" / "bin"
+    vendored_bin = tmp_path / "palais_solver" / "bin"
     vendored_bin.mkdir(parents=True)
 
     assert (
@@ -54,7 +54,7 @@ def test_the_vendored_process_manager_is_not_a_foreign_launcher(tmp_path):
 
 
 def test_a_process_manager_from_elsewhere_is_a_foreign_launcher(tmp_path):
-    vendored_bin = tmp_path / "pypalace_solver" / "bin"
+    vendored_bin = tmp_path / "palais_solver" / "bin"
     foreign_bin = tmp_path / "venv" / "bin"
 
     assert (
@@ -144,7 +144,7 @@ def test_palace_refuses_to_start_under_a_mismatching_launcher(
     tmp_path, monkeypatch, capsys
 ):
     _fake_binary(tmp_path)
-    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
     monkeypatch.setattr(_exec.os, "execv", lambda *_: pytest.fail("exec'd"))
     monkeypatch.setattr(
         _launcher, "refusal_reason", lambda *_, **__: "launcher mismatch"
@@ -162,7 +162,7 @@ def test_the_vendored_launcher_itself_is_not_guarded(tmp_path, monkeypatch):
     launcher.parent.mkdir(parents=True)
     launcher.write_text("#!/bin/sh\n")
     launcher.chmod(0o755)
-    monkeypatch.setattr(pypalace_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(palais_solver, "_PACKAGE_DIR", tmp_path)
     monkeypatch.setattr(
         _launcher, "refusal_reason", lambda *_, **__: pytest.fail("guarded")
     )

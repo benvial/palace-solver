@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Prove the packaged solver interoperates with pypalace's MPI process manager.
+# Prove the packaged solver interoperates with palais's MPI process manager.
 #
 #   scripts/interop-test.sh WHEEL PALACE_CONFIG
 #
-# The wheel vendors its own MPICH, but pypalace installs the PyPI `mpich` wheel
+# The wheel vendors its own MPICH, but palais installs the PyPI `mpich` wheel
 # for mpi4py, so a user can start the solver with either launcher. This runs a
 # real solve — not `--dry-run`, so collective communication is exercised — on
 # two ranks under each launcher and requires the two to agree. Stage 3 checks
@@ -19,8 +19,8 @@ workdir="$(mktemp -d)"
 venv="$workdir/venv"
 cd "$workdir"
 
-# "mpich<5" is the pin pypalace declares, so this is the pairing a user of
-# `pip install pypalace[solver]` actually gets.
+# "mpich<5" is the pin palais declares, so this is the pairing a user of
+# `pip install palais[solver]` actually gets.
 make_wheel_venv "$venv" "$wheel" "mpich<5"
 
 vendored_launcher="$venv/bin/palace-mpiexec"

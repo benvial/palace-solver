@@ -1,7 +1,7 @@
 """Palace solver binary, packaged as a Python wheel.
 
 The wheel ships the ``palace`` executable and its vendored shared libraries
-inside this package. ``binary_path()`` is the resolution hook that pypalace's
+inside this package. ``binary_path()`` is the resolution hook that palais's
 runner uses to find the packaged solver.
 """
 
@@ -32,9 +32,9 @@ BINARY_NAME = "palace-real"
 #: Name of the vendored MPICH process manager inside the same directory.
 LAUNCHER_NAME = "mpiexec"
 
-#: MPICH release vendored in this wheel, matching the ``mpich`` pin pypalace
+#: MPICH release vendored in this wheel, matching the ``mpich`` pin palais
 #: declares for mpi4py. The build step and the runtime launcher guard both read
-#: it from here; ``wheelbuild.interop`` checks it against pypalace's pin.
+#: it from here; ``wheelbuild.interop`` checks it against palais's pin.
 MPICH_VERSION = "4.3.2"
 
 _PACKAGE_DIR = Path(__file__).resolve().parent
@@ -60,7 +60,7 @@ def binary_path() -> Path:
     if not candidate.is_file():
         raise FileNotFoundError(
             f"{BINARY_NAME} is missing from {candidate.parent}; this install of "
-            "pypalace-solver does not contain a Palace binary"
+            "palais-solver does not contain a Palace binary"
         )
     return candidate
 
@@ -82,7 +82,7 @@ def mpiexec_path() -> Path:
     if not candidate.is_file():
         raise FileNotFoundError(
             f"{LAUNCHER_NAME} is missing from {candidate.parent}; this install "
-            "of pypalace-solver does not contain the MPICH process manager"
+            "of palais-solver does not contain the MPICH process manager"
         )
     return candidate
 
@@ -94,7 +94,7 @@ def launcher_conflict() -> str | None:
     MPICH major series cannot be trusted to start it: the PMI handshake may
     fail, and its failure is silent. The ``palace`` console script makes this
     check for itself; a caller that launches :func:`binary_path` directly —
-    which is how pypalace's runner resolves the solver — has to make it here,
+    which is how palais's runner resolves the solver — has to make it here,
     before spawning the ranks.
 
     Returns:
@@ -103,7 +103,7 @@ def launcher_conflict() -> str | None:
         identified as MPICH is allowed: the check proves a mismatch, never a
         match.
     """
-    from pypalace_solver import _launcher  # noqa: PLC0415
+    from palais_solver import _launcher  # noqa: PLC0415
 
     return _launcher.refusal_reason()
 
@@ -111,8 +111,8 @@ def launcher_conflict() -> str | None:
 def lib_dir() -> Path:
     """Return the directory holding the vendored shared libraries.
 
-    ``auditwheel`` puts them in a ``pypalace_solver.libs`` directory beside the
+    ``auditwheel`` puts them in a ``palais_solver.libs`` directory beside the
     package, and the binary finds them through its RPATH; the path is exposed
     for callers that want to set ``LD_LIBRARY_PATH`` themselves.
     """
-    return _PACKAGE_DIR.parent / "pypalace_solver.libs"
+    return _PACKAGE_DIR.parent / "palais_solver.libs"

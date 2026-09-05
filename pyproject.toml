@@ -16,7 +16,7 @@ description = "Palace 3D finite-element electromagnetics solver, packaged as a b
 keywords = ["electromagnetics", "finite element", "palace", "solver"]
 license = {text = "Apache-2.0"}
 maintainers = [{name = "Benjamin Vial", email = "benjamin.vial84@gmail.com"}]
-name = "pypalace-solver"
+name = "palais-solver"
 readme = "README.md"
 dynamic = ["version"]
 requires-python = ">=3.10"
@@ -25,13 +25,13 @@ requires-python = ">=3.10"
 dev = ["pytest>=7.0", "ruff", "mypy", "auditwheel>=6.0", "packaging", "wheel", "build"]
 
 [project.scripts]
-palace = "pypalace_solver._exec:main"
-palace-mpiexec = "pypalace_solver._exec:mpiexec"
+palace = "palais_solver._exec:main"
+palace-mpiexec = "palais_solver._exec:mpiexec"
 
 [project.urls]
-"Bug Tracker" = "https://github.com/oslumen/pypalace-solver/issues"
-Homepage = "https://github.com/oslumen/pypalace-solver"
-Repository = "https://github.com/oslumen/pypalace-solver"
+"Bug Tracker" = "https://github.com/oslumen/palais-solver/issues"
+Homepage = "https://github.com/oslumen/palais-solver"
+Repository = "https://github.com/oslumen/palais-solver"
 
 [tool.mypy]
 check_untyped_defs = true
@@ -79,7 +79,7 @@ ignore = [
 select = ["ALL"]
 
 [tool.ruff.lint.per-file-ignores]
-"pypalace_solver/_exec.py" = ["S606", "T201"]  # os.execv is the point of the wrapper
+"palais_solver/_exec.py" = ["S606", "T201"]  # os.execv is the point of the wrapper
 "tests/**/*.py" = ["D", "INP001", "S101", "PLC0415", "PT011"]
 "wheelbuild/*.py" = ["T201"]  # build steps report progress on stdout
 
@@ -92,10 +92,10 @@ extra-standard-library = ["tomllib"]
 convention = "google"
 
 [tool.setuptools.dynamic]
-version = {attr = "pypalace_solver.__version__"}
+version = {attr = "palais_solver.__version__"}
 
 [tool.setuptools.package-data]
-pypalace_solver = ["bin/*", "lib/*", "lib/**/*", "THIRD-PARTY-NOTICES"]
+palais_solver = ["bin/*", "lib/*", "lib/**/*", "THIRD-PARTY-NOTICES"]
 
 [tool.setuptools.packages.find]
-include = ["pypalace_solver", "pypalace_solver.*"]
+include = ["palais_solver", "palais_solver.*"]
