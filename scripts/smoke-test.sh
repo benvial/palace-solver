@@ -63,4 +63,17 @@ echo "==> single rank"
 echo "==> two ranks, under the vendored process manager"
 "$venv/bin/palace-mpiexec" -n 2 "$venv/bin/palace" --dry-run "$(basename "$config")"
 
+echo "==> two ranks through the wrapper's own --np"
+# palais drives the solver this way rather than by calling a launcher itself,
+# so the console script has to spawn the vendored process manager on its own.
+# Rank 0 alone prints the dry-run line; twice would mean the ranks never found
+# each other.
+np_log="$workdir/np.log"
+"$venv/bin/palace" --np 2 --dry-run "$(basename "$config")" >"$np_log" 2>&1
+if [[ "$(grep -c "^Dry-run:" "$np_log")" != "1" ]]; then
+  tail -20 "$np_log" >&2
+  echo "ERROR: --np 2 did not form one MPI_COMM_WORLD of 2 ranks" >&2
+  exit 1
+fi
+
 echo "==> smoke test passed"
