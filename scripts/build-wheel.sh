@@ -12,7 +12,9 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"PALACE_VERSION = \"([^\"]+)\"", pathlib.Path("'"$repo_root"'/palace_solver/__init__.py").read_text()).group(1))')}"
+# PALACE_VERSION is an alias of __version__, so the literal to read is the
+# latter — the one place the version is written down.
+palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("'"$repo_root"'/palace_solver/__init__.py").read_text()).group(1))')}"
 build_root="${BUILD_ROOT:-/build}"
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 jobs="${JOBS:-$(nproc)}"
