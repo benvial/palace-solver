@@ -54,7 +54,8 @@ jobs:
       # GSLIB): 30-60+ minutes cold. The cache holds the sources, the build
       # trees, the shared install prefix and ccache.
       - name: Restore build cache
-        uses: actions/cache@v4
+        id: build-cache
+        uses: actions/cache/restore@v4
         with:
           path: /build
           key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-${{ github.sha }}
@@ -62,16 +63,25 @@ jobs:
             superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-
             superbuild-${{ env.PALACE_VERSION }}-
 
+      # Paths stay relative to the working directory: inside a container job
+      # `github.workspace` is the host path, which does not exist here.
       - name: Build wheel
         run: scripts/build-wheel.sh "$PALACE_VERSION"
         env:
           BUILD_ROOT: /build
-          OUTPUT_DIR: ${{ github.workspace }}/wheelhouse
+          OUTPUT_DIR: wheelhouse
+
+      - name: Save build cache
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: /build
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
       - name: Smoke test in a clean virtual environment
         run: |
           scripts/smoke-test.sh \
-            "$(ls "${{ github.workspace }}"/wheelhouse/*.whl)" \
+            "$(ls wheelhouse/*.whl)" \
             "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
 
       # The smoke test stops at --dry-run. This solves the example for real on
@@ -80,7 +90,7 @@ jobs:
       - name: Launcher interoperability
         run: |
           scripts/interop-test.sh \
-            "$(ls "${{ github.workspace }}"/wheelhouse/*.whl)" \
+            "$(ls wheelhouse/*.whl)" \
             "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
 
       - name: Report wheel size
@@ -89,7 +99,7 @@ jobs:
           import pathlib, sys
           sys.path.insert(0, '.')
           from wheelbuild.assemble import size_report
-          wheel = next(pathlib.Path('${{ github.workspace }}/wheelhouse').glob('*.whl'))
+          wheel = next(pathlib.Path('wheelhouse').glob('*.whl'))
           report = size_report(wheel)
           print(report.text)
           pathlib.Path('${GITHUB_STEP_SUMMARY}').write_text(report.text + '\n')
