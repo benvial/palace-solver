@@ -127,9 +127,43 @@ Linux aarch64 and macOS are later milestones.
 
 ## Releasing
 
-Tag the commit with the Palace release the wheel ships (`v0.17.0`, or
-`v0.17.0.post1` for a packaging-only fix). The tag runs the wheel job and
-publishes to PyPI through trusted publishing — no API token lives in the
-repository. If the repaired wheel exceeds PyPI's 100 MB per-file limit (the
-build prints its size), request a limit increase with that concrete wheel
-before the first upload.
+`palace_solver.__version__` is the only place the version is written down;
+`pyproject.toml`, the build scripts and CI all read it from there. It mirrors
+the Palace release the wheel ships, with a `.postN` segment for a
+packaging-only fix that ships the same Palace — `0.17.0`, then `0.17.0.post1`.
+Palace's own release is what decides the first three numbers; nothing here
+gets to choose them.
+
+The release tag is `v` plus that version, spelled identically: `v0.17.0`,
+`v0.17.0.post1`. `python -m wheelbuild.tag_check <tag>` enforces the match, and
+CI runs it on tag pushes before the build, because a tag that disagrees with
+the packaged version publishes a release under a number nobody chose and PyPI
+never lets a filename be reused.
+
+Per release:
+
+1. Bump `palace_solver.__version__`, and `MPICH_VERSION` if the vendored MPICH
+   moved. Commit.
+2. Run the two checks CI cannot: `python -m wheelbuild.pin_check --palais
+   <checkout>` and `scripts/e2e-test.sh wheelhouse/*.whl <checkout>`, both
+   against a current palais checkout.
+3. Tag and push the tag. The tag runs the checks, builds the wheel, smoke- and
+   interop-tests it, and publishes to PyPI.
+
+Publishing is entirely CI's: the `publish` job runs only for `refs/tags/v*`,
+in the `release` environment, and uploads through PyPI's trusted publishing —
+no API token lives in this repository, and nothing is uploaded from a
+workstation.
+
+Two things must exist outside this repository for that job to work, and are
+the first place to look if a release fails at the upload step:
+
+- A trusted publisher registered on PyPI for `palace-solver`, naming this
+  repository, the `wheels.yml` workflow and the `release` environment.
+- The `release` environment on GitHub. Adding required reviewers to it is how a
+  release is made to wait for a human before uploading.
+
+The repaired wheel is 67.7 MB, under PyPI's 100 MB per-file limit. The build
+prints the size and CI puts it in the job summary; if a later Palace release
+pushes it over, request a limit increase with that concrete wheel before the
+upload — the request needs a built file, not an estimate.
