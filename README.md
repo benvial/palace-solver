@@ -28,6 +28,29 @@ The package version mirrors the Palace release it ships (`.postN` for
 packaging-only fixes). Palace is Apache-2.0; see `LICENSE` and
 `THIRD-PARTY-NOTICES`.
 
+## Command line
+
+`palace` takes the same options as the wrapper script upstream Palace ships,
+so anything written against upstream — palais's runner included — works
+unchanged:
+
+```bash
+palace --np 4 config.json              # four ranks under the vendored launcher
+palace --nt 2 --np 4 config.json       # ... two OpenMP threads each
+palace --serial config.json            # no MPI launcher at all
+palace --launcher mpirun --np 4 config.json
+palace --help
+```
+
+Two differences from upstream's wrapper. The default launcher is the
+`mpiexec` vendored here rather than a `mpirun` found on `PATH`, which would
+belong to some other MPI install. And the ranks are started as the `palace`
+console script rather than as the raw binary, so each of them runs the
+rendezvous check described below.
+
+`--nt` sets `OMP_NUM_THREADS`, and leaving it unset means one thread, not one
+per core — as upstream, since anything else oversubscribes a multi-rank run.
+
 ## MPI
 
 The wheel carries its own MPICH, built from source with the Fortran bindings
@@ -76,15 +99,24 @@ The wheel is built inside a `manylinux_2_28` container. Locally:
 scripts/build-in-container.sh 0.17.0      # docker, caches in ./.build-cache
 scripts/smoke-test.sh wheelhouse/*.whl CONFIG   # clean venv, 1 rank and -n 2
 scripts/interop-test.sh wheelhouse/*.whl CONFIG # real solve under both launchers
+scripts/e2e-test.sh wheelhouse/*.whl [PALAIS]   # palais drives the wheel
 ```
 
 `scripts/interop-test.sh` solves a real example on two ranks under both
 `palace-mpiexec` and the `mpiexec` from the PyPI `mpich` wheel, requires the
 results to agree, checks that a rank launched without a rendezvous is refused,
-and checks that a launcher from the next MPICH major series is not. `python -m wheelbuild.pin_check` checks the vendored MPICH against
-the `mpich` pin recorded for palais; pass `--palais <checkout>` to also
-check that palais still declares it — CI cannot, so that half is a release-
-time step.
+and checks that a launcher from the next MPICH major series is not.
+
+`scripts/e2e-test.sh` installs `palais[solver]` into an empty virtual
+environment, resolving the extra from the wheel just built, and runs one palais
+example on two ranks through the high-level API — the whole path a user of
+`pip install palais[solver]` takes.
+
+`python -m wheelbuild.pin_check` checks the vendored MPICH against the `mpich`
+pin recorded for palais; pass `--palais <checkout>` to also check that palais
+still declares it. Both that half and the end-to-end test need a palais
+checkout, which CI has no access to, so they are release-time steps run
+locally.
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS → superbuild →
 notice harvest → wheel assembly → `auditwheel repair` → retag to
