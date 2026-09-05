@@ -7,12 +7,16 @@ runner uses to find the packaged solver.
 
 from __future__ import annotations
 
+import sys
+import sysconfig
 from pathlib import Path
 
 __all__ = [
     "MPICH_VERSION",
     "__version__",
     "binary_path",
+    "console_script_path",
+    "executable_path",
     "launcher_conflict",
     "lib_dir",
     "mpiexec_path",
@@ -32,6 +36,10 @@ BINARY_NAME = "palace-real"
 #: Name of the vendored MPICH process manager inside the same directory.
 LAUNCHER_NAME = "mpiexec"
 
+#: Name of the console script this package installs, which wraps the binary
+#: with the launcher guard in :mod:`._launcher`.
+CONSOLE_SCRIPT_NAME = "palace"
+
 #: MPICH release vendored in this wheel, matching the ``mpich`` pin palais
 #: declares for mpi4py. The build step and the runtime launcher guard both read
 #: it from here; ``wheelbuild.interop`` checks it against palais's pin.
@@ -43,11 +51,11 @@ _PACKAGE_DIR = Path(__file__).resolve().parent
 def binary_path() -> Path:
     """Return the path of the packaged Palace executable.
 
-    Callers that launch this path themselves bypass the ``palace`` console
-    script, and with it the launcher guard that refuses a process manager from
-    another MPICH major series. Call :func:`launcher_conflict` from the
-    launching process to make the same check, or launch the ``palace`` console
-    script instead.
+    This is the raw binary, and launching it directly bypasses the ``palace``
+    console script and with it the launcher guard, which is the only thing
+    standing between a badly launched run and silently wrong results. Use
+    :func:`executable_path` to launch the solver; use this when the ELF binary
+    itself is what is wanted.
 
     Returns:
         Absolute path to the ``palace-real`` binary shipped in this wheel.
@@ -85,6 +93,58 @@ def mpiexec_path() -> Path:
             "of palais-solver does not contain the MPICH process manager"
         )
     return candidate
+
+
+def console_script_path() -> Path | None:
+    """Return the ``palace`` console script this package installed, if found.
+
+    The console script is what carries the launcher guard: it checks that the
+    rank it is starting was handed an MPI rendezvous before handing control to
+    the binary. The binary itself cannot check anything.
+
+    The script is looked for beside the running interpreter — which is where a
+    virtual environment puts it — and never on ``PATH``, because a ``palace``
+    on ``PATH`` may well be a Palace built from source, and returning that
+    would silently run a different solver than the one this wheel ships. For
+    the same reason a script that does not reference this package is rejected.
+
+    Returns:
+        Path of the console script, or ``None`` if it cannot be located.
+    """
+    candidates = (
+        Path(sysconfig.get_path("scripts")) / CONSOLE_SCRIPT_NAME,
+        Path(sys.executable).parent / CONSOLE_SCRIPT_NAME,
+    )
+    for candidate in candidates:
+        if not candidate.is_file():
+            continue
+        try:
+            content = candidate.read_text(errors="ignore")
+        except OSError:
+            continue
+        if __name__ in content:
+            return candidate
+    return None
+
+
+def executable_path() -> Path:
+    """Return what a caller should launch to run the packaged solver.
+
+    This is the resolution hook for palais's runner. It prefers the ``palace``
+    console script, so that multi-rank launches go through the launcher guard,
+    and falls back to the raw binary when the script cannot be located.
+
+    Prefer this over :func:`binary_path`, which returns the unguarded binary.
+
+    Returns:
+        Path of the console script, or of the packaged binary.
+
+    Raises:
+        FileNotFoundError: If the wheel was installed without its binary
+            payload.
+    """
+    script = console_script_path()
+    return binary_path() if script is None else script
 
 
 def launcher_conflict() -> str | None:

@@ -52,15 +52,17 @@ worth stopping because it does not fail: every rank would initialise as its own
 and exit 0. `PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER=1` runs anyway. The reasoning
 is in `docs/adr/0004-the-vendored-launcher-is-the-supported-one.md`.
 
-The check belongs to the `palace` console script. Code that launches
-`binary_path()` itself should call `palais_solver.launcher_conflict()` before
-spawning ranks to make the same check.
+The check belongs to the `palace` console script, so that is what a caller
+should launch: `executable_path()` returns it, and falls back to the binary
+only when it cannot be found. `binary_path()` returns the raw binary and is
+unguarded.
 
 ## Python API
 
 ```python
 import palais_solver
 
+palais_solver.executable_path()  # -> what to launch: the guarded console script
 palais_solver.binary_path()  # -> .../site-packages/palais_solver/bin/palace-real
 palais_solver.lib_dir()  # -> .../site-packages/palais_solver/lib
 palais_solver.launcher_conflict()  # -> None, or why this launcher is refused
