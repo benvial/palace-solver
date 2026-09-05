@@ -43,12 +43,14 @@ separate process, so its MPI never shares an address space with the one
 
 `palace-mpiexec` is the supported launcher, and single-node runs are the
 supported shape — clusters keep building Palace themselves. Another process
-manager still works while it belongs to the same MPICH major series; one from a
-different major series is refused before the solver starts, since that mismatch
-fails silently rather than loudly. `PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER=1`
-runs anyway, and a launcher that cannot be identified as MPICH — Slurm's
-`srun` — is left alone. The reasoning is in
-`docs/adr/0004-the-vendored-launcher-is-the-supported-one.md`.
+manager works fine, whatever MPICH it is; what the solver refuses is a rank
+that a process manager started **without an MPI rendezvous** — none of
+`PMI_FD`, `PMI_PORT`, `PMI_RANK`, `PMIX_RANK`, `PMIX_NAMESPACE`,
+`PMIX_SERVER_URI` or `OMPI_COMM_WORLD_RANK` passed down. That case is
+worth stopping because it does not fail: every rank would initialise as its own
+`MPI_COMM_WORLD`, solve the whole problem alone, overwrite the others' output
+and exit 0. `PALAIS_SOLVER_ALLOW_FOREIGN_LAUNCHER=1` runs anyway. The reasoning
+is in `docs/adr/0004-the-vendored-launcher-is-the-supported-one.md`.
 
 The check belongs to the `palace` console script. Code that launches
 `binary_path()` itself should call `palais_solver.launcher_conflict()` before
@@ -76,8 +78,8 @@ scripts/interop-test.sh wheelhouse/*.whl CONFIG # real solve under both launcher
 
 `scripts/interop-test.sh` solves a real example on two ranks under both
 `palace-mpiexec` and the `mpiexec` from the PyPI `mpich` wheel, requires the
-results to agree, and checks that a launcher from the next MPICH major series
-is refused. `python -m wheelbuild.pin_check` checks the vendored MPICH against
+results to agree, checks that a rank launched without a rendezvous is refused,
+and checks that a launcher from the next MPICH major series is not. `python -m wheelbuild.pin_check` checks the vendored MPICH against
 the `mpich` pin recorded for palais; pass `--palais <checkout>` to also
 check that palais still declares it — CI cannot, so that half is a release-
 time step.

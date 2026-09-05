@@ -7,8 +7,10 @@
 # for mpi4py, so a user can start the solver with either launcher. This runs a
 # real solve — not `--dry-run`, so collective communication is exercised — on
 # two ranks under each launcher and requires the two to agree. Stage 3 checks
-# the other direction: that a launcher from the next MPICH major series is
-# refused. See docs/adr/0004-the-vendored-launcher-is-the-supported-one.md.
+# that a rank launched with no MPI rendezvous is refused rather than left to
+# solve the problem alone; stage 4 checks that a launcher from the next MPICH
+# major series is *not* refused, since that pairing works. See
+# docs/adr/0004-the-vendored-launcher-is-the-supported-one.md.
 set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/_wheel_venv.sh"
@@ -94,31 +96,66 @@ for report in reports:
     print(f"    {report.name}: {len(left)} values agree")
 PYTHON
 
-echo "==> stage 3: a launcher from the next MPICH major series is refused"
-guard_venv="$workdir/guard-venv"
-install_log="$workdir/guard-install.log"
-if make_wheel_venv "$guard_venv" "$wheel" "mpich>=5" >"$install_log" 2>&1; then
-  echo "    launcher: $(launcher_version "$guard_venv/bin/mpiexec")"
-  guard_log="$workdir/guard.log"
-  if "$guard_venv/bin/mpiexec" -n 2 "$guard_venv/bin/palace" --dry-run "$config" \
-      >"$guard_log" 2>&1; then
-    tail -20 "$guard_log" >&2
-    echo "ERROR: the solver ran under a mismatching launcher instead of refusing" >&2
-    exit 1
-  fi
-  grep -q "palace-mpiexec" "$guard_log" || {
-    tail -20 "$guard_log" >&2
-    echo "ERROR: the launcher guard did not name the supported launcher" >&2
+echo "==> stage 3: a rank launched without an MPI rendezvous is refused"
+# Reproduce the silent failure: strip the PMI variables from an otherwise
+# normal two-rank launch. Without the guard each rank initialises as its own
+# MPI_COMM_WORLD, solves the whole problem alone and exits 0.
+guard_log="$workdir/guard.log"
+guard_dir="$workdir/guard"
+copy_example "$config" "$guard_dir"
+if (
+  cd "$guard_dir"
+  "$vendored_launcher" -n 2 env -u PMI_RANK -u PMI_SIZE -u PMI_FD \
+    "$venv/bin/palace" --dry-run "$(basename "$config")"
+) >"$guard_log" 2>&1; then
+  tail -20 "$guard_log" >&2
+  echo "ERROR: ranks ran without a rendezvous instead of being refused" >&2
+  exit 1
+fi
+grep -q "palace-mpiexec" "$guard_log" || {
+  tail -20 "$guard_log" >&2
+  echo "ERROR: the launcher guard did not name the supported launcher" >&2
+  exit 1
+}
+echo "    refused, and pointed at palace-mpiexec"
+
+echo "==> stage 4: a launcher from the next MPICH major series still runs"
+# The guard is on the rendezvous, not on the version: this pairing is
+# unsupported but works, and must not be blocked.
+major_venv="$workdir/major-venv"
+install_log="$workdir/major-install.log"
+if make_wheel_venv "$major_venv" "$wheel" "mpich>=5" >"$install_log" 2>&1; then
+  echo "    launcher: $(launcher_version "$major_venv/bin/mpiexec")"
+  major_log="$workdir/major.log"
+  major_dir="$workdir/major"
+  copy_example "$config" "$major_dir"
+  (
+    cd "$major_dir"
+    "$major_venv/bin/mpiexec" -n 2 "$major_venv/bin/palace" --dry-run \
+      "$(basename "$config")"
+  ) >"$major_log" 2>&1 || {
+    tail -20 "$major_log" >&2
+    echo "ERROR: a working cross-major launch was refused or failed" >&2
     exit 1
   }
-  echo "    refused, and pointed at palace-mpiexec"
+  # Rank 0 alone prints it; twice would mean the ranks did not find each other.
+  if [[ "$(grep -c "^Dry-run:" "$major_log")" != "1" ]]; then
+    tail -20 "$major_log" >&2
+    echo "ERROR: the ranks did not form one MPI_COMM_WORLD" >&2
+    exit 1
+  fi
+  grep -q "note:" "$major_log" || {
+    echo "ERROR: no version remark was printed for a cross-major launcher" >&2
+    exit 1
+  }
+  echo "    ran, one MPI_COMM_WORLD, with a version remark on stderr"
 elif grep -q "No matching distribution found" "$install_log"; then
-  # No mpich>=5 wheel published yet: there is nothing to test the guard with,
-  # and that is the only install failure this stage may pass over.
-  echo "    skipped: no mpich>=5 wheel available to test the guard against"
+  # No mpich>=5 wheel published yet: nothing to check this against, and that is
+  # the only install failure this stage may pass over.
+  echo "    skipped: no mpich>=5 wheel available"
 else
   tail -20 "$install_log" >&2
-  echo "ERROR: could not build the mismatching-launcher environment" >&2
+  echo "ERROR: could not build the cross-major launcher environment" >&2
   exit 1
 fi
 

@@ -26,20 +26,25 @@ def mpiexec(argv: Sequence[str] | None = None) -> None:
 def main(argv: Sequence[str] | None = None) -> None:
     """Replace this process with the packaged Palace binary.
 
-    A rank started by a process manager from another MPICH major series is
-    refused here rather than left to fail silently; see :mod:`._launcher`.
+    A rank a process manager started without an MPI rendezvous is refused here
+    rather than left to solve the whole problem alone and exit 0; see
+    :mod:`._launcher`.
 
     Args:
         argv: Arguments to forward to Palace. Defaults to the arguments this
             console script was invoked with.
 
     Raises:
-        SystemExit: If the wheel carries no Palace binary, or the launcher is
-            incompatible with the vendored MPICH.
+        SystemExit: If the wheel carries no Palace binary, or this rank was
+            launched without a rendezvous.
     """
-    conflict = _launcher.refusal_reason()
-    if conflict is not None:
-        print(f"palace: {conflict}", file=sys.stderr)
+    parent_exe = _launcher.parent_executable()
+    note = _launcher.version_note(parent_exe)
+    if note is not None:
+        print(f"palace: {note}", file=sys.stderr)
+    reason = _launcher.refusal_reason(os.environ, parent_exe)
+    if reason is not None:
+        print(f"palace: {reason}", file=sys.stderr)
         raise SystemExit(1)
     _exec_payload(binary_path, argv, name="palace")
 

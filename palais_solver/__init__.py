@@ -90,22 +90,25 @@ def mpiexec_path() -> Path:
 def launcher_conflict() -> str | None:
     """Return why this process must not launch the solver, if there is one.
 
-    The wheel vendors its own MPICH, and a process manager from a different
-    MPICH major series cannot be trusted to start it: the PMI handshake may
-    fail, and its failure is silent. The ``palace`` console script makes this
+    A process manager that starts ranks without handing them an MPI rendezvous
+    does not fail: each rank becomes its own ``MPI_COMM_WORLD``, solves the
+    whole problem alone and exits 0. The ``palace`` console script makes this
     check for itself; a caller that launches :func:`binary_path` directly —
-    which is how palais's runner resolves the solver — has to make it here,
-    before spawning the ranks.
+    which is how palais's runner resolves the solver — has to make it here.
+
+    Note that this reports on the *calling* process's own launch environment,
+    so it is worth calling from inside each rank rather than from a parent that
+    spawns them.
 
     Returns:
         An operator-facing message naming the conflict, or ``None`` when the
-        launch is allowed. Launching under a process manager that cannot be
-        identified as MPICH is allowed: the check proves a mismatch, never a
-        match.
+        launch is allowed.
     """
+    import os  # noqa: PLC0415
+
     from palais_solver import _launcher  # noqa: PLC0415
 
-    return _launcher.refusal_reason()
+    return _launcher.refusal_reason(os.environ, _launcher.parent_executable())
 
 
 def lib_dir() -> Path:
