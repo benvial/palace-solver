@@ -33,6 +33,7 @@ REQUIRED_DEPENDENCIES = (
     "petsc",
     "slepc",
     "strumpack",
+    "sundials",
     "superlu",
     "zfp",
 )

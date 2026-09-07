@@ -1,9 +1,13 @@
 """Drive Palace's CMake superbuild with the feature set the spec pins.
 
-The flag set is deliberately maximal and mirrors ``palais/_cli/build.py``;
-packaging concerns never trim a solver feature. MPI comes from the MPICH built by
-:mod:`wheelbuild.mpich`, which is the same MPICH the wheel vendors, so the
-solver runs against exactly what it was compiled against.
+The flag set is deliberately maximal: packaging concerns never trim a solver
+feature. Every ``PALACE_WITH_*`` cache option the release defines is named
+here, including the ones set to their upstream default, so a default that
+changes upstream cannot quietly change what the wheel ships.
+
+MPI comes from the MPICH built by :mod:`wheelbuild.mpich`, which is the same
+MPICH the wheel vendors, so the solver runs against exactly what it was
+compiled against.
 """
 
 from __future__ import annotations
@@ -23,7 +27,13 @@ FEATURE_FLAGS = (
     "-DBUILD_SHARED_LIBS=ON",
     "-DPALACE_WITH_CUDA=OFF",
     "-DPALACE_WITH_HIP=OFF",
+    # MAGMA and GPU-aware MPI are GPU-only; upstream forces MAGMA off
+    # without CUDA or HIP, and this says so rather than relying on it.
+    "-DPALACE_WITH_MAGMA=OFF",
+    "-DPALACE_WITH_GPU_AWARE_MPI=OFF",
     "-DPALACE_WITH_64BIT_INT=OFF",
+    # ILP64 BLAS/LAPACK, which upstream marks experimental.
+    "-DPALACE_WITH_64BIT_BLAS_INT=OFF",
     "-DPALACE_WITH_OPENMP=ON",
     "-DPALACE_WITH_SUPERLU=ON",
     "-DPALACE_WITH_STRUMPACK=ON",
@@ -34,6 +44,9 @@ FEATURE_FLAGS = (
     "-DPALACE_WITH_ARPACK=ON",
     "-DPALACE_WITH_LIBXSMM=ON",
     "-DPALACE_WITH_GSLIB=ON",
+    # Drives the transient solver. On by default upstream since 0.17.0,
+    # and named here because the wheel ships the libraries either way.
+    "-DPALACE_WITH_SUNDIALS=ON",
 )
 
 
