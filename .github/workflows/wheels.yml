@@ -47,11 +47,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # palace_solver.__version__ mirrors the Palace release, and is the only
-      # place the version is written down.
+      # palace_solver.__version__ is the only place the version is written
+      # down; the Palace release is that minus any .postN packaging segment,
+      # which ships the same Palace under a tag upstream does not have.
       - name: Resolve Palace version
         run: |
-          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1))")
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
           echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
 
       # The build compiles MPICH, OpenBLAS and the Palace superbuild (hypre, MFEM,

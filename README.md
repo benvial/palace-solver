@@ -131,7 +131,9 @@ Linux aarch64 and macOS are later milestones.
 the Palace release the wheel ships, with a `.postN` segment for a
 packaging-only fix that ships the same Palace — `0.17.0`, then `0.17.0.post1`.
 Palace's own release is what decides the first three numbers; nothing here
-gets to choose them.
+gets to choose them. The build scripts and `PALACE_VERSION` drop the `.postN`
+segment, since upstream has no tag for it — a `.post` release rebuilds the
+same Palace.
 
 The release tag is `v` plus that version, spelled identically: `v0.17.0`,
 `v0.17.0.post1`. `python -m wheelbuild.tag_check <tag>` enforces the match, and

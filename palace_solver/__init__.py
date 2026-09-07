@@ -27,8 +27,12 @@ __all__ = [
 #: the build scripts and CI all read it from here.
 __version__ = "0.17.0"
 
-#: Palace release shipped by this wheel.
-PALACE_VERSION = __version__
+#: Palace release shipped by this wheel: the package version without any
+#: ``.postN`` packaging segment, since ``0.17.0.post1`` still ships Palace
+#: ``0.17.0``. The build scripts fetch this release's tag from upstream, which
+#: is why the segment must not reach them: ``v0.17.0.post1`` is a tag that
+#: exists only here.
+PALACE_VERSION = __version__.split(".post", maxsplit=1)[0]
 
 #: Name of the real solver executable inside :data:`_PACKAGE_DIR` / ``bin``.
 BINARY_NAME = "palace-real"
