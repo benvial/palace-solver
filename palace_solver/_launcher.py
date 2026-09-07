@@ -1,9 +1,9 @@
 """Refuse to start a rank that has been launched without an MPI rendezvous.
 
 The wheel vendors its own MPICH, so a Palace rank can be started by a process
-manager that did not ship with it — most often the ``mpiexec`` from the PyPI
-``mpich`` wheel that palais pulls in for mpi4py. Almost everything that can go
-wrong there fails loudly. One thing does not.
+manager that did not ship with it — a site MPICH's ``mpiexec``, or the one
+from the PyPI ``mpich`` wheel if that happens to be installed. Almost
+everything that can go wrong there fails loudly. One thing does not.
 
 When a process manager starts the ranks but gives them no way to find each
 other — no PMI or PMIx rendezvous in their environment — MPICH does not fail.

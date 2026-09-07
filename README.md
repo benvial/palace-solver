@@ -112,11 +112,10 @@ environment, resolving the extra from the wheel just built, and runs one palais
 example on two ranks through the high-level API — the whole path a user of
 `pip install palais[solver]` takes.
 
-`python -m wheelbuild.pin_check` checks the vendored MPICH against the `mpich`
-pin recorded for palais; pass `--palais <checkout>` to also check that palais
-still declares it. Both that half and the end-to-end test need a palais
-checkout, which CI has no access to, so they are release-time steps run
-locally.
+`python -m wheelbuild.pin_check` checks that the vendored MPICH stays inside
+the major series the interop test proves the wheel against; it runs in CI on
+every push. The end-to-end test needs a palais checkout, which CI has no
+access to, so it is a release-time step run locally.
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS → superbuild →
 notice harvest → wheel assembly → `auditwheel repair` → retag to
@@ -144,9 +143,8 @@ Per release:
 
 1. Bump `palace_solver.__version__`, and `MPICH_VERSION` if the vendored MPICH
    moved. Commit.
-2. Run the two checks CI cannot: `python -m wheelbuild.pin_check --palais
-   <checkout>` and `scripts/e2e-test.sh wheelhouse/*.whl <checkout>`, both
-   against a current palais checkout.
+2. Run the check CI cannot: `scripts/e2e-test.sh wheelhouse/*.whl
+   <checkout>` against a current palais checkout.
 3. Tag and push the tag. The tag runs the checks, builds the wheel, smoke- and
    interop-tests it, and publishes to PyPI.
 

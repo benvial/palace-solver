@@ -40,9 +40,9 @@ LAUNCHER_NAME = "mpiexec"
 #: with the launcher guard in :mod:`._launcher`.
 CONSOLE_SCRIPT_NAME = "palace"
 
-#: MPICH release vendored in this wheel, matching the ``mpich`` pin palais
-#: declares for mpi4py. The build step and the runtime launcher guard both read
-#: it from here; ``wheelbuild.interop`` checks it against palais's pin.
+#: MPICH release vendored in this wheel. The build step and the runtime
+#: launcher guard both read it from here; ``wheelbuild.pin_check`` fails CI if
+#: it leaves the major series the interop test proves the wheel against.
 MPICH_VERSION = "4.3.2"
 
 _PACKAGE_DIR = Path(__file__).resolve().parent

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Prove the packaged solver interoperates with palais's MPI process manager.
+# Prove the packaged solver interoperates with a foreign MPICH launcher.
 #
 #   scripts/interop-test.sh WHEEL PALACE_CONFIG
 #
-# The wheel vendors its own MPICH, but palais installs the PyPI `mpich` wheel
-# for mpi4py, so a user can start the solver with either launcher. This runs a
-# real solve — not `--dry-run`, so collective communication is exercised — on
+# The wheel vendors its own MPICH, but nothing stops a user starting the
+# solver with an `mpiexec` from elsewhere; the PyPI `mpich` wheel stands in
+# for that launcher here. This runs a real solve — not `--dry-run`, so
+# collective communication is exercised — on
 # two ranks under each launcher and requires the two to agree. Stage 3 checks
 # that a rank launched with no MPI rendezvous is refused rather than left to
 # solve the problem alone; stage 4 checks that a launcher from the next MPICH
@@ -21,8 +22,8 @@ workdir="$(mktemp -d)"
 venv="$workdir/venv"
 cd "$workdir"
 
-# "mpich<5" is the pin palais declares, so this is the pairing a user of
-# `pip install palais[solver]` actually gets.
+# "mpich<5" is INTEROP_MPICH_REQUIREMENT in wheelbuild/pin_check.py: the
+# range this test's result is recorded for.
 make_wheel_venv "$venv" "$wheel" "mpich<5"
 
 vendored_launcher="$venv/bin/palace-mpiexec"
