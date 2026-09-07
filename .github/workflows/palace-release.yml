@@ -1,0 +1,195 @@
+name: palace release check
+
+# Upstream Palace is not a package in any ecosystem Dependabot understands, so
+# nothing tells us a new release exists. This job asks GitHub once a week, and
+# when upstream is ahead it opens the bump as a pull request: step 1 of the
+# release process in README.md, done mechanically. Steps 2 and 3 stay human.
+on:
+  schedule:
+    # Mondays, 06:17 UTC. Off the hour: GitHub queues scheduled jobs and the
+    # top of the hour is the busiest slot.
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Palace release to bump to (default: upstream's latest)"
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    name: open a bump pull request when upstream is ahead
+    runs-on: ubuntu-latest
+    steps:
+      # A pull request opened with GITHUB_TOKEN does not trigger other
+      # workflows, so wheels.yml would never run on it and the bump would
+      # arrive with no checks at all — the opposite of the point. This needs a
+      # fine-grained PAT or GitHub App token with contents: write and
+      # pull-requests: write, stored as RELEASE_BUMP_TOKEN.
+      - name: Require a token that can trigger CI
+        env:
+          TOKEN: ${{ secrets.RELEASE_BUMP_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::RELEASE_BUMP_TOKEN is not set. A pull request opened" \
+                 "with the default GITHUB_TOKEN does not trigger wheels.yml," \
+                 "so the bump would carry no checks."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - run: python -m pip install --upgrade packaging
+
+      # PALACE_VERSION is __version__ without its .postN segment: the release
+      # the build scripts actually fetch a tag for.
+      - name: Read the packaged Palace release
+        run: |
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
+          echo "PACKAGED=$version" >> "$GITHUB_ENV"
+
+      # /releases/latest skips drafts and prereleases, so a release candidate
+      # upstream does not open a pull request.
+      - name: Read the latest upstream release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            echo "UPSTREAM=${REQUESTED#v}" >> "$GITHUB_ENV"
+          else
+            tag=$(gh api repos/awslabs/palace/releases/latest --jq .tag_name)
+            echo "UPSTREAM=${tag#v}" >> "$GITHUB_ENV"
+          fi
+
+      # A plain string comparison would also fire when upstream yanks a release
+      # and its "latest" goes backwards, which is not news.
+      - name: Decide whether upstream is ahead
+        id: compare
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os
+          from packaging.version import Version
+
+          packaged = Version(os.environ["PACKAGED"])
+          upstream = Version(os.environ["UPSTREAM"])
+          print(f"behind={'true' if upstream > packaged else 'false'}")
+          PY
+
+      # __version__ is the only place the version is written down: pyproject,
+      # the build scripts, PALACE_VERSION and the release tag all read it from
+      # here, so this one line is the whole mechanical part of step 1.
+      - name: Bump the version
+        if: steps.compare.outputs.behind == 'true'
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re
+
+          path = pathlib.Path("palace_solver/__init__.py")
+          source = path.read_text()
+          bumped, count = re.subn(
+              r'^__version__ = "[^"]+"$',
+              f'__version__ = "{os.environ["UPSTREAM"]}"',
+              source,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if count != 1:
+              raise SystemExit("ERROR: did not find exactly one __version__ assignment")
+          path.write_text(bumped)
+          PY
+
+      # The superbuild does not pin hypre, MFEM or the rest: Palace's own CMake
+      # owns those, so a bump carries them along. What a bump can silently
+      # break is FEATURE_FLAGS, which names PALACE_WITH_* options by hand. An
+      # option upstream renamed or dropped becomes a flag CMake ignores, and an
+      # option upstream added is a feature this wheel would take the default
+      # for without anyone deciding to.
+      - name: Report feature-flag drift
+        if: steps.compare.outputs.behind == 'true'
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/awslabs/palace/v$UPSTREAM/CMakeLists.txt" -o /tmp/CMakeLists.txt
+          python3 - <<'PY' > /tmp/drift.md
+          import pathlib, re
+
+          from wheelbuild.superbuild import FEATURE_FLAGS
+
+          upstream = set(
+              re.findall(
+                  # CACHE is what separates a user-facing option from an
+                  # internal set() upstream makes on its own.
+                  r"^\s*(?:set|option)\((PALACE_WITH_\w+)[^)]*?CACHE",
+                  pathlib.Path("/tmp/CMakeLists.txt").read_text(),
+                  flags=re.MULTILINE,
+              )
+          )
+          ours = {
+              match.group(1)
+              for flag in FEATURE_FLAGS
+              if (match := re.match(r"-D(PALACE_WITH_\w+)=", flag))
+          }
+
+          stale = sorted(ours - upstream)
+          unset = sorted(upstream - ours)
+          if stale:
+              print("**Flags this repository sets that the release does not define.**")
+              print("CMake ignores an unknown `-D`, so each of these is doing nothing:\n")
+              for name in stale:
+                  print(f"- `{name}`")
+              print()
+          if unset:
+              print("**Options the release defines that `FEATURE_FLAGS` does not set.**")
+              print("The build takes upstream's default for each:\n")
+              for name in unset:
+                  print(f"- `{name}`")
+              print()
+          if not stale and not unset:
+              print("`FEATURE_FLAGS` covers exactly the release's `PALACE_WITH_*` options.\n")
+          PY
+
+      - name: Write the pull request body
+        if: steps.compare.outputs.behind == 'true'
+        run: |
+          cat > /tmp/body.md <<EOF
+          Upstream released [Palace $UPSTREAM](https://github.com/awslabs/palace/releases/tag/v$UPSTREAM). This bumps \`__version__\` from $PACKAGED, which is the whole of step 1 of the release process that can be done mechanically.
+
+          CI on this pull request runs everything the tag would run except publishing: lint, mypy, unit tests, \`wheelbuild.pin_check\`, a cold superbuild — the cache key carries the Palace version, so this one builds from scratch — then the smoke and interop tests against the new wheel. A green run here means the wheel builds and solves.
+
+          ## Feature-flag drift
+
+          $(cat /tmp/drift.md)
+
+          ## What a human still has to decide
+
+          - **palais's pin.** \`palais[solver]\` requires \`palace-solver~=0.17.0\`, which only \`0.17.x\` satisfies. If this bump changes the minor version, \`pip install palais[solver]\` becomes unsatisfiable until palais's pin moves too. The two releases have to be sequenced.
+          - **\`MPICH_VERSION\`.** Independent of the Palace release and never bumped by this job. Moving it is a decision to re-run \`scripts/interop-test.sh\`, which is what \`wheelbuild.pin_check\` guards.
+          - **Step 2, the end-to-end test.** \`scripts/e2e-test.sh wheelhouse/*.whl <checkout>\` against a palais working tree. CI cannot reach palais; see \`.scratch/wheels/issues/07-e2e-with-palais.md\`.
+          - **Step 3, the tag.** Deliberately not automated: pushing \`v$UPSTREAM\` publishes to PyPI through trusted publishing, and PyPI never lets a filename be reused.
+
+          Read upstream's release notes before merging.
+          EOF
+
+      - name: Open the pull request
+        if: steps.compare.outputs.behind == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.RELEASE_BUMP_TOKEN }}
+          branch: palace/v${{ env.UPSTREAM }}
+          # The branch name carries the release, so a rerun updates the open
+          # pull request instead of opening a second one.
+          title: "chore: bump Palace to ${{ env.UPSTREAM }}"
+          body-path: /tmp/body.md
+          commit-message: |
+            chore: bump Palace to ${{ env.UPSTREAM }}
+
+            Upstream released v${{ env.UPSTREAM }}; __version__ is the single
+            source the build scripts, pyproject and the release tag read.
+          add-paths: palace_solver/__init__.py
+          delete-branch: true
