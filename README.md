@@ -1,5 +1,11 @@
 # palace-solver
 
+
+[![Build](https://img.shields.io/github/actions/workflow/status/benvial/palace-solver/wheels.yml?style=for-the-badge&logo=github&label=build)](https://github.com/benvial/palace-docker/actions/workflows/wheels.yml)
+[![PYPI](https://img.shields.io/pypi/v/palace-solver?style=for-the-badge&logo=pypi&logoColor=white)](https://pypi.org/project/palace-solver)
+[![LICENSE](https://img.shields.io/pypi/l/palace-solver?style=for-the-badge&logo=readthedocs&logoColor=white&color=blue)](https://github.com/benvial/palace-solver/blob/main/LICENSE)
+
+
 The [Palace](https://github.com/awslabs/palace) 3D finite-element
 electromagnetics solver, packaged as a Linux binary wheel.
 
