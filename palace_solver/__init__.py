@@ -25,7 +25,7 @@ __all__ = [
 #: Single source of the version, mirroring the Palace release this wheel ships
 #: (with a ``.postN`` segment for packaging-only fixes). ``pyproject.toml``,
 #: the build scripts and CI all read it from here.
-__version__ = "0.17.0"
+__version__ = "0.18.0"
 
 #: Palace release shipped by this wheel: the package version without any
 #: ``.postN`` packaging segment, since ``0.17.0.post1`` still ships Palace
