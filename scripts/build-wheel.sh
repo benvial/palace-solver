@@ -92,11 +92,17 @@ fi
 # prints UNKNOWN when the source is not a checkout, which a release tarball is
 # not. Recreating the release tag locally makes it report v$palace_version.
 if [[ ! -d "$source_dir/.git" ]]; then
-  git -C "$source_dir" init --quiet
+  git -c init.defaultBranch=main -C "$source_dir" init --quiet
   git -C "$source_dir" add --all
   git -C "$source_dir" -c user.name=palace-solver -c user.email=palace-solver@localhost \
     commit --quiet --no-verify --message "Palace v$palace_version release tarball"
   git -C "$source_dir" tag "v$palace_version"
+  # A cached source tree comes back without the repository, and the Palace
+  # subproject beside it is already configured, built and installed: without
+  # dropping its stamps the superbuild would do nothing and the wheel would
+  # ship the binary stamped before the tag existed. Harmless when cold.
+  rm -f "$superbuild_dir"/palace-cmake/src/palace-stamp/palace-{configure,build,install,done} \
+    "$superbuild_dir/CMakeFiles/palace-complete"
 fi
 
 echo "==> superbuild (dependency tree cached in $superbuild_dir)"
