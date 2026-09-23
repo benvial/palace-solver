@@ -97,10 +97,25 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git -C "$source_dir" -c user.name=palace-solver -c user.email=palace-solver@localhost \
     commit --quiet --no-verify --message "Palace v$palace_version release tarball"
   git -C "$source_dir" tag "v$palace_version"
-  # A cached source tree comes back without the repository, and the Palace
-  # subproject beside it is already configured, built and installed: without
-  # dropping its stamps the superbuild would do nothing and the wheel would
-  # ship the binary stamped before the tag existed. Harmless when cold.
+fi
+
+# The tag only reaches the binary through a Palace reconfigure, and the cache
+# can hand back a tree that is tagged but whose Palace was configured before
+# the tag existed — 0.18.1 shipped exactly that. So the question is not whether
+# the repository is there, it is what the installed binary reports; when that
+# disagrees, the Palace stamps go and the superbuild configures it again.
+installed_palace="$(PYTHONPATH="$repo_root" python3 -c '
+import pathlib, sys
+from wheelbuild.assemble import find_palace_binary
+
+try:
+    print(find_palace_binary(pathlib.Path(sys.argv[1])))
+except (FileNotFoundError, OSError):
+    pass
+' "$install_prefix")"
+if [[ -n "$installed_palace" ]] \
+  && ! timeout 60 "$installed_palace" --version 2>/dev/null | grep -q "Palace version: v$palace_version"; then
+  echo "==> installed Palace is not stamped v$palace_version, reconfiguring it"
   rm -f "$superbuild_dir"/palace-cmake/src/palace-stamp/palace-{configure,build,install,done} \
     "$superbuild_dir/CMakeFiles/palace-complete"
 fi
