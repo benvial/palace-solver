@@ -12,6 +12,10 @@ make_wheel_venv() {
   local venv="$1"
   shift
   python3 -m venv "$venv"
+  # Nothing installed here is worth caching, and in the manylinux container
+  # HOME belongs to another user, so pip would warn twice about a cache
+  # directory it cannot write.
+  local -x PIP_NO_CACHE_DIR=1
   "$venv/bin/pip" install --quiet --upgrade pip
   "$venv/bin/pip" install --quiet "$@"
 }
