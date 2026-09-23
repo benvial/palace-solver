@@ -88,6 +88,16 @@ if [[ ! -d "$source_dir" ]]; then
     -o "$build_root/palace-$palace_version.tar.gz"
   tar -xzf "$build_root/palace-$palace_version.tar.gz" -C "$build_root"
 fi
+# Palace stamps `palace --version` from `git describe` at configure time and
+# prints UNKNOWN when the source is not a checkout, which a release tarball is
+# not. Recreating the release tag locally makes it report v$palace_version.
+if [[ ! -d "$source_dir/.git" ]]; then
+  git -C "$source_dir" init --quiet
+  git -C "$source_dir" add --all
+  git -C "$source_dir" -c user.name=palace-solver -c user.email=palace-solver@localhost \
+    commit --quiet --no-verify --message "Palace v$palace_version release tarball"
+  git -C "$source_dir" tag "v$palace_version"
+fi
 
 echo "==> superbuild (dependency tree cached in $superbuild_dir)"
 # Palace's top-level CMake project is the superbuild: building it also installs
