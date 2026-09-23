@@ -14,10 +14,10 @@ concurrency:
 jobs:
   checks:
     name: lint and unit tests
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
       - name: Install dev dependencies
@@ -42,10 +42,13 @@ jobs:
 
   wheel:
     name: build manylinux_2_28 x86_64 wheel
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest: the label moves to Ubuntu 26 on
+    # 2026-10-19, and a 40-minute superbuild is not where a runner image
+    # should change underneath us.
+    runs-on: ubuntu-24.04
     container: quay.io/pypa/manylinux_2_28_x86_64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       # palace_solver.__version__ is the only place the version is written
       # down; the Palace release is that minus any .postN packaging segment,
@@ -64,9 +67,9 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: /build
-          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-${{ github.sha }}
+          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-${{ github.sha }}
           restore-keys: |
-            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-
+            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-
             superbuild-${{ env.PALACE_VERSION }}-
 
       # Paths stay relative to the working directory: inside a container job
@@ -121,7 +124,7 @@ jobs:
     name: publish to PyPI
     needs: [checks, wheel]
     if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment: release
     permissions:
       # Trusted publishing: no API token stored in the repository.

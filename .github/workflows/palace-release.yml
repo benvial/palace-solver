@@ -22,7 +22,9 @@ permissions:
 jobs:
   bump:
     name: open a bump pull request when upstream is ahead
-    runs-on: ubuntu-latest
+    # Pinned rather than ubuntu-latest, which moves to Ubuntu 26 on
+    # 2026-10-19.
+    runs-on: ubuntu-24.04
     steps:
       # A pull request opened with GITHUB_TOKEN does not trigger other
       # workflows, so wheels.yml would never run on it and the bump would
@@ -40,9 +42,9 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
