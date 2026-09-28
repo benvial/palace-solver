@@ -9,6 +9,7 @@ because the payload is a binary with no Python ABI.
 from __future__ import annotations
 
 import argparse
+import os
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -18,7 +19,15 @@ from palace_solver import BINARY_NAME, LAUNCHER_NAME
 from wheelbuild._process import check_call, is_elf
 
 #: Wheel platform tag, per the spec (manylinux_2_28, x86_64 first).
-PLATFORM_TAG = "manylinux_2_28_x86_64"
+#
+# SPIKE DEVIATION (wayfinder ticket 05, research/aarch64-spike only): the
+# production constant has no architecture component, so an aarch64 build
+# would repair and retag itself as an x86_64 wheel. The spike overrides it
+# from the environment rather than deciding what the production spelling
+# should be -- deriving it from platform.machine() and threading it through
+# the workflow are both open, and that choice belongs to the migration, not
+# to this measurement.
+PLATFORM_TAG = os.environ.get("SPIKE_PLATFORM_TAG", "manylinux_2_28_x86_64")
 
 #: PyPI's default per-file upload limit. Exceeding it needs a limit request.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024

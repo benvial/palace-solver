@@ -1,0 +1,271 @@
+name: spike manylinux aarch64
+
+# THROWAWAY workflow for wayfinder ticket 05. Lives only on
+# research/aarch64-spike and is never merged.
+#
+# Question: does scripts/build-wheel.sh produce a working
+# py3-none-manylinux_2_28_aarch64 wheel inside
+# quay.io/pypa/manylinux_2_28_aarch64 on a free ubuntu-24.04-arm runner, and
+# how long does a cold build take there?
+#
+# The production recipe is run as it stands. The only source change on this
+# branch is the SPIKE_PLATFORM_TAG override in wheelbuild/assemble.py, because
+# the production PLATFORM_TAG constant has no architecture component at all and
+# without it auditwheel would be asked to repair an aarch64 payload as x86_64.
+# Anything else the build needs is a finding, not a fix.
+#
+# Deliberately no actions/cache. The repository is already at 10.35 GB against
+# GitHub's hard 10 GB cap (wayfinder ticket 09) and the production cache key in
+# wheels.yml carries no architecture component, so a cached spike would collide
+# with the x86_64 entries and make real pull requests pay a cold 30-60 minute
+# build. Every run here is cold, which is also the number ticket 05 asks for.
+
+on:
+  push:
+    branches: [research/aarch64-spike]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # Ticket 03 flagged that wheelbuild/openblas.py passes DYNAMIC_ARCH=1 with no
+  # TARGET. On x86_64 OpenBLAS falls back to a conservative common target; on
+  # aarch64 it detects the build host, and the GitHub arm runners are far newer
+  # than the oldest CPU this wheel claims to run on. The common code that
+  # DYNAMIC_ARCH does *not* dispatch at run time is compiled for that target, so
+  # if it comes out as anything above ARMV8 the "one wheel runs on any CPU"
+  # invariant in CONTEXT.md is broken on aarch64. This job is ~8 minutes and
+  # settles it without waiting for the superbuild.
+  openblas-target:
+    name: what TARGET does OpenBLAS pick on an arm runner?
+    runs-on: ubuntu-24.04-arm
+    container: quay.io/pypa/manylinux_2_28_aarch64
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Runner and container facts
+        run: |
+          set -o pipefail
+          uname -m
+          nproc
+          free -g || true
+          grep -m1 -E 'model name|Model|CPU part' /proc/cpuinfo || true
+          cat /proc/cpuinfo | grep -m1 'CPU implementer' || true
+          gcc --version | head -1
+
+      - name: Fetch OpenBLAS
+        run: |
+          set -o pipefail
+          version="$(PYTHONPATH=. python3 -c 'from wheelbuild.openblas import OPENBLAS_VERSION; print(OPENBLAS_VERSION)')"
+          echo "OPENBLAS_VERSION=$version" >> "$GITHUB_ENV"
+          curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v$version/OpenBLAS-$version.tar.gz" -o /tmp/openblas.tar.gz
+          mkdir -p /build
+          tar -xzf /tmp/openblas.tar.gz -C /build
+
+      - name: Production recipe, no TARGET
+        run: |
+          set -o pipefail
+          cp -a "/build/OpenBLAS-$OPENBLAS_VERSION" /build/ob-default
+          PYTHONPATH=. python3 -m wheelbuild.openblas \
+            --source-dir /build/ob-default \
+            --prefix /build/prefix-default \
+            --jobs "$(nproc)"
+          echo "--- Makefile.conf ---"
+          grep -E '^(CORE|LIBCORE|TARGET|DYNAMIC_ARCH|ARCH)=' /build/ob-default/Makefile.conf || true
+          echo "--- openblas_config.h ---"
+          grep -E 'OPENBLAS_(CONFIG|CORE)\b' /build/prefix-default/include/openblas_config.h || true
+
+      - name: Same recipe with TARGET=ARMV8
+        run: |
+          set -o pipefail
+          cp -a "/build/OpenBLAS-$OPENBLAS_VERSION" /build/ob-armv8
+          cd /build/ob-armv8
+          make -j"$(nproc)" TARGET=ARMV8 DYNAMIC_ARCH=1 USE_OPENMP=1 INTERFACE64=0 NO_STATIC=1
+          make install PREFIX=/build/prefix-armv8 NO_STATIC=1
+          echo "--- Makefile.conf ---"
+          grep -E '^(CORE|LIBCORE|TARGET|DYNAMIC_ARCH|ARCH)=' /build/ob-armv8/Makefile.conf || true
+          echo "--- openblas_config.h ---"
+          grep -E 'OPENBLAS_(CONFIG|CORE)\b' /build/prefix-armv8/include/openblas_config.h || true
+
+      - name: Compare
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## OpenBLAS TARGET on aarch64"
+            echo
+            echo '### Production recipe (no TARGET)'
+            echo '```'
+            grep -E 'OPENBLAS_(CONFIG|CORE)\b' /build/prefix-default/include/openblas_config.h
+            echo '```'
+            echo '### With TARGET=ARMV8'
+            echo '```'
+            grep -E 'OPENBLAS_(CONFIG|CORE)\b' /build/prefix-armv8/include/openblas_config.h
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
+  wheel:
+    name: build manylinux_2_28 aarch64 wheel
+    # Free and unlimited for a public repository, same 4 vCPU / 16 GB as the
+    # x86_64 runner (ticket 03). Upstream Palace pins its own arm superbuild to
+    # ubuntu-22.04-arm over "flaky arm builds with ubuntu 24"; that comment has
+    # no linked issue and a different configuration behind it, so this spike
+    # reaches for 24 as the production job would and treats any flakiness as a
+    # finding.
+    runs-on: ubuntu-24.04-arm
+    container: quay.io/pypa/manylinux_2_28_aarch64
+    timeout-minutes: 350
+    env:
+      BUILD_ROOT: /build
+      OUTPUT_DIR: wheelhouse
+      SPIKE_PLATFORM_TAG: manylinux_2_28_aarch64
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Runner and container facts
+        run: |
+          set -o pipefail
+          echo "arch: $(uname -m)"
+          echo "cores: $(nproc)"
+          free -g || true
+          df -h / /build 2>/dev/null || df -h /
+          gcc --version | head -1
+          cmake --version | head -1 || echo "no cmake on PATH yet"
+
+      - name: Resolve Palace version
+        run: |
+          set -o pipefail
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
+          echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # Run the production script unchanged, with every line stamped with
+      # seconds since the start so the `==>` stage banners it already prints
+      # become per-stage wall clock without editing the script.
+      - name: Build wheel (cold, production recipe)
+        id: build
+        run: |
+          set -o pipefail
+          scripts/build-wheel.sh "$PALACE_VERSION" 2>&1 | python3 -u -c '
+          import sys, time
+          start = time.monotonic()
+          for line in sys.stdin:
+              sys.stdout.write(f"[{time.monotonic() - start:9.1f}s] {line}")
+          ' | tee /tmp/build.log
+
+      - name: Stage timings
+        if: always()
+        run: |
+          set +e
+          awk '
+            /^\[ *[0-9.]+s\] ==> / {
+              seconds = $1; gsub(/[^0-9.]/, "", seconds)
+              if (previous != "") printf "| %s | %.1f |\n", previous, seconds - mark
+              previous = substr($0, index($0, "==> ") + 4); mark = seconds
+            }
+            END {
+              if (previous != "") printf "| %s | (to end of log) |\n", previous
+            }
+          ' /tmp/build.log | tee /tmp/timings.md
+          exit 0
+
+      - name: Wheel tag and size
+        id: wheel_facts
+        if: always()
+        run: |
+          set -o pipefail
+          ls -la wheelhouse/
+          wheel="$(ls wheelhouse/*.whl)"
+          echo "WHEEL=$wheel" >> "$GITHUB_ENV"
+          python3 -c "
+          import pathlib, sys
+          sys.path.insert(0, '.')
+          from wheelbuild.assemble import size_report
+          report = size_report(pathlib.Path('$wheel'))
+          print(report.text)
+          pathlib.Path('/tmp/size.md').write_text(report.text + '\n')
+          "
+
+      - name: Smoke test in a clean virtual environment
+        id: smoke
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          scripts/smoke-test.sh \
+            "$WHEEL" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      # The one property of the five that the wheel cannot demonstrate on its
+      # own: a real two-rank solve under a launcher that did not ship with it.
+      # PyPI's mpich publishes manylinux_2_28_aarch64 for both the <5 and >=5
+      # series, so every stage of this test has something to run against here.
+      - name: Launcher interoperability
+        id: interop
+        if: always()
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          scripts/interop-test.sh \
+            "$WHEEL" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      - name: Collect logs
+        if: always()
+        run: |
+          set +e
+          out="$RUNNER_TEMP/spike-logs"
+          mkdir -p "$out"
+          cp /tmp/build.log "$out/build.log"
+          cp /build/superbuild/CMakeFiles/CMakeError.log "$out/" 2>/dev/null
+          cp /build/superbuild/CMakeFiles/CMakeOutput.log "$out/" 2>/dev/null
+          cp /build/mpich-build/config.log "$out/mpich-config.log" 2>/dev/null
+          find /build/superbuild -name '*-err.log' -o -name '*-out.log' \
+            | while read -r log; do
+                cp "$log" "$out/$(echo "${log#/build/superbuild/}" | tr / _)"
+              done
+          ls -la "$out"
+          exit 0
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: spike-aarch64-logs
+          path: ${{ runner.temp }}/spike-logs
+          if-no-files-found: warn
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: palace-solver-manylinux_2_28_aarch64
+          path: wheelhouse/*.whl
+          if-no-files-found: warn
+
+      - name: Verdict
+        if: always()
+        run: |
+          set +e
+          {
+            echo "## manylinux aarch64 spike"
+            echo
+            echo "| stage | outcome |"
+            echo "| --- | --- |"
+            echo "| build-wheel.sh (cold) | ${{ steps.build.outcome }} |"
+            echo "| smoke test | ${{ steps.smoke.outcome }} |"
+            echo "| launcher interoperability | ${{ steps.interop.outcome }} |"
+            echo
+            echo "### Stage wall clock (seconds)"
+            echo
+            echo "| stage | seconds |"
+            echo "| --- | --- |"
+            cat /tmp/timings.md
+            echo
+            echo "### Wheel"
+            echo '```'
+            ls -la wheelhouse/ 2>/dev/null
+            cat /tmp/size.md 2>/dev/null
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit 0
