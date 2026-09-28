@@ -1,0 +1,27 @@
+# The real thing: the production recipe driven through cibuildwheel, with
+# BUILD_ROOT inside the /host mount so the GitHub Actions cache on the runner
+# is what the superbuild reads and writes. See SPIKE.md.
+[tool.cibuildwheel]
+build = "cp313-manylinux_x86_64"
+build-verbosity = 1
+
+# PALACE_VERSION is resolved on the runner from palace_solver.__version__, the
+# way wheels.yml does it; cibuildwheel has no way to compute it in TOML.
+environment-pass = ["PALACE_VERSION", "GITHUB_RUN_ID"]
+
+environment = { BUILD_ROOT = "/host/build", SPIKE_STOP_AFTER_NOTICES = "1", LD_LIBRARY_PATH = "/host/build/install/lib" }
+
+# See spike/cibw-probe.toml: without an explicit plat-name the build produces
+# py3-none-any and cibuildwheel fails before repair-wheel-command can retag it.
+build-frontend = { name = "build", args = [
+  "--config-setting=--build-option=--plat-name=manylinux_2_28_x86_64",
+] }
+
+# 30-60+ minutes cold, minutes warm. This is the step under test.
+before-all = "bash {project}/scripts/spike-cibw-before-all.sh"
+
+# The payload has to be inside the package directory before the wheel is
+# built, which is a step the production script does not have separately.
+before-build = "bash {project}/scripts/spike-cibw-before-build.sh"
+
+repair-wheel-command = "bash {project}/scripts/spike-cibw-repair.sh {wheel} {dest_dir}"

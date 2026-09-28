@@ -137,6 +137,14 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.notices \
   --source-root "$openblas_source" \
   --output "$build_root/THIRD-PARTY-NOTICES"
 
+# Spike only (wayfinder ticket 06): under cibuildwheel the wheel build, the
+# repair and the retag belong to cibuildwheel, so the production script has to
+# stop here and hand over. That split is part of what the spike measures.
+if [[ -n "${SPIKE_STOP_AFTER_NOTICES:-}" ]]; then
+  echo "==> spike: stopping before wheel assembly, cibuildwheel takes it from here"
+  exit 0
+fi
+
 echo "==> wheel assembly, repair, retag"
 PYTHONPATH="$repo_root" python3 -m wheelbuild.assemble \
   --project-dir "$repo_root" \

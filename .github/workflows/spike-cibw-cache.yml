@@ -1,0 +1,203 @@
+name: spike-cibw-cache
+
+# Throwaway spike for wayfinder ticket 06. Never merged to main. See SPIKE.md.
+on:
+  workflow_dispatch:
+    inputs:
+      run_probe:
+        description: "Run the cheap /host write and root-owned cache probe"
+        type: boolean
+        default: true
+      run_full:
+        description: "Run the full superbuild through cibuildwheel (30-60+ min cold)"
+        type: boolean
+        default: true
+      cache_generation:
+        description: "Bump to start from a cold cache"
+        type: string
+        default: v1
+
+env:
+  CIBW_VERSION: "4.2.1"
+
+jobs:
+  probe:
+    name: /host write and root-owned cache round trip
+    if: inputs.run_probe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      # cibuildwheel runs on the runner and drives the container itself, so
+      # this is deliberately not a `container:` job — which is also what moves
+      # actions/cache back onto the host.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Make the host directories the container will write into
+        run: |
+          sudo mkdir -p /hostprobe /hostprobe-strict
+          sudo chown "$(id -u):$(id -g)" /hostprobe /hostprobe-strict
+
+      - name: Restore the friendly probe cache
+        id: friendly-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /hostprobe
+          key: spike-probe-friendly-${{ inputs.cache_generation }}
+
+      - name: Restore the strict probe cache
+        id: strict-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /hostprobe-strict
+          key: spike-probe-strict-${{ inputs.cache_generation }}
+
+      - name: What the runner sees before the container runs
+        run: |
+          echo "friendly cache-hit: ${{ steps.friendly-cache.outputs.cache-hit }}"
+          echo "strict cache-hit: ${{ steps.strict-cache.outputs.cache-hit }}"
+          find /hostprobe /hostprobe-strict -printf '%M %u:%g %10s %p\n' 2>&1 | head -40
+          id
+
+      - name: Install cibuildwheel
+        run: python -m pip install --upgrade pip "cibuildwheel==${CIBW_VERSION}"
+
+      - name: Run cibuildwheel (before-all writes into /host)
+        run: |
+          python -m cibuildwheel \
+            --platform linux \
+            --config-file spike/cibw-probe.toml \
+            --output-dir probe-wheelhouse
+
+      - name: What the runner sees after the container ran
+        run: |
+          echo "=== ownership and modes as the runner user sees them ==="
+          find /hostprobe /hostprobe-strict -printf '%M %u:%g %10s %p\n' 2>&1
+          echo "=== can the runner user read what root wrote? ==="
+          md5sum /hostprobe/payload.bin || echo "FAILED to read the friendly payload"
+          cat /hostprobe/marker.txt || echo "FAILED to read the friendly marker"
+          cat /hostprobe-strict/secret.txt || echo "FAILED to read the strict secret (expected)"
+          echo "=== tar dry run, which is what actions/cache does ==="
+          tar -cf /dev/null -C / hostprobe && echo "friendly tar OK" || echo "friendly tar FAILED"
+          tar -cf /dev/null -C / hostprobe-strict && echo "strict tar OK" || echo "strict tar FAILED"
+
+      - name: Save the friendly probe cache
+        if: always() && steps.friendly-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /hostprobe
+          key: spike-probe-friendly-${{ inputs.cache_generation }}
+
+      - name: Save the strict probe cache
+        if: always() && steps.strict-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v5
+        with:
+          path: /hostprobe-strict
+          key: spike-probe-strict-${{ inputs.cache_generation }}
+
+  full:
+    name: full superbuild through cibuildwheel
+    if: inputs.run_full
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Resolve Palace version
+        run: |
+          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
+          echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
+
+      - name: Make the host build directory
+        run: |
+          sudo mkdir -p /build
+          sudo chown "$(id -u):$(id -g)" /build
+          df -h /
+
+      # Deliberately a spike-only key. The repository is at its 10 GB cache cap
+      # (ticket 09), so this entry competes with the production superbuild
+      # cache and is deleted once the ticket has its answer.
+      - name: Restore build cache
+        id: build-cache
+        uses: actions/cache/restore@v5
+        with:
+          path: /build
+          key: spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation }}-${{ github.sha }}
+          restore-keys: |
+            spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation }}-
+
+      - name: What the runner sees before the container runs
+        run: |
+          echo "cache-hit: ${{ steps.build-cache.outputs.cache-hit }}"
+          echo "matched key: ${{ steps.build-cache.outputs.cache-matched-key }}"
+          find /build -maxdepth 1 -printf '%M %u:%g %10s %p\n' 2>&1 | head -30
+          du -sh /build 2>/dev/null || true
+
+      - name: Install cibuildwheel
+        run: python -m pip install --upgrade pip "cibuildwheel==${CIBW_VERSION}"
+
+      - name: Build the wheel through cibuildwheel
+        run: |
+          started=$(date +%s)
+          python -m cibuildwheel \
+            --platform linux \
+            --config-file spike/cibw-full.toml \
+            --output-dir wheelhouse
+          echo "cibuildwheel took $(( ($(date +%s) - started) / 60 )) minutes" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: What the runner sees after the container ran
+        if: always()
+        run: |
+          echo "=== /build top level ==="
+          find /build -maxdepth 1 -printf '%M %u:%g %10s %TY-%Tm-%TdT%TH:%TM %p\n' 2>&1
+          du -sh /build 2>/dev/null || true
+          echo "=== entries the runner user cannot read ==="
+          find /build \( -type f ! -perm -o+r \) -o \( -type d ! -perm -o+rx \) 2>&1 | head -40
+          echo "=== the example the tests need, reached from the host ==="
+          ls -la "/build/palace-${PALACE_VERSION}/examples/spheres/spheres.json" || true
+          df -h /
+
+      - name: Save build cache
+        if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: /build
+          key: ${{ steps.build-cache.outputs.cache-primary-key }}
+
+      - name: Smoke test in a clean virtual environment
+        run: |
+          scripts/smoke-test.sh \
+            "$(ls wheelhouse/*.whl)" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      - name: Launcher interoperability
+        run: |
+          scripts/interop-test.sh \
+            "$(ls wheelhouse/*.whl)" \
+            "/build/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+
+      - name: Report the wheel
+        if: always()
+        run: |
+          ls -la wheelhouse/ || true
+          python3 -c "
+          import pathlib, sys
+          sys.path.insert(0, '.')
+          from wheelbuild.assemble import size_report
+          wheel = next(pathlib.Path('wheelhouse').glob('*.whl'))
+          print(size_report(wheel).text)
+          " | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: spike-cibw-wheel
+          path: wheelhouse/*.whl
+          if-no-files-found: ignore

@@ -1,0 +1,20 @@
+# Cheap probe: does a container write into /host land on the runner, and can
+# actions/cache save and restore a root-owned tree? No superbuild, minutes not
+# hours. See SPIKE.md.
+[tool.cibuildwheel]
+build = "cp313-manylinux_x86_64"
+build-verbosity = 1
+environment-pass = ["GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT"]
+
+# setuptools emits py3-none-any for this project, and cibuildwheel rejects a
+# none-any wheel *before* the repair step ever runs, so the plat-name has to
+# come from the build frontend.
+build-frontend = { name = "build", args = [
+  "--config-setting=--build-option=--plat-name=manylinux_2_28_x86_64",
+] }
+
+before-all = "bash {project}/scripts/spike-cibw-probe.sh"
+
+# The probe is not about the wheel, so the repair step only has to produce
+# exactly one .whl in dest_dir.
+repair-wheel-command = "cp {wheel} {dest_dir}"
