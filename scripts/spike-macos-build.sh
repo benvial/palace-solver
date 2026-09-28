@@ -75,8 +75,11 @@ env)
     cc="$(command -v "gcc$suffix" || true)"
     cxx="$(command -v "g++$suffix" || true)"
     [[ -n "$cc" && -n "$cxx" ]] || { echo "no gcc$suffix / g++$suffix to match $gfortran" >&2; exit 1; }
-    # Homebrew GCC needs the SDK spelled out; Apple clang finds it itself.
-    echo "SDKROOT=$(xcrun --show-sdk-path)"
+    # No SDKROOT. Exporting it broke LIBXSMM in run 36410112206: its build
+    # asked Apple's `as` shim for an assembler under a path that exists in
+    # neither the exported value nor the filesystem
+    # (".../MacOSX.sdk/usr/SDKSettings.plist"), and the superbuild died at 58%.
+    # Homebrew GCC carries its own sysroot, so the variable was never needed.
     superbuild_extra=""
   else
     cc="$(command -v clang)"
