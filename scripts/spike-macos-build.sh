@@ -44,7 +44,6 @@ openblas_version="$(python3 -c 'from wheelbuild.openblas import OPENBLAS_VERSION
 mpich_source="$build_root/mpich-$mpich_version"
 openblas_source="$build_root/OpenBLAS-$openblas_version"
 palace_source="$build_root/palace-$palace_version"
-spheres="$palace_source/examples/spheres/spheres.json"
 
 fetch() { # fetch URL DEST_TARBALL EXTRACT_DIR
   local url="$1" tarball="$2" extracted="$3"
@@ -237,11 +236,22 @@ verify)
   otool -L "$palace_binary"
   echo "== palace --version"
   timeout 120 "$palace_binary" --version
-  echo "== 1 rank, dry run"
-  timeout 600 "$palace_binary" --dry-run "$spheres"
-  echo "== 2 ranks, real solve"
+  # From the example's own directory: spheres.json names its mesh relatively
+  # ("mesh/spheres.msh"), so running it from anywhere else aborts in MFEM.
   cd "$palace_source/examples/spheres"
-  timeout 1800 "$install_prefix/bin/mpiexec" -n 2 "$palace_binary" "$spheres" | tail -40
+  echo "== 1 rank, dry run"
+  timeout 600 "$palace_binary" --dry-run spheres.json
+  echo "== 2 ranks, real solve"
+  # Not piped into tail: that would hide the exit status behind a successful
+  # tail, and whether the solve succeeded is the whole point.
+  solve_status=0
+  timeout 1800 "$install_prefix/bin/mpiexec" -n 2 "$palace_binary" spheres.json \
+    > "$build_root/spheres-2rank.log" 2>&1 || solve_status=$?
+  tail -40 "$build_root/spheres-2rank.log"
+  if [[ $solve_status -ne 0 ]]; then
+    echo "2-rank solve failed with status $solve_status" >&2
+    exit "$solve_status"
+  fi
   echo "== installed tree size"
   du -sh "$install_prefix"
   du -sh "$build_root"
