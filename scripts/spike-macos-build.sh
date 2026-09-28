@@ -205,14 +205,28 @@ superbuild)
   # OPENBLAS_DIR is what Palace's ExternalBLASLAPACK.cmake keys off to pick the
   # OpenBLAS vendor instead of Accelerate.
   export OPENBLAS_DIR="$install_prefix"
-  # shellcheck disable=SC2086
+  # Palace links some STRUMPACK companions by bare package name rather than by
+  # imported target — palace/CMakeLists.txt has
+  # `foreach(pkg zfp slate lapackpp blaspp ptscotch) ... target_link_libraries(
+  # ... ${pkg})` — so CMake emits a plain `-lzfp` and the linker has to find it
+  # through a search path. On Linux it does; on macOS run 36414180264 died at
+  # 97% of libpalace.dylib with `ld: library 'zfp' not found`, even though
+  # libzfp.dylib was installed in this very prefix and STRUMPACK linked it by
+  # full path. Naming the prefix's lib directory explicitly is the smallest
+  # thing that fixes it, and the superbuild forwards these flags to every
+  # sub-project, which is where they would be wanted anyway.
+  extra_args=(
+    --extra-arg="-DCMAKE_EXE_LINKER_FLAGS=-L$install_prefix/lib"
+    --extra-arg="-DCMAKE_SHARED_LINKER_FLAGS=-L$install_prefix/lib"
+  )
+  [[ -n "${SUPERBUILD_EXTRA:-}" ]] && extra_args+=(--extra-arg="$SUPERBUILD_EXTRA")
   python3 "$repo_root/scripts/spike_darwin.py" superbuild \
     --source-dir "$palace_source" \
     --build-dir "$superbuild_dir" \
     --install-prefix "$install_prefix" \
     --prefix "$install_prefix" \
     --jobs "$superbuild_jobs" \
-    ${SUPERBUILD_EXTRA:+--extra-arg="$SUPERBUILD_EXTRA"}
+    "${extra_args[@]}"
   ;;
 
 verify)

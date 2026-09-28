@@ -139,6 +139,12 @@ jobs:
           cp "$BUILD_ROOT/superbuild/CMakeFiles/CMakeOutput.log" "$out/"
           # The superbuild's per-sub-project stamp logs are where a failure in
           # hypre, MFEM, STRUMPACK or MUMPS actually says what went wrong.
+          # link.txt is the only place the actual link command is written down
+          # without turning VERBOSE on for the whole build.
+          find "$BUILD_ROOT/superbuild" -name 'link.txt' \
+            | while read -r link; do
+                cp "$link" "$out/link_$(echo "${link#"$BUILD_ROOT"/superbuild/}" | tr / _)"
+              done
           find "$BUILD_ROOT/superbuild" -name '*-err.log' -o -name '*-out.log' \
             | while read -r log; do
                 cp "$log" "$out/$(echo "${log#"$BUILD_ROOT"/superbuild/}" | tr / _)"
