@@ -2,6 +2,10 @@ name: spike-cibw-cache
 
 # Throwaway spike for wayfinder ticket 06. Never merged to main. See SPIKE.md.
 on:
+  # Dispatching a workflow that does not exist on the default branch is a 404,
+  # so the branch push is the trigger and an empty commit starts a run.
+  push:
+    branches: [research/cibw-cache-spike]
   workflow_dispatch:
     inputs:
       run_probe:
@@ -23,7 +27,7 @@ env:
 jobs:
   probe:
     name: /host write and root-owned cache round trip
-    if: inputs.run_probe
+    if: github.event_name != 'workflow_dispatch' || inputs.run_probe
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -45,14 +49,14 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: /hostprobe
-          key: spike-probe-friendly-${{ inputs.cache_generation }}
+          key: spike-probe-friendly-${{ inputs.cache_generation || 'v1' }}
 
       - name: Restore the strict probe cache
         id: strict-cache
         uses: actions/cache/restore@v5
         with:
           path: /hostprobe-strict
-          key: spike-probe-strict-${{ inputs.cache_generation }}
+          key: spike-probe-strict-${{ inputs.cache_generation || 'v1' }}
 
       - name: What the runner sees before the container runs
         run: |
@@ -88,7 +92,7 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: /hostprobe
-          key: spike-probe-friendly-${{ inputs.cache_generation }}
+          key: spike-probe-friendly-${{ inputs.cache_generation || 'v1' }}
 
       - name: Save the strict probe cache
         if: always() && steps.strict-cache.outputs.cache-hit != 'true'
@@ -96,11 +100,11 @@ jobs:
         uses: actions/cache/save@v5
         with:
           path: /hostprobe-strict
-          key: spike-probe-strict-${{ inputs.cache_generation }}
+          key: spike-probe-strict-${{ inputs.cache_generation || 'v1' }}
 
   full:
     name: full superbuild through cibuildwheel
-    if: inputs.run_full
+    if: github.event_name != 'workflow_dispatch' || inputs.run_full
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -128,9 +132,11 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: /build
-          key: spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation }}-${{ github.sha }}
+          # No commit sha in the key: the second run must hit it exactly,
+          # which is the restore this spike is measuring.
+          key: spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation || 'v1' }}
           restore-keys: |
-            spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation }}-
+            spike-cibw-superbuild-${{ env.PALACE_VERSION }}-${{ inputs.cache_generation || 'v1' }}-
 
       - name: What the runner sees before the container runs
         run: |
