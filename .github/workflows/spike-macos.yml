@@ -1,0 +1,161 @@
+name: spike macos arm64
+
+# THROWAWAY workflow for wayfinder ticket 04. Lives only on
+# research/macos-spike and is never merged.
+#
+# Question: can the Palace superbuild, the vendored MPICH and the vendored
+# OpenBLAS be built on a *free* macOS arm64 runner, and how far from the
+# manylinux recipe does it have to move?
+#
+# Deliberately no actions/cache: the repository is already at 10.35 GB against
+# GitHub's hard 10 GB cap (wayfinder ticket 09), so a spike that saved a build
+# tree would evict the x86_64 /build caches and make real pull requests pay a
+# cold 30-60 minute build. Every run here is cold, which is also the number
+# ticket 04 asks for.
+
+on:
+  push:
+    branches: [research/macos-spike]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spike:
+    name: build on macos-14 (${{ matrix.toolchain }})
+    # Free Apple Silicon runner: 3-core M1, 7 GB. Upstream Palace's macOS
+    # timings come from the billed macos-15-xlarge, which this project cannot
+    # assume, and this build is larger than upstream's because it also builds
+    # MPICH and OpenBLAS from source.
+    runs-on: macos-14
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        # The one variable. Upstream's green macOS CI and its all-GCC Spack
+        # environment disagree about which of these Palace wants, and this
+        # project cannot copy either wholesale because it vendors MPICH.
+        toolchain: [gcc, clang]
+    env:
+      TOOLCHAIN: ${{ matrix.toolchain }}
+      # 3 cores, 7 GB. MFEM and STRUMPACK template instantiation is the part
+      # most likely to exhaust memory, so the superbuild gets fewer jobs.
+      JOBS: "3"
+      SUPERBUILD_JOBS: "2"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install spike toolchain
+        run: |
+          brew install --quiet ccache libomp
+          # The images ship gfortran-13/14/15 only: the unversioned symlink is
+          # deleted by the image build and a test asserts its absence.
+          if ! ls /opt/homebrew/bin/gfortran-1* >/dev/null 2>&1; then
+            brew install --quiet gcc
+          fi
+          # Upstream Palace pins CMake to 3.31.8 on macOS because of a FindMPI
+          # bug with GNU compilers (Palace issue #470). This project pins
+          # nothing and requires 3.24+, so the pin is a spike deviation to
+          # record, not a recommendation.
+          python3 -m pip install --break-system-packages --quiet "cmake==3.31.8"
+          echo "$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" >> "$GITHUB_PATH"
+
+      - name: Resolve build environment
+        run: scripts/spike-macos-build.sh env >> "$GITHUB_ENV"
+
+      - name: MPICH (production recipe, default device)
+        id: mpich
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh mpich
+
+      - name: MPI 2-rank check
+        id: mpi_check
+        if: steps.mpich.outcome == 'success'
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh mpi-check
+
+      - name: MPICH rebuild with ch3:nemesis
+        id: mpich_ch3
+        if: steps.mpich.outcome == 'failure' || steps.mpi_check.outcome == 'failure'
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh mpich-ch3
+
+      - name: MPI 2-rank check (ch3:nemesis)
+        id: mpi_check_ch3
+        if: steps.mpich_ch3.outcome == 'success'
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh mpi-check
+
+      - name: OpenBLAS (production recipe, DYNAMIC_ARCH)
+        id: openblas
+        if: always()
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh openblas
+
+      - name: Palace sources and prefix layout
+        id: source
+        if: always()
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh source
+
+      - name: Superbuild (shared libraries plus OpenMP)
+        id: superbuild
+        if: |
+          always()
+          && (steps.mpi_check.outcome == 'success' || steps.mpi_check_ch3.outcome == 'success')
+          && steps.openblas.outcome == 'success'
+          && steps.source.outcome == 'success'
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh superbuild
+
+      - name: Verify the binary
+        id: verify
+        if: always() && steps.superbuild.outcome == 'success'
+        continue-on-error: true
+        run: scripts/spike-macos-build.sh verify
+
+      - name: Collect logs
+        if: always()
+        run: |
+          set +e
+          out="$RUNNER_TEMP/spike-logs"
+          mkdir -p "$out"
+          cp "$BUILD_ROOT/mpich-build/config.log" "$out/mpich-config.log"
+          cp "$BUILD_ROOT/mpich-build-ch3/config.log" "$out/mpich-ch3-config.log"
+          cp "$BUILD_ROOT/superbuild/CMakeFiles/CMakeError.log" "$out/"
+          cp "$BUILD_ROOT/superbuild/CMakeFiles/CMakeOutput.log" "$out/"
+          # The superbuild's per-sub-project stamp logs are where a failure in
+          # hypre, MFEM, STRUMPACK or MUMPS actually says what went wrong.
+          find "$BUILD_ROOT/superbuild" -name '*-err.log' -o -name '*-out.log' \
+            | while read -r log; do
+                cp "$log" "$out/$(echo "${log#"$BUILD_ROOT"/superbuild/}" | tr / _)"
+              done
+          ls -la "$out"
+          exit 0
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: spike-logs-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/spike-logs
+          if-no-files-found: warn
+
+      - name: Verdict
+        if: always()
+        run: |
+          {
+            echo "## macOS arm64 spike — ${{ matrix.toolchain }}"
+            echo
+            echo "| stage | outcome |"
+            echo "| --- | --- |"
+            echo "| MPICH (default device, ch4:ofi) | ${{ steps.mpich.outcome }} |"
+            echo "| MPI 2-rank check | ${{ steps.mpi_check.outcome }} |"
+            echo "| MPICH ch3:nemesis rebuild | ${{ steps.mpich_ch3.outcome }} |"
+            echo "| MPI 2-rank check (ch3:nemesis) | ${{ steps.mpi_check_ch3.outcome }} |"
+            echo "| OpenBLAS | ${{ steps.openblas.outcome }} |"
+            echo "| Palace sources | ${{ steps.source.outcome }} |"
+            echo "| Superbuild (shared + OpenMP) | ${{ steps.superbuild.outcome }} |"
+            echo "| palace --version and 2-rank solve | ${{ steps.verify.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
