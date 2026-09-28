@@ -58,8 +58,11 @@ jobs:
           # Upstream Palace pins CMake to 3.31.8 on macOS because of a FindMPI
           # bug with GNU compilers (Palace issue #470). This project pins
           # nothing and requires 3.24+, so the pin is a spike deviation to
-          # record, not a recommendation.
-          python3 -m pip install --break-system-packages --quiet "cmake==3.31.8"
+          # record, not a recommendation. PyPI has no 3.31.8, so this takes the
+          # last patch of the same series; staying inside 3.31 also keeps CMake
+          # 4 away, which rejects the cmake_minimum_required floors several
+          # superbuild sub-projects still declare.
+          python3 -m pip install --break-system-packages --quiet "cmake==3.31.10"
           echo "$(python3 -c 'import sysconfig; print(sysconfig.get_path("scripts"))')" >> "$GITHUB_PATH"
 
       - name: Resolve build environment
