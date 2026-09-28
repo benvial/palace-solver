@@ -33,10 +33,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The one variable. Upstream's green macOS CI and its all-GCC Spack
-        # environment disagree about which of these Palace wants, and this
-        # project cannot copy either wholesale because it vendors MPICH.
-        toolchain: [gcc, clang]
+        # Was [gcc, clang]. Run 36407476833 settled the clang row: Apple clang
+        # 15 rejects the bare `-fopenmp` that OpenBLAS passes unconditionally
+        # under USE_OPENMP=1 ("clang: error: unsupported option '-fopenmp'"),
+        # and USE_OPENMP is not negotiable because it matches Palace's own
+        # OpenMP. OpenBLAS is a hard prerequisite, so that row cannot reach the
+        # superbuild however long it runs. Homebrew GCC 15 built both MPICH and
+        # OpenBLAS in that same run, so the remaining question belongs to one
+        # job with the whole time budget.
+        toolchain: [gcc]
     env:
       TOOLCHAIN: ${{ matrix.toolchain }}
       # 3 cores, 7 GB. MFEM and STRUMPACK template instantiation is the part
@@ -49,7 +54,7 @@ jobs:
 
       - name: Install spike toolchain
         run: |
-          brew install --quiet ccache libomp
+          brew install --quiet ccache libomp coreutils
           # The images ship gfortran-13/14/15 only: the unversioned symlink is
           # deleted by the image build and a test asserts its absence.
           if ! ls /opt/homebrew/bin/gfortran-1* >/dev/null 2>&1; then
@@ -105,9 +110,12 @@ jobs:
 
       - name: Superbuild (shared libraries plus OpenMP)
         id: superbuild
+        # Gated on an MPI *install* existing, not on the runtime check passing:
+        # compiling Palace needs the headers, libraries and mpicc, and whether
+        # two ranks actually talk is a separate question the verify stage asks.
         if: |
           always()
-          && (steps.mpi_check.outcome == 'success' || steps.mpi_check_ch3.outcome == 'success')
+          && (steps.mpich.outcome == 'success' || steps.mpich_ch3.outcome == 'success')
           && steps.openblas.outcome == 'success'
           && steps.source.outcome == 'success'
         continue-on-error: true

@@ -123,7 +123,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     mpich_parser.add_argument("--build-dir", type=Path, required=True)
     mpich_parser.add_argument("--prefix", type=Path, required=True)
     mpich_parser.add_argument("--jobs", type=int, default=jobs_default)
-    mpich_parser.add_argument("extra", nargs="*", default=[])
+    # Repeatable, and spelled with "=", because a bare positional starting
+    # with "--" is an unrecognised option to argparse.
+    mpich_parser.add_argument("--extra-arg", action="append", default=[])
 
     openblas_parser = sub.add_parser("openblas")
     openblas_parser.add_argument("--source-dir", type=Path, required=True)
@@ -136,7 +138,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     superbuild_parser.add_argument("--install-prefix", type=Path, required=True)
     superbuild_parser.add_argument("--prefix", type=Path, required=True)
     superbuild_parser.add_argument("--jobs", type=int, default=jobs_default)
-    superbuild_parser.add_argument("extra", nargs="*", default=[])
+    superbuild_parser.add_argument("--extra-arg", action="append", default=[])
 
     binary_parser = sub.add_parser("palace-binary")
     binary_parser.add_argument("--install-prefix", type=Path, required=True)
@@ -150,7 +152,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             build_dir=args.build_dir,
             prefix=args.prefix,
             jobs=args.jobs,
-            extra=args.extra,
+            extra=args.extra_arg,
         )
         print(f"MPICH installed into {prefix}")
     elif args.command == "openblas":
@@ -165,7 +167,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             install_prefix=args.install_prefix,
             prefix=args.prefix,
             jobs=args.jobs,
-            extra=args.extra,
+            extra=args.extra_arg,
         )
     elif args.command == "palace-binary":
         print(find_palace_binary(args.install_prefix))

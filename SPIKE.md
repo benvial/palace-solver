@@ -7,9 +7,8 @@ from the manylinux recipe does the build have to move?
 
 Three files, all of them spike-only:
 
-- `.github/workflows/spike-macos.yml` — one job per toolchain (all-Homebrew-GCC
-  and Apple-clang-plus-gfortran), staged so each stage reports its own status
-  and wall-clock time. No `actions/cache`, on purpose: the repository is
+- `.github/workflows/spike-macos.yml` — a staged job, each stage reporting its
+  own status and wall-clock time. No `actions/cache`, on purpose: the repository is
   already over GitHub's 10 GB cache cap, and a spike must not evict the
   x86_64 `/build` caches that real pull requests depend on.
 - `scripts/spike-macos-build.sh` — the stage driver. It does not touch
@@ -35,3 +34,26 @@ Two risks the spike is built to attribute rather than merely trip over:
 `MACOSX_DEPLOYMENT_TARGET` is left unset throughout: OpenBLAS's automatic
 `NO_SVE=1` on Darwin arm64 sits inside an `ifndef` guard on that variable, so
 setting it re-enables SVE kernels for hardware that has none.
+
+## What the first run settled
+
+Run 36407476833 carried both candidate toolchains, and killed one of them.
+Apple clang 15 cannot build the vendored OpenBLAS: `USE_OPENMP=1` makes the
+Makefile pass a bare `-fopenmp`, which Apple clang rejects outright
+(`clang: error: unsupported option '-fopenmp'`), and `USE_OPENMP` exists
+precisely to match Palace's own OpenMP, so it cannot be dropped. Since OpenBLAS
+is a hard prerequisite for configuring Palace, that row can never reach the
+superbuild, and the matrix is down to Homebrew GCC.
+
+On the GCC row the same run built MPICH 4.3.2 with the production recipe in
+about 16.5 minutes and OpenBLAS `DYNAMIC_ARCH=1 USE_OPENMP=1` in about 7.5
+minutes, with OpenBLAS applying `NO_SVE` by itself — confirming that leaving
+`MACOSX_DEPLOYMENT_TARGET` unset does what it is supposed to.
+
+The run reached neither the superbuild nor the MPI runtime check, because of two
+bugs in the spike itself rather than anything about Palace: macOS ships no GNU
+`timeout` (it is `gtimeout`, from `coreutils`), and `argparse` rejected
+`--with-device=ch3:nemesis` passed as a bare positional. Both are fixed, and the
+superbuild is no longer gated on the runtime MPI check passing — compiling
+Palace needs the MPI *install*, and whether two ranks talk is a separate
+question the verify stage asks.

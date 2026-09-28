@@ -28,6 +28,11 @@ toolchain="${TOOLCHAIN:-gcc}"
 jobs="${JOBS:-$(sysctl -n hw.ncpu)}"
 superbuild_jobs="${SUPERBUILD_JOBS:-$jobs}"
 
+# macOS ships no GNU timeout; coreutils installs it as gtimeout.
+if ! command -v timeout >/dev/null 2>&1 && command -v gtimeout >/dev/null 2>&1; then
+  timeout() { gtimeout "$@"; }
+fi
+
 install_prefix="$build_root/install"
 superbuild_dir="$build_root/superbuild"
 export PYTHONPATH="$repo_root"
@@ -136,7 +141,7 @@ mpich-ch3)
     --build-dir "$build_root/mpich-build-ch3" \
     --prefix "$install_prefix" \
     --jobs "$jobs" \
-    --with-device=ch3:nemesis
+    --extra-arg=--with-device=ch3:nemesis
   ;;
 
 mpi-check)
@@ -204,7 +209,7 @@ superbuild)
     --install-prefix "$install_prefix" \
     --prefix "$install_prefix" \
     --jobs "$superbuild_jobs" \
-    ${SUPERBUILD_EXTRA:-}
+    ${SUPERBUILD_EXTRA:+--extra-arg="$SUPERBUILD_EXTRA"}
   ;;
 
 verify)
