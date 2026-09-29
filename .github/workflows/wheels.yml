@@ -123,15 +123,20 @@ jobs:
       # in a different image is a different tree. It was not keyed before this
       # job shape existed only because the image was named by a `container:` key
       # the hash could not reach either — which was the same gap, unclosed.
-      # wheelbuild/platforms.py is keyed for the same reason: it owns the library
-      # filenames mpich.py and openblas.py validate an install against, and both
-      # of those are in the key already.
+      #
+      # The test for membership here is whether editing the file changes the
+      # bytes in the tree, not whether the build imports it. wheelbuild/platforms.py
+      # is deliberately absent on that test: it decides which filenames the MPICH
+      # and OpenBLAS validators look for, and nothing about how either is
+      # compiled. Keying it would orphan every entry each time a new platform is
+      # taught to it, buying a rebuild for a file that cannot change what was
+      # built.
       - name: Restore build cache
         id: build-cache
         uses: actions/cache/restore@v5
         with:
           path: /build
-          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/platforms.py', 'wheelbuild/prefix.py') }}
+          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
           restore-keys: |
             superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
             superbuild-${{ env.PLATFORM_TAG }}-
@@ -258,7 +263,7 @@ jobs:
       - name: Delete superbuild caches that no longer match main
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/platforms.py', 'wheelbuild/prefix.py') }}
+          INPUT_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
         run: |
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
           # This runner derives its own tag, which is the x86_64 one. That is
