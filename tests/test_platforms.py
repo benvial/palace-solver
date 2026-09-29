@@ -157,3 +157,17 @@ def test_platform_tag_on_macos_rejects_a_major_only_deployment_target():
     """A bare "15" would tag the wheel macosx_15_None_arm64 or similar."""
     with pytest.raises(platforms.UnsupportedPlatformError, match="MACOSX"):
         platforms.platform_tag(system="Darwin", machine="arm64", macos_version="15")
+
+
+def test_the_pinned_macos_floor_is_the_tag_the_matrix_row_claims():
+    """Ticket 06: on `macos-15` every Homebrew runtime the wheel vendors is
+    `minos` exactly 15.0.0, so 15.0 is both the floor the build compiles to and
+    the tag delocate will compute from the payload.
+    """
+    tag = platforms.platform_tag(
+        system="Darwin",
+        machine="arm64",
+        macos_version=platforms.MACOS_DEPLOYMENT_TARGET,
+    )
+
+    assert tag == "macosx_15_0_arm64"

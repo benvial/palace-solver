@@ -95,3 +95,30 @@ def test_mpi_home_rejects_an_mpi_without_fortran_bindings(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="libmpifort"):
         superbuild.mpi_home(tmp_path)
+
+
+def test_cmake_arguments_put_the_install_prefix_on_the_darwin_link_line():
+    """Palace links some STRUMPACK companions by bare package name.
+
+    `palace/CMakeLists.txt` emits a plain `-lzfp`, and on Darwin the linker has
+    no default search path that reaches the shared install prefix, so the build
+    dies at 97% of libpalace.dylib with `ld: library 'zfp' not found` even
+    though libzfp.dylib is installed in that very prefix. The Linux link line
+    is deliberately untouched: it has shipped every wheel so far.
+    """
+    darwin = superbuild.cmake_arguments(
+        source_dir=Path("/src/palace"),
+        install_prefix=Path("/opt/palace"),
+        mpi_home=Path("/opt/palace"),
+        system="Darwin",
+    )
+    linux = superbuild.cmake_arguments(
+        source_dir=Path("/src/palace"),
+        install_prefix=Path("/opt/palace"),
+        mpi_home=Path("/opt/palace"),
+        system="Linux",
+    )
+
+    assert "-DCMAKE_EXE_LINKER_FLAGS=-L/opt/palace/lib" in darwin
+    assert "-DCMAKE_SHARED_LINKER_FLAGS=-L/opt/palace/lib" in darwin
+    assert not [flag for flag in linux if "LINKER_FLAGS" in flag]

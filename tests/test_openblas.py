@@ -8,16 +8,21 @@ from wheelbuild import openblas
 BUILD_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build-wheel.sh"
 
 
-def install_tree(tmp_path, *, system="Linux", corename=None):
+def install_tree(tmp_path, *, system="Linux", machine=None, corename=None, stamp=True):
     """Write the files an OpenBLAS install of one platform would carry.
 
     Args:
         tmp_path: Directory to treat as the install prefix.
         system: The platform whose library naming the tree uses.
+        machine: The machine whose build arguments the tree records; defaults
+            to the usual one for ``system``.
         corename: The core the install claims to be built for, recorded the way
             ``make install`` records it. Omitted for a tree that carries no
             ``openblas_config.h`` at all.
+        stamp: Record today's build arguments. False leaves them out, which is
+            what an install built before the stamp existed looks like.
     """
+    machine = machine or ("arm64" if system == "Darwin" else "x86_64")
     for relative in openblas.required_artefacts(system=system):
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -28,6 +33,10 @@ def install_tree(tmp_path, *, system="Linux", corename=None):
         header.write_text(
             "#define OPENBLAS_NUM_CORES 8\n"
             f'#define OPENBLAS_CHAR_CORENAME "{corename}"\n'
+        )
+    if stamp:
+        openblas.write_build_stamp(
+            tmp_path, openblas.build_arguments(jobs=4, system=system, machine=machine)
         )
     return tmp_path
 
@@ -137,14 +146,14 @@ def test_validate_rejects_an_aarch64_install_built_for_a_newer_core(tmp_path):
     A NEOVERSEN2 baseline passes every test that runs on the arm runner and
     faults on the older hardware manylinux_2_28_aarch64 admits.
     """
-    install_tree(tmp_path, corename="NEOVERSEN2")
+    install_tree(tmp_path, machine="aarch64", corename="NEOVERSEN2")
 
     with pytest.raises(openblas.CpuBaselineError, match="NEOVERSEN2"):
         openblas.validate(tmp_path, system="Linux", machine="aarch64")
 
 
 def test_validate_accepts_an_aarch64_install_at_the_baseline(tmp_path):
-    install_tree(tmp_path, corename="ARMV8")
+    install_tree(tmp_path, machine="aarch64", corename="ARMV8")
 
     assert openblas.validate(tmp_path, system="Linux", machine="aarch64") == tmp_path
 
@@ -161,14 +170,14 @@ def test_validate_ignores_the_core_on_x86_64(tmp_path):
 
 def test_validate_refuses_an_arm_install_with_no_config_header(tmp_path):
     """Unable to tell is not the same as fine — an unprovable baseline fails."""
-    install_tree(tmp_path)
+    install_tree(tmp_path, machine="aarch64")
 
     with pytest.raises(openblas.CpuBaselineError, match=r"openblas_config\.h"):
         openblas.validate(tmp_path, system="Linux", machine="aarch64")
 
 
 def test_validate_refuses_an_arm_install_whose_header_names_no_core(tmp_path):
-    install_tree(tmp_path)
+    install_tree(tmp_path, machine="aarch64")
     (tmp_path / openblas.CONFIG_HEADER).write_text("#define OPENBLAS_NUM_CORES 8\n")
 
     with pytest.raises(openblas.CpuBaselineError, match="OPENBLAS_CHAR_CORENAME"):
@@ -184,7 +193,7 @@ def test_installed_core_reads_the_name_out_of_the_installed_header(tmp_path):
 @pytest.mark.usefixtures("arm_runner")
 def test_check_exits_zero_for_an_install_at_the_baseline(tmp_path, capsys):
     """The verdict scripts/build-wheel.sh branches on."""
-    install_tree(tmp_path, corename="ARMV8")
+    install_tree(tmp_path, machine="aarch64", corename="ARMV8")
 
     code = openblas.main(["--check", "--prefix", str(tmp_path)])
 
@@ -201,7 +210,7 @@ def test_check_asks_for_a_rebuild_from_a_clean_tree_for_a_stale_install(
     Its own verdict, distinct from "nothing installed", because make does not
     notice a changed TARGET: the source tree's objects have to go too.
     """
-    install_tree(tmp_path, corename="NEOVERSEN2")
+    install_tree(tmp_path, machine="aarch64", corename="NEOVERSEN2")
 
     code = openblas.main(["--check", "--prefix", str(tmp_path)])
 
@@ -259,3 +268,206 @@ def test_the_build_script_discards_the_tree_only_for_the_stale_verdict():
     script = BUILD_SCRIPT.read_text()
 
     assert f"== {openblas.CHECK_WRONG_CPU} " in script
+
+
+def test_build_arguments_disable_sve_on_darwin_arm64():
+    """OpenBLAS's own NO_SVE lives inside `ifndef MACOSX_DEPLOYMENT_TARGET`.
+
+    The macOS build has to set a deployment target — without one, clang infers
+    it from the SDK capped at the running system and Palace's binaries exceed
+    the floor the wheel claims — and setting it at all re-enables the SVE
+    kernels on hardware that has none. The two are one change, not two:
+    Makefile.system:442 at 0.3.34.
+    """
+    arguments = openblas.build_arguments(jobs=8, system="Darwin", machine="arm64")
+
+    assert "NO_SVE=1" in arguments
+
+
+def test_build_arguments_leave_sve_alone_on_linux_aarch64():
+    """Linux aarch64 runs on hardware that has SVE, and DYNAMIC_ARCH dispatches
+    to it at run time; NO_SVE=1 would drop those kernels from the build.
+    """
+    arguments = openblas.build_arguments(jobs=8, system="Linux", machine="aarch64")
+
+    assert "NO_SVE=1" not in arguments
+
+
+OTOOL_OUTPUT = """\
+lib/libopenblas.dylib:
+\t/opt/build/install/lib/libopenblas.0.dylib (compatibility version 0.0.0)
+\t/opt/homebrew/opt/gcc/lib/gcc/15/libgomp.1.dylib (compatibility version 1.0.0)
+\t@rpath/libomp.dylib (compatibility version 5.0.0, current version 5.0.0)
+\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0)
+"""
+
+
+FAT_OTOOL_OUTPUT = """\
+lib/libopenblas.dylib (architecture arm64):
+\tlibgomp.1.dylib (compatibility version 1.0.0, current version 1.0.0)
+lib/libopenblas.dylib (architecture x86_64):
+\t@rpath/libomp.dylib (compatibility version 5.0.0, current version 5.0.0)
+"""
+
+
+def test_linked_libraries_are_the_basenames_otool_reports():
+    names = openblas.parse_linked_libraries(OTOOL_OUTPUT)
+
+    assert "libgomp.1.dylib" in names
+    assert "libomp.dylib" in names
+    assert "libopenblas.dylib:" not in names
+
+
+def test_linked_libraries_include_a_bare_install_name():
+    """A dependency recorded without a path is still a dependency.
+
+    Matching on a leading / or @ would drop exactly the entry this check
+    exists to find, and drop it silently: the library would pass.
+    """
+    names = openblas.parse_linked_libraries(
+        "lib/libopenblas.dylib:\n\tlibgomp.1.dylib (compatibility version 1.0.0)\n"
+    )
+
+    assert names == ("libgomp.1.dylib",)
+
+
+def test_linked_libraries_span_every_slice_of_a_universal_binary():
+    """Each slice gets its own unindented header, and both slices ship."""
+    names = openblas.parse_linked_libraries(FAT_OTOOL_OUTPUT)
+
+    assert names == ("libgomp.1.dylib", "libomp.dylib")
+
+
+@pytest.fixture
+def darwin_install(monkeypatch, tmp_path):
+    """An OpenBLAS install on a Mac, with otool's answer under test control."""
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    install_tree(tmp_path, system="Darwin", corename="ARMV8")
+
+    def linked(names):
+        monkeypatch.setattr(openblas, "linked_libraries", lambda _: tuple(names))
+
+    return linked
+
+
+def test_validate_rejects_a_darwin_library_linking_two_openmp_runtimes(
+    darwin_install, tmp_path
+):
+    """clang compiles the C with libomp while gfortran links the dylib and
+    re-adds -lgomp behind OpenBLAS's own substitution (Makefile.system:661
+    rewrites FEXTRALIB only). Two runtimes in one process is OpenBLAS issue
+    #5156, whose maintainer verdict is "That won't work at all" — a wrong
+    library rather than a failed build, so nothing downstream would notice.
+    """
+    darwin_install(["libgomp.1.dylib", "libomp.dylib", "libSystem.B.dylib"])
+
+    with pytest.raises(openblas.MixedOpenMPRuntimeError, match="libgomp"):
+        openblas.validate(tmp_path, system="Darwin", machine="arm64")
+
+
+def test_validate_accepts_a_darwin_library_with_one_openmp_runtime(
+    darwin_install, tmp_path
+):
+    darwin_install(["libgomp.1.dylib", "libSystem.B.dylib"])
+
+    assert openblas.validate(tmp_path, system="Darwin", machine="arm64") == tmp_path
+
+
+def test_check_reports_a_mixed_openmp_install_as_its_own_verdict(
+    darwin_install, tmp_path, capsys
+):
+    """Distinct from both build verdicts: no rebuild of any kind fixes it, so
+    the macOS driver stops rather than recompiling the same wrong library.
+    """
+    darwin_install(["libgomp.1.dylib", "libomp.dylib"])
+
+    code = openblas.main(["--check", "--prefix", str(tmp_path)])
+
+    assert code == openblas.CHECK_MIXED_OPENMP
+    assert "libomp" in capsys.readouterr().out
+
+
+def test_check_reports_an_uninspectable_install_as_its_own_verdict(
+    monkeypatch, tmp_path, capsys
+):
+    """`otool` missing is a fact about this machine, not about the install.
+
+    Reported as CHECK_NO_INSTALL — which is what an uncaught exception's exit
+    code would be — it buys a full rebuild of a library that is already there,
+    and then fails on the same missing tool anyway.
+    """
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    install_tree(tmp_path, system="Darwin", corename="ARMV8")
+
+    def no_otool(_):
+        raise openblas.InstallInspectionError("otool is not installed")
+
+    monkeypatch.setattr(openblas, "linked_libraries", no_otool)
+
+    code = openblas.main(["--check", "--prefix", str(tmp_path)])
+
+    assert code == openblas.CHECK_CANNOT_INSPECT
+    assert "otool" in capsys.readouterr().out
+
+
+def test_validate_rejects_an_install_that_records_no_build_arguments(tmp_path):
+    """The general case of the bug the CPU baseline check closed for one flag.
+
+    A restored tree can predate any build argument, and the core name in
+    openblas_config.h is evidence about one of them. An install that cannot say
+    what built it is not an install this build can vouch for.
+    """
+    install_tree(tmp_path, corename="SKYLAKEX", stamp=False)
+
+    with pytest.raises(openblas.BuildRecipeError, match="does not record"):
+        openblas.validate(tmp_path, system="Linux", machine="x86_64")
+
+
+def test_validate_rejects_a_darwin_install_built_before_sve_was_disabled(tmp_path):
+    """The stale tree this ticket's own change creates.
+
+    NO_SVE=1 leaves no trace in the install — the core name is ARMV8 either
+    way — so without the stamp the fallback restore-keys hand back a tree built
+    without it and nothing asks again.
+    """
+    install_tree(tmp_path, system="Darwin", corename="ARMV8")
+    openblas.write_build_stamp(
+        tmp_path,
+        [
+            argument
+            for argument in openblas.build_arguments(
+                jobs=4, system="Darwin", machine="arm64"
+            )
+            if argument != "NO_SVE=1"
+        ],
+    )
+
+    with pytest.raises(openblas.BuildRecipeError, match="NO_SVE=1"):
+        openblas.validate(tmp_path, system="Darwin", machine="arm64")
+
+
+def test_the_stamp_ignores_how_many_jobs_the_build_used():
+    """A tree is not different for having been built on a bigger machine."""
+    four = openblas.recipe(
+        openblas.build_arguments(jobs=4, system="Linux", machine="x86_64")
+    )
+    sixteen = openblas.recipe(
+        openblas.build_arguments(jobs=16, system="Linux", machine="x86_64")
+    )
+
+    assert four == sixteen
+    assert not [argument for argument in four if argument.startswith("-j")]
+
+
+def test_a_built_install_records_what_built_it(tmp_path, monkeypatch):
+    """The stamp is written by the build, so a rebuild clears a stale verdict."""
+    install_tree(tmp_path, corename="SKYLAKEX", stamp=False)
+    monkeypatch.setattr(openblas, "check_call", lambda *_args, **_kwargs: None)
+
+    openblas.run(source_dir=tmp_path, prefix=tmp_path, jobs=2)
+
+    assert openblas.stamped_recipe(tmp_path) == openblas.recipe(
+        openblas.build_arguments(jobs=2)
+    )

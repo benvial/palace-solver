@@ -108,7 +108,7 @@ palace_solver.launcher_conflict()  # -> None, or why this launcher is refused
 
 ## Building the wheel
 
-The wheel is built inside a `manylinux_2_28` container. Locally:
+The Linux wheels are built inside a `manylinux_2_28` container. Locally:
 
 ```bash
 scripts/build-in-container.sh 0.17.0      # docker, caches in ./.build-cache
@@ -137,8 +137,23 @@ notice harvest → wheel assembly → `auditwheel repair` → retag to
 `py3-none-manylinux_2_28_<arch>`. The steps are Python modules under
 `wheelbuild/` and are unit-tested with `pytest`.
 
-CI builds `x86_64` and `aarch64` as two rows of one matrix, each on a native
-runner. macOS arm64 is a later milestone.
+On macOS there is no container, so `scripts/build-macos.sh` is both the driver
+and the recipe:
+
+```bash
+scripts/build-macos.sh 0.17.0             # caches in ~/palace-build
+scripts/verify-install.sh ~/palace-build/install 0.17.0 CONFIG
+```
+
+It drives the same `wheelbuild/` modules in the same order and differs only
+where macOS does: one preinstalled Homebrew GCC for C, C++ and Fortran, an
+explicit `MACOSX_DEPLOYMENT_TARGET`, and a CMake pinned inside 3.31.
+`scripts/verify-install.sh` checks the install prefix the way the smoke test
+checks a wheel — the version stamp, and two ranks solving one problem together.
+Assembling a macOS wheel with `delocate` is a later milestone.
+
+CI builds the three platforms as three rows of one matrix, each on a native
+runner: `ubuntu-24.04`, `ubuntu-24.04-arm` and `macos-15`.
 
 ## Releasing
 

@@ -34,6 +34,26 @@ from pathlib import Path
 #: The manylinux profile every Linux wheel claims, per ADR-0006.
 MANYLINUX_VERSION = "manylinux_2_28"
 
+#: The oldest macOS the wheel is compiled for, and the value the build exports
+#: as ``MACOSX_DEPLOYMENT_TARGET``.
+#:
+#: It is a property of the runner image rather than a free choice. Every
+#: Homebrew runtime the wheel vendors — ``libgfortran``, ``libgomp``,
+#: ``libstdc++``, ``libquadmath`` — is built by Homebrew with no deployment
+#: target of its own, so each bottle carries the ``minos`` of the machine that
+#: built it: exactly ``15.0.0`` for ``arm64_sequoia``, which is what
+#: ``macos-15`` installs. A lower floor would be a claim the payload cannot
+#: keep, and ``delocate`` refuses it rather than honouring it. Raising it above
+#: the payload only excludes users: a 15.0 floor excludes about 13.8% of Macs
+#: against 36.3% for 26.0.
+#:
+#: This is a floor and not the published tag. ``delocate`` computes the tag
+#: from the largest ``minos`` in the payload, so setting this is what stops
+#: Palace's own binaries — which clang would otherwise compile against the
+#: running system's SDK, at 15.5 or 15.7 — from quietly exceeding it.
+#: Ticket 06 of the platform-expansion effort has the measurements.
+MACOS_DEPLOYMENT_TARGET = "15.0"
+
 _ELF_MAGIC = b"\x7fELF"
 
 #: Mach-O headers, thin and universal, in both byte orders. Mach-O spells its
