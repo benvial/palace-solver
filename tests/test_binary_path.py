@@ -1,3 +1,5 @@
+import sys
+
 import pytest
 
 import palace_solver
@@ -45,8 +47,24 @@ def test_lib_dir_points_at_the_auditwheel_vendor_directory(tmp_path, monkeypatch
     vendored = tmp_path / "palace_solver.libs"
     vendored.mkdir()
     monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", package_dir)
+    monkeypatch.setattr(sys, "platform", "linux")
 
     assert palace_solver.lib_dir() == vendored
+
+
+def test_lib_dir_points_at_the_delocate_vendor_directory_on_macos(
+    tmp_path, monkeypatch
+):
+    """delocate bundles inside the package, auditwheel beside it, and callers
+    that set a library path from this get a directory that does not exist if the
+    difference is not honoured.
+    """
+    package_dir = tmp_path / "palace_solver"
+    package_dir.mkdir()
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", package_dir)
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    assert palace_solver.lib_dir() == package_dir / ".dylibs"
 
 
 def _console_script(directory, body):

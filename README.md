@@ -25,7 +25,8 @@ an explicit executable argument or `PALAIS_PALACE_EXE`.
 - `palace-real`, the Palace binary, built with the full feature set: OpenMP,
   SuperLU_DIST, STRUMPACK (with ZFP), MUMPS, SLEPc, ARPACK, LIBXSMM and GSLIB.
   No GPU support, 32-bit integers.
-- Every shared library that build needs, vendored by `auditwheel` — including
+- Every shared library that build needs, vendored by the platform's repair tool
+  (`auditwheel` on Linux, `delocate` on macOS) — including
   MPICH (with Hydra) and OpenBLAS, neither of which the manylinux image
   provides.
 - `THIRD-PARTY-NOTICES`, harvested from the superbuild's own source checkouts.
@@ -102,7 +103,9 @@ import palace_solver
 
 palace_solver.executable_path()  # -> what to launch: the guarded console script
 palace_solver.binary_path()  # -> .../site-packages/palace_solver/bin/palace-real
-palace_solver.lib_dir()  # -> .../site-packages/palace_solver/lib
+palace_solver.lib_dir()  # -> where the vendored libraries are, which differs
+                         #    by platform: palace_solver.libs beside the package
+                         #    on Linux, palace_solver/.dylibs inside it on macOS
 palace_solver.launcher_conflict()  # -> None, or why this launcher is refused
 ```
 
@@ -142,15 +145,26 @@ and the recipe:
 
 ```bash
 scripts/build-macos.sh 0.17.0             # caches in ~/palace-build
-scripts/verify-install.sh ~/palace-build/install 0.17.0 CONFIG
+scripts/smoke-test.sh wheelhouse/*.whl CONFIG
+scripts/interop-test.sh wheelhouse/*.whl CONFIG
 ```
 
-It drives the same `wheelbuild/` modules in the same order and differs only
-where macOS does: one preinstalled Homebrew GCC for C, C++ and Fortran, an
-explicit `MACOSX_DEPLOYMENT_TARGET`, and a CMake pinned inside 3.31.
-`scripts/verify-install.sh` checks the install prefix the way the smoke test
-checks a wheel — the version stamp, and two ranks solving one problem together.
-Assembling a macOS wheel with `delocate` is a later milestone.
+It drives the same `wheelbuild/` modules in the same order, writes its wheel to
+the same `wheelhouse/`, and differs only where macOS does: one preinstalled
+Homebrew GCC for C, C++ and Fortran, an explicit `MACOSX_DEPLOYMENT_TARGET`, a
+CMake pinned inside 3.31, and `delocate-wheel` in place of `auditwheel repair`.
+
+The repair tool is also where the platform tag comes from, and the two tools
+differ: `auditwheel` is given the tag, while `delocate` derives it from the
+largest `minos` in the payload and renames the wheel. So the macOS tag is a
+measurement of what was built rather than a value chosen at assembly time, and
+the pipeline ends by checking the filename against
+`wheelbuild.platforms.platform_tag()` — a wheel tagged for another macOS is a
+build failure, not a new floor.
+
+`scripts/verify-install.sh` checks an install prefix the way the smoke test
+checks a wheel — the version stamp, and two ranks solving one problem together
+— which is useful when a build has produced a prefix but not yet a wheel.
 
 CI builds the three platforms as three rows of one matrix, each on a native
 runner: `ubuntu-24.04`, `ubuntu-24.04-arm` and `macos-15`.

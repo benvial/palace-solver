@@ -4,10 +4,13 @@
 #   scripts/build-macos.sh [PALACE_VERSION]
 #
 # The macOS sibling of scripts/build-in-container.sh: there is no container
-# here, so this is both the driver and the recipe. It stops at a complete
-# install prefix — wheel assembly on macOS is delocate's and is not here yet.
+# here, so this is both the driver and the recipe. It ends where the Linux
+# driver does, at a repaired wheel in OUTPUT_DIR — with delocate in place of
+# auditwheel, which reads ELF and writes RPATHs and has nothing to say about a
+# Mach-O.
 #
 # Environment:
+#   OUTPUT_DIR   where the repaired wheel is written (default <repo>/wheelhouse)
 #   BUILD_ROOT   scratch root for sources, the superbuild and the install
 #                prefix (default ~/palace-build). Pin it and keep it: Mach-O
 #                records absolute install names, so a tree that moves is a tree
@@ -60,8 +63,12 @@ superbuild_dir="$build_root/superbuild"
 install_prefix="$build_root/install"
 venv="$build_root/venv"
 toolchain_bin="$build_root/toolchain-bin"
+# Outside the build root, and deliberately: the build root is what the cache
+# saves, and a wheel in it would be restored by the next run and picked up as
+# though this one had produced it.
+output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 
-mkdir -p "$build_root" "$CCACHE_DIR" "$toolchain_bin"
+mkdir -p "$build_root" "$CCACHE_DIR" "$toolchain_bin" "$output_dir"
 
 PYTHONPATH="$repo_root" python3 -m wheelbuild.prefix --prefix "$install_prefix"
 
@@ -128,7 +135,11 @@ echo "==> build environment (python tooling)"
 # would wedge this job on every rerun of an unchanged cache key.
 python3 -m venv --clear "$venv"
 "$venv/bin/pip" install --quiet --upgrade pip
-"$venv/bin/pip" install --quiet "cmake~=3.31.0"
+# The delocate floor is wheelbuild.assemble's rather than a literal here: it is
+# the version whose behaviour the repair step depends on, and one spelling of it
+# is one thing to get wrong.
+"$venv/bin/pip" install --quiet "cmake~=3.31.0" build wheel \
+  "$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.assemble import DELOCATE_REQUIREMENT; print(DELOCATE_REQUIREMENT)')"
 export PATH="$toolchain_bin:$venv/bin:$PATH"
 cmake --version | head -1
 
@@ -261,3 +272,27 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.superbuild \
   ${ccache_flag[@]+"${ccache_flag[@]}"}
 
 echo "==> Palace is installed in $install_prefix"
+
+echo "==> third-party notices"
+# The same harvest the Linux driver runs, over the same three source roots.
+# What it renders for the compiler runtime is still the GCC note, which is
+# correct here because this toolchain is GCC -- but the version it names comes
+# from `gcc -dumpfullversion` on PATH, which on a macOS runner is Apple clang.
+# That, and LLVM's OpenMP runtime if the toolchain choice is ever revisited, is
+# ticket 09 of the platform-expansion effort.
+PYTHONPATH="$repo_root" python3 -m wheelbuild.notices \
+  --source-root "$superbuild_dir" \
+  --source-root "$mpich_source" \
+  --source-root "$openblas_source" \
+  --output "$build_root/THIRD-PARTY-NOTICES"
+
+echo "==> wheel assembly, repair, retag"
+# Run through the venv's interpreter rather than the system python3: `python -m
+# build` resolves `python` from PATH, and delocate-wheel is only installed here.
+# DYLD_LIBRARY_PATH is deliberately left unset -- see the comment in
+# wheelbuild/assemble.py's repair_command, which is where the reason lives.
+PYTHONPATH="$repo_root" "$venv/bin/python" -m wheelbuild.assemble \
+  --project-dir "$repo_root" \
+  --install-prefix "$install_prefix" \
+  --output-dir "$output_dir" \
+  --notices "$build_root/THIRD-PARTY-NOTICES"

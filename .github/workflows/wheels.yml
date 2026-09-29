@@ -62,7 +62,7 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_x86_64
             tag: manylinux_2_28_x86_64
             build_root: /build
-            wheel: true
+            interop: true
           # Every platform builds natively, so the arm image needs an arm
           # runner: ubuntu-24.04-arm is free and unlimited on a public
           # repository and carries the same 4 vCPU / 16 GB as the x86_64 one.
@@ -85,7 +85,7 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_aarch64
             tag: manylinux_2_28_aarch64
             build_root: /build
-            wheel: true
+            interop: true
 
           # Apple Silicon. The label is pinned harder than the Linux ones: on
           # macOS the runner image decides the published filename and the set
@@ -97,13 +97,13 @@ jobs:
           # a minos this wheel can claim; see
           # .scratch/platform-expansion/issues/06-macos-runner-image-and-floor.md.
           #
-          # Two row values are absent rather than empty, and each gates a step.
-          # No `image`, because the build runs on the runner itself: macOS has
+          # One row value is absent rather than empty, and it gates three steps:
+          # no `image`, because the build runs on the runner itself. macOS has
           # no container, so the three steps that exist only to serve one are
-          # skipped. And `wheel: false`, because assembly and repair are
-          # delocate's rather than auditwheel's and are not written yet -- this
-          # row stops at an install prefix and proves it solves, which is what
-          # the wheel steps would otherwise prove.
+          # skipped and the build step is the driver rather than `docker run`.
+          # Every other step is shared, including the wheel's: this row assembles
+          # and repairs with delocate in place of auditwheel and clears the same
+          # bar as the other two.
           #
           # The build root is an absolute path under the runner's home rather
           # than /build: macOS 11 and later seal the root volume, so no new
@@ -115,7 +115,7 @@ jobs:
             runner: macos-15
             tag: macosx_15_0_arm64
             build_root: /Users/runner/palace-build
-            wheel: false
+            interop: false
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -210,7 +210,7 @@ jobs:
       # the cache directory pointed at the one the restore just filled. CI
       # running the documented command is what keeps "reproducible on a
       # developer machine" a fact rather than a claim.
-      - name: Build wheel
+      - name: Build wheel in the container
         if: matrix.image
         run: scripts/build-in-container.sh "$PALACE_VERSION"
         env:
@@ -222,8 +222,10 @@ jobs:
       # command is the only thing keeping it documented. It drives the
       # wheelbuild modules in the order scripts/build-wheel.sh drives them and
       # differs only where macOS differs -- no dnf, one Homebrew GCC for all
-      # three languages, a deployment target, and a CMake pinned inside 3.31.
-      - name: Build Palace on the runner
+      # three languages, a deployment target, a CMake pinned inside 3.31, and
+      # delocate where the Linux driver runs auditwheel. It writes its wheel to
+      # the same wheelhouse/, so every step after this one is shared.
+      - name: Build wheel on the runner
         if: ${{ !matrix.image }}
         run: scripts/build-macos.sh "$PALACE_VERSION"
         env:
@@ -282,7 +284,6 @@ jobs:
       # wheel is self-contained outside the environment that produced it. It is
       # also the shape macOS has no choice about, so that row adds no step here.
       - name: Smoke test in a clean virtual environment
-        if: matrix.wheel
         run: |
           scripts/smoke-test.sh \
             "$(ls wheelhouse/*.whl)" \
@@ -291,27 +292,23 @@ jobs:
       # The smoke test stops at --dry-run. This solves the example for real on
       # two ranks under both launchers, so collective communication is
       # exercised and the two results must agree.
+      #
+      # The only step still gated by a row value, and the gate is a ticket rather
+      # than a platform difference: proving the launcher survives delocate's
+      # install-name rewriting is
+      # .scratch/platform-expansion/issues/10-macos-launcher-and-interop.md, and
+      # its foreign-launcher stage needs an mpiexec on the runner that the macOS
+      # row has no source for yet. Running it before then would paint the macOS
+      # row red for a reason that is not the wheel it built, which is the signal
+      # this row exists to give. That ticket deletes this gate.
       - name: Launcher interoperability
-        if: matrix.wheel
+        if: matrix.interop
         run: |
           scripts/interop-test.sh \
             "$(ls wheelhouse/*.whl)" \
             "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
 
-      # What a row with no wheel yet can still prove, and the two questions the
-      # wheel steps above would otherwise be the first to ask: that the binary
-      # carries the Palace version it claims, and that two ranks solve one
-      # problem together rather than the same problem twice.
-      - name: Verify the install prefix
-        if: ${{ !matrix.wheel }}
-        run: |
-          scripts/verify-install.sh \
-            "${{ matrix.build_root }}/install" \
-            "$PALACE_VERSION" \
-            "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
-
       - name: Report wheel size
-        if: matrix.wheel
         run: |
           python3 -c "
           import pathlib, sys
@@ -325,7 +322,6 @@ jobs:
           "
 
       - uses: actions/upload-artifact@v5
-        if: matrix.wheel
         with:
           name: palace-solver-${{ matrix.tag }}
           path: wheelhouse/*.whl
@@ -374,12 +370,13 @@ jobs:
       # Trusted publishing: no API token stored in the repository.
       id-token: write
     steps:
-      # Still one platform, while the wheel matrix has two. The matrix uploads
-      # one artifact per row, so nothing is being overwritten -- the aarch64
-      # wheel is simply not collected here yet, and a tag cut today would
-      # publish the x86_64 wheel alone. Downloading every artifact is the
-      # publish-side change, tracked separately from the row that produced the
-      # second wheel.
+      # Still one platform, while the wheel matrix has three. The matrix uploads
+      # one artifact per row, so nothing is being overwritten -- the aarch64 and
+      # macOS wheels are simply not collected here yet, and a tag cut today
+      # would publish the x86_64 wheel alone. Downloading every artifact is the
+      # publish-side change, and it is
+      # .scratch/platform-expansion/issues/11-per-platform-artifacts-and-publish.md
+      # rather than a row's business.
       - uses: actions/download-artifact@v5
         with:
           name: palace-solver-manylinux_2_28_x86_64

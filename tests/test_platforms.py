@@ -124,10 +124,12 @@ def test_platform_tag_on_macos_comes_from_the_deployment_target():
 
 
 def test_platform_tag_on_macos_ignores_a_patch_component():
-    """Wheel tags carry major and minor only."""
+    """Wheel tags carry major and minor only, and on macOS 11 and later the
+    minor is always zero — so a patch component cannot survive by either route.
+    """
     assert (
         platforms.platform_tag(system="Darwin", machine="arm64", macos_version="15.4.1")
-        == "macosx_15_4_arm64"
+        == "macosx_15_0_arm64"
     )
 
 
@@ -171,3 +173,22 @@ def test_the_pinned_macos_floor_is_the_tag_the_matrix_row_claims():
     )
 
     assert tag == "macosx_15_0_arm64"
+
+
+def test_a_macos_tag_carries_a_zero_minor_whatever_the_floor_is():
+    """Since macOS 11 the minor version is not part of the release version, and
+    no wheel tag expresses 15.4. delocate renames the wheel by the same rule, so
+    deriving macosx_15_4 here would fail the tag check on every build.
+    """
+    assert (
+        platforms.platform_tag(system="Darwin", machine="arm64", macos_version="15.4")
+        == "macosx_15_0_arm64"
+    )
+
+
+def test_an_old_macos_tag_keeps_its_minor():
+    """Before macOS 11 the minor version was the release, and 10.15 is not 10.0."""
+    assert (
+        platforms.platform_tag(system="Darwin", machine="arm64", macos_version="10.15")
+        == "macosx_10_15_arm64"
+    )

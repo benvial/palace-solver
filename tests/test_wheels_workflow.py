@@ -165,7 +165,7 @@ def test_every_row_names_the_build_root_the_cache_uses(rows, build_cache, named_
     "name",
     [
         "Create the build directory the cache and the container share",
-        "Build wheel",
+        "Build wheel in the container",
         "Take ownership of what the container wrote as root",
     ],
 )
@@ -177,11 +177,22 @@ def test_the_container_only_steps_run_only_for_a_row_with_an_image(named_step, n
 
 
 def test_a_row_without_an_image_builds_on_the_runner(named_step):
-    build = named_step("Build Palace on the runner")
+    build = named_step("Build wheel on the runner")
 
     assert build["if"] == "${{ !matrix.image }}"
     assert "scripts/build-macos.sh" in build["run"]
     assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
+    """The steps after the build name `wheelhouse/*.whl` with no row value in
+    the path, so the two drivers have to agree about it without being told.
+    """
+    smoke = named_step("Smoke test in a clean virtual environment")
+
+    assert "wheelhouse/*.whl" in smoke["run"]
+    for name in ("Build wheel in the container", "Build wheel on the runner"):
+        assert "OUTPUT_DIR" not in named_step(name).get("env", {})
 
 
 def test_the_readability_guard_covers_every_row(named_step):
@@ -201,35 +212,58 @@ def test_the_readability_guard_covers_every_row(named_step):
     "name",
     [
         "Smoke test in a clean virtual environment",
-        "Launcher interoperability",
         "Report wheel size",
     ],
 )
-def test_the_wheel_steps_run_only_for_a_row_that_builds_one(named_step, name):
-    assert named_step(name)["if"] == "matrix.wheel"
+def test_the_wheel_steps_run_for_every_row(named_step, name):
+    """Every platform now emits a wheel, so these are unconditional. A row that
+    built one and tested nothing would be the worst of the three states.
+    """
+    assert "if" not in named_step(name)
 
 
-def test_the_artifact_is_uploaded_only_for_a_row_that_builds_a_wheel(steps):
-    """An upload of a path that does not exist fails the job, and a row with no
-    wheel would otherwise publish nothing under a name the publish job may
-    later collect.
+def test_the_artifact_is_uploaded_for_every_row(steps):
+    """One artifact per row, whatever the publish job currently collects: a gate
+    here would drop a platform silently, since an artifact that was never
+    uploaded is not an error until something downloads it.
     """
     upload = next(
         s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")
     )
 
-    assert upload["if"] == "matrix.wheel"
+    assert "if" not in upload
 
 
-def test_a_row_that_builds_no_wheel_still_proves_what_it_built(named_step):
-    """Otherwise the macOS row asserts nothing at all: a superbuild that
-    installs a binary which cannot run two ranks is not a platform that is
-    halfway done, it is a platform that is not started.
+def test_the_interop_proof_is_gated_by_the_row_that_has_not_had_it(rows, named_step):
+    """The one remaining per-row gate, and it stands for a ticket rather than a
+    platform difference: the macOS row has no foreign mpiexec to run the
+    interoperability test's last stage against yet, and a row failing on that
+    would hide whether the wheel it built is sound.
     """
-    verify = named_step("Verify the install prefix")
+    interop = named_step("Launcher interoperability")
 
-    assert verify["if"] == "${{ !matrix.wheel }}"
-    assert "scripts/verify-install.sh" in verify["run"]
+    assert interop["if"] == "matrix.interop"
+    assert [row["interop"] for row in rows].count(False) == 1
+
+
+def test_no_row_carries_a_flag_for_whether_it_builds_a_wheel(rows):
+    """It existed for the one row that stopped at an install prefix. Keeping it
+    once every row builds one leaves a gate nothing closes, which is how a
+    platform comes to be tested on one branch and not another.
+    """
+    for row in rows:
+        assert "wheel" not in row
+
+
+def test_the_row_shape_differs_only_by_whether_there_is_a_container(rows):
+    """Every row carries the same values but `image`, which is the one genuine
+    difference in kind between the platforms. `interop` is a value on every row
+    rather than an absence on one, so the gate reads as a decision taken per
+    platform instead of a key someone forgot.
+    """
+    keys = {frozenset(row) - {"image"} for row in rows}
+
+    assert len(keys) == 1
 
 
 def test_the_cache_key_covers_the_macos_build_driver(build_cache):

@@ -178,8 +178,14 @@ def launcher_conflict() -> str | None:
 def lib_dir() -> Path:
     """Return the directory holding the vendored shared libraries.
 
-    ``auditwheel`` puts them in a ``palace_solver.libs`` directory beside the
-    package, and the binary finds them through its RPATH; the path is exposed
-    for callers that want to set ``LD_LIBRARY_PATH`` themselves.
+    The repair tool decides where they live and the two disagree: ``auditwheel``
+    puts them in a ``palace_solver.libs`` directory *beside* the package, while
+    ``delocate`` puts them in a ``.dylibs`` directory *inside* it. The binary
+    finds them either way — through its RPATH on Linux, through ``@loader_path``
+    install names on macOS — so this is for callers that want to set
+    ``LD_LIBRARY_PATH`` or ``DYLD_LIBRARY_PATH`` themselves, and for them the
+    difference is the whole answer.
     """
+    if sys.platform == "darwin":
+        return _PACKAGE_DIR / ".dylibs"
     return _PACKAGE_DIR.parent / "palace_solver.libs"

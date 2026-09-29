@@ -216,3 +216,104 @@ def test_clean_build_tree_is_fine_with_a_clean_project(tmp_path):
     assemble.clean_build_tree(tmp_path)
 
     assert not (tmp_path / "build").exists()
+
+
+def test_repair_command_on_darwin_drives_delocate(tmp_path):
+    """auditwheel is Linux-only: it reads ELF headers and writes RPATHs."""
+    command = assemble.repair_command(
+        wheel=tmp_path / "dist" / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl",
+        output_dir=tmp_path / "wheelhouse",
+        system="Darwin",
+        machine="arm64",
+    )
+
+    assert command[0] == "delocate-wheel"
+    assert command[command.index("--wheel-dir") + 1] == str(tmp_path / "wheelhouse")
+    assert command[command.index("--require-archs") + 1] == "arm64"
+    assert command[-1].endswith(".whl")
+
+
+def test_repair_command_on_darwin_asks_for_no_platform_tag(tmp_path):
+    """delocate computes the tag from the payload's largest minos rather than
+    honouring one, so passing a tag would be a value it overrules anyway.
+    """
+    command = assemble.repair_command(
+        wheel=tmp_path / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl",
+        output_dir=tmp_path / "wheelhouse",
+        system="Darwin",
+        machine="arm64",
+    )
+
+    assert "--plat" not in command
+    assert not any("macosx" in argument for argument in command[:-1])
+
+
+def test_retag_command_on_darwin_keeps_the_tag_delocate_computed(tmp_path):
+    """The Python and ABI tags are ours to force; the platform tag is evidence."""
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-macosx_15_0_arm64.whl"
+    command = assemble.retag_command(wheel, system="Darwin")
+
+    assert command[:2] == ["wheel", "tags"]
+    assert command[command.index("--python-tag") + 1] == "py3"
+    assert command[command.index("--abi-tag") + 1] == "none"
+    assert "--platform-tag" not in command
+    assert command[-1] == str(wheel)
+
+
+def test_the_delocate_pin_is_the_version_that_refuses_a_payload_over_the_floor():
+    """0.13.0 raises on a library above MACOSX_DEPLOYMENT_TARGET; earlier
+    versions computed the tag but only warned, which publishes a wheel claiming
+    a macOS it cannot run on.
+    """
+    assert assemble.DELOCATE_REQUIREMENT == "delocate>=0.13.0"
+
+
+def test_wheel_platform_tags_reads_the_filename(tmp_path):
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl"
+
+    assert assemble.wheel_platform_tags(wheel) == ["macosx_15_0_arm64"]
+
+
+def test_wheel_platform_tags_splits_a_compressed_tag_set(tmp_path):
+    wheel = tmp_path / "x-1.0-py3-none-macosx_11_0_arm64.macosx_11_0_x86_64.whl"
+
+    assert assemble.wheel_platform_tags(wheel) == [
+        "macosx_11_0_arm64",
+        "macosx_11_0_x86_64",
+    ]
+
+
+def test_verify_platform_tag_accepts_the_tag_the_platform_claims(tmp_path):
+    wheel = tmp_path / f"palace_solver-0.17.0-py3-none-{platforms.platform_tag()}.whl"
+
+    assemble.verify_platform_tag(wheel)
+
+
+def test_verify_platform_tag_refuses_a_higher_macos_floor(tmp_path):
+    """delocate raises on a payload file above the target, so the route left open
+    is a newer SDK *major*, which it writes into the filename instead. A wheel
+    tagged higher than the metadata claims installs on fewer machines than
+    advertised, silently.
+    """
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_26_0_arm64.whl"
+
+    with pytest.raises(assemble.PlatformTagError, match="macosx_15_0_arm64"):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_verify_platform_tag_refuses_a_lower_macos_floor(tmp_path):
+    """Lower is not a bonus: the classifiers, the README and the TestPyPI dry
+    run all name one floor, and a wheel is not the place that decision changes.
+    """
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_11_0_arm64.whl"
+
+    with pytest.raises(assemble.PlatformTagError, match="macosx_11_0_arm64"):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_verify_platform_tag_refuses_a_wheel_claiming_several_platforms(tmp_path):
+    """A universal2 or fat tag set means the payload is not what was built."""
+    wheel = tmp_path / "x-1.0-py3-none-macosx_15_0_arm64.macosx_15_0_x86_64.whl"
+
+    with pytest.raises(assemble.PlatformTagError):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")

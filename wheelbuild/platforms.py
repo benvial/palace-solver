@@ -230,4 +230,13 @@ def platform_tag(
             "a wheel tag needs both major and minor"
         )
     major, minor = components[0], components[1]
+    # Since macOS 11 the minor component is not part of the release version and
+    # a wheel tag has to carry zero: pip reads macosx_15_0 as "macOS 15 and
+    # later", and there is no tag that expresses 15.4. delocate applies the same
+    # rule when it renames the wheel from the payload
+    # (``_calculate_minimum_wheel_name``: ``minor = 0 if version.major >= 11``),
+    # so a floor of 15.4 here without this would derive a tag delocate never
+    # produces and the check in wheelbuild.assemble would fail every build.
+    if int(major) >= 11:
+        minor = "0"
     return f"macosx_{major}_{minor}_{architecture_name}"

@@ -1,14 +1,24 @@
 """Assemble, repair and retag the palace-solver platform wheel.
 
-Pipeline: stage the executables into the package directory, build a wheel, run
-``auditwheel repair`` to vendor every shared library they need — MPI and BLAS
-included, since the wheel carries its own — and retag the result ``py3-none``
-because the payload is a binary with no Python ABI.
+Pipeline: stage the executables into the package directory, build a wheel,
+repair it to vendor every shared library they need — MPI and BLAS included,
+since the wheel carries its own — and retag the result ``py3-none`` because the
+payload is a binary with no Python ABI.
+
+The repair tool is the platform's: ``auditwheel`` reads ELF headers and writes
+RPATHs, ``delocate`` reads Mach-O load commands and rewrites install names, and
+neither runs on the other's payload. The two differ in more than their name.
+``auditwheel`` is *told* the platform tag and applies it; ``delocate`` *computes*
+it from the largest ``minos`` in the payload and renames the wheel to match. So
+on Linux the tag is an instruction and on Darwin it is evidence — which is why
+the pipeline ends by checking the tag on the file rather than trusting the tag
+it asked for. See ``wheelbuild.platforms`` for the tag itself.
 """
 
 from __future__ import annotations
 
 import argparse
+import platform
 import shutil
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,6 +31,22 @@ from wheelbuild._process import check_call
 
 #: PyPI's default per-file upload limit. Exceeding it needs a limit request.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
+
+#: The delocate the macOS driver installs, pinned at the floor rather than the
+#: exact version so a fix reaches the build.
+#:
+#: 0.13.0 is the oldest that *refuses* a payload above the requested
+#: ``MACOSX_DEPLOYMENT_TARGET`` — ``_check_and_update_wheel_name`` raises
+#: ``DelocationError`` and names the offending file. Given no target at all it
+#: computes the tag from the payload and only logs a warning, which is how a
+#: wheel comes to claim a macOS it cannot run on; ADR-0006's ``>= 0.11`` predates
+#: that check. Both halves are load-bearing here, because the tag every other
+#: platform is told is the one this platform is asked for.
+DELOCATE_REQUIREMENT = "delocate>=0.13.0"
+
+
+class PlatformTagError(RuntimeError):
+    """Raised when a built wheel does not carry the tag the platform claims."""
 
 
 @dataclass(frozen=True)
@@ -142,25 +168,110 @@ def _process_manager_binaries(install_prefix: Path) -> list[Path]:
     )
 
 
-def repair_command(*, wheel: Path, output_dir: Path) -> list[str]:
-    """Return the ``auditwheel repair`` invocation for a built wheel.
+def repair_command(
+    *,
+    wheel: Path,
+    output_dir: Path,
+    system: str | None = None,
+    machine: str | None = None,
+) -> list[str]:
+    """Return the repair invocation for a built wheel, on one platform.
 
-    Nothing is excluded: the vendored MPICH is part of the payload, so the
-    wheel is self-contained and needs no MPI installed beside it.
+    Nothing is excluded on either platform: the vendored MPICH is part of the
+    payload, so the wheel is self-contained and needs no MPI installed beside
+    it. ``delocate`` needs no telling — it copies from everywhere except
+    ``/usr/lib`` and ``/System``, which vendors the Homebrew runtimes and
+    correctly leaves Apple's own ``libc++`` alone.
+
+    Args:
+        wheel: The freshly built, unrepaired wheel.
+        output_dir: Where the repaired wheel is written.
+        system: ``platform.system()`` value; defaults to the running platform.
+        machine: ``platform.machine()`` value; defaults to the running machine.
+
+    Returns:
+        The argument list to run.
+
+    Raises:
+        platforms.UnsupportedPlatformError: For a platform with no repair tool
+            here, or a machine it ships no wheel for.
     """
-    return [
-        "auditwheel",
-        "repair",
-        "--plat",
-        platforms.platform_tag(),
-        "--wheel-dir",
-        str(output_dir),
-        str(wheel),
-    ]
+    resolved = system or platform.system()
+    if resolved == "Linux":
+        return [
+            "auditwheel",
+            "repair",
+            "--plat",
+            platforms.platform_tag(system=resolved, machine=machine),
+            "--wheel-dir",
+            str(output_dir),
+            str(wheel),
+        ]
+    if resolved == "Darwin":
+        return [
+            "delocate-wheel",
+            # Deliberately no platform tag: delocate takes the incoming one as
+            # a constraint on which architectures may survive and derives the
+            # published one from the payload, so a value here would only be a
+            # value it overrules. It is checked afterwards instead, by
+            # verify_platform_tag.
+            #
+            # DYLD_LIBRARY_PATH is deliberately not set around this command
+            # either. delocate resolves an absolute install name by searching
+            # DYLD_LIBRARY_PATH for the *basename* first and only then the
+            # recorded path, so pointing it at the install prefix would let a
+            # same-named library shadow the one the payload was actually linked
+            # against. Every library here is already at the absolute path its
+            # dependents record, which is the step delocate reaches anyway.
+            "--require-archs",
+            # Checked rather than assumed, and it refuses an Intel Mac rather
+            # than quietly building a wheel ADR-0006 rules out. delocate checks
+            # the architectures of the libraries it copied, so this catches a
+            # dependency that came from somewhere the build did not.
+            platforms.architecture(system=resolved, machine=machine),
+            "--wheel-dir",
+            str(output_dir),
+            # delocate reports what it copied and where from only at this
+            # verbosity, and a repair nobody can read is a repair nobody can
+            # debug an hour into a CI job.
+            "--verbose",
+            str(wheel),
+        ]
+    raise platforms.UnsupportedPlatformError(f"no wheel repair tool for {resolved}")
 
 
-def retag_command(wheel: Path) -> list[str]:
-    """Return the ``wheel tags`` invocation that forces the ``py3-none`` tag."""
+def retag_command(
+    wheel: Path, *, system: str | None = None, machine: str | None = None
+) -> list[str]:
+    """Return the ``wheel tags`` invocation that forces the ``py3-none`` tag.
+
+    The payload is a binary with no Python ABI, so the Python and ABI tags are
+    wrong on every platform and are forced here. The platform tag is only
+    forced on Linux, where this step is what applies it at all; on Darwin the
+    repair already renamed the wheel from the payload, and overwriting that
+    with the floor the build asked for would replace the evidence with the
+    assumption.
+
+    Args:
+        wheel: The repaired wheel.
+        system: ``platform.system()`` value; defaults to the running platform.
+        machine: ``platform.machine()`` value; defaults to the running machine.
+
+    Returns:
+        The argument list to run.
+
+    Raises:
+        platforms.UnsupportedPlatformError: For a platform with no platform tag
+            here.
+    """
+    resolved = system or platform.system()
+    if resolved not in {"Linux", "Darwin"}:
+        raise platforms.UnsupportedPlatformError(f"no wheel is retagged for {resolved}")
+    tag_arguments = (
+        ["--platform-tag", platforms.platform_tag(system=resolved, machine=machine)]
+        if resolved == "Linux"
+        else []
+    )
     return [
         "wheel",
         "tags",
@@ -168,11 +279,62 @@ def retag_command(wheel: Path) -> list[str]:
         "py3",
         "--abi-tag",
         "none",
-        "--platform-tag",
-        platforms.platform_tag(),
+        *tag_arguments,
         "--remove",
         str(wheel),
     ]
+
+
+def wheel_platform_tags(wheel: Path) -> list[str]:
+    """Return the platform tags a wheel's filename carries.
+
+    Args:
+        wheel: Any wheel; it need not exist.
+
+    Returns:
+        One entry per tag in the last component of the filename, which is a
+        compressed tag *set* and may hold several.
+    """
+    return wheel.name.removesuffix(".whl").rsplit("-", 1)[-1].split(".")
+
+
+def verify_platform_tag(wheel: Path, *, expected: str | None = None) -> None:
+    """Check that a finished wheel is tagged for the platform that was built.
+
+    On Linux this confirms the repair and retag steps ran at all, since an
+    unrepaired wheel is tagged ``linux_<arch>``. On Darwin that is not what it
+    buys — ``setup.py``'s platform wheel already carries a ``macosx`` tag — and
+    the value is elsewhere: ``delocate`` derives the tag from the payload,
+    so the filename is a measurement of what the build actually produced, and a
+    value other than the one chosen means the wheel would be installable on a
+    different set of machines than the metadata, the README and the release
+    notes all describe. A *higher* floor is the dangerous direction and the one
+    ADR-0006's ticket 06 chose against, but a lower one is not a bonus: it is
+    the same disagreement, and nothing published can be corrected afterwards.
+
+    Args:
+        wheel: The finished wheel.
+        expected: The tag to require; defaults to this platform's.
+
+    Raises:
+        PlatformTagError: If the filename carries anything else.
+    """
+    required = expected or platforms.platform_tag()
+    found = wheel_platform_tags(wheel)
+    if found != [required]:
+        advice = (
+            "the tag is computed from the largest minos in the payload, so this "
+            "is what the build produced rather than a naming mistake: find the "
+            "Mach-O that disagrees (`otool -l ... | grep -A3 LC_BUILD_VERSION`) "
+            "rather than renaming the file"
+            if required.startswith("macosx")
+            else "the tag is applied by the repair and retag steps, so a wheel "
+            "carrying another one means a step did nothing and its output was "
+            "the wheel that went into it"
+        )
+        raise PlatformTagError(
+            f"{wheel.name} is tagged {'.'.join(found)}, not {required}: {advice}."
+        )
 
 
 def build(
@@ -196,6 +358,7 @@ def build(
     Raises:
         UnattributedLibraryError: If the repaired wheel carries a library no
             license notice in it accounts for.
+        PlatformTagError: If the finished wheel is tagged for another platform.
     """
     package_dir = project_dir / "palace_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
@@ -221,6 +384,16 @@ def build(
     final = pick_wheel(
         before=before_retag, after=_wheels(output_dir), fallback=repaired
     )
+    # What the wheel ends up claiming is asserted on the file rather than assumed
+    # from the commands that were run. The two platforms get different value from
+    # it. On Linux it catches a repair or retag that renamed nothing and was
+    # picked up by pick_wheel's fallback, because the unrepaired wheel is tagged
+    # `linux_<arch>` and the finished one must not be. On Darwin it cannot catch
+    # that -- setup.py's platform wheel already carries the macosx tag, so an
+    # unrepaired fallback would pass -- and instead catches the case only this
+    # platform has: a payload built against a newer SDK major, which delocate
+    # writes into the filename.
+    verify_platform_tag(final)
     # The repair step is what pulls the compiler runtime in, after the notices
     # were harvested from source checkouts it has none of, so what the wheel
     # ended up carrying is only knowable here.
