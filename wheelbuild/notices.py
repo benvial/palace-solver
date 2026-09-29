@@ -8,13 +8,15 @@ corresponding sources, both added here on top of the harvested files.
 The harvest fails the build when a known dependency contributes no license
 file, so a superbuild layout change cannot silently drop a notice.
 
-One class of redistributed library has no source checkout to walk. The
-compiler runtime — ``libgfortran``, ``libgomp``, ``libquadmath`` — arrives from
-the toolchain image and enters the wheel *after* this harvest, as a side effect
-of ``auditwheel repair``. Its notices are therefore added from the texts
-shipped in ``wheelbuild/data``, and :func:`audit_wheel` checks the finished
-wheel so that a library neither harvested nor named here fails the build rather
-than shipping unnoticed.
+One class of redistributed library has no source checkout to walk: what the
+build image provides rather than what the superbuild compiles. The compiler
+runtime — ``libgfortran``, ``libgomp``, ``libquadmath`` — is the bulk of it,
+and ``libpciaccess``, which reaches the payload through hwloc, is the rest.
+These enter the wheel *after* this harvest, as a side effect of ``auditwheel
+repair``. Their notices are therefore added from the texts shipped in
+``wheelbuild/data``, and :func:`audit_wheel` checks the finished wheel so that
+a library neither harvested nor named here fails the build rather than shipping
+unnoticed.
 """
 
 from __future__ import annotations
@@ -72,6 +74,14 @@ COMPILER_RUNTIME_LIBRARIES = (
 #: Where the GPL's "corresponding sources" pointer aims for the GCC runtime.
 GCC_SOURCE_URL = "https://gcc.gnu.org/mirrors.html"
 
+#: Libraries the repair step vendors out of the build image rather than from
+#: the compiler or from anything built here, mapped to the license text shipped
+#: for them in ``data``. ``libpciaccess`` arrives through hwloc, which the
+#: vendored MPICH links to discover the machine's topology.
+SYSTEM_LIBRARY_LICENSES = {
+    "libpciaccess": "libpciaccess-COPYING.txt",
+}
+
 #: File names that hold a license or copyright notice.
 LICENSE_FILE_PATTERNS = (
     "LICENSE*",
@@ -93,8 +103,8 @@ THIRD-PARTY NOTICES for palace-solver
 
 This wheel redistributes the Palace solver (Apache-2.0) together with every
 library it links: the dependencies built by Palace's superbuild, the MPICH and
-OpenBLAS builds the wheel vendors, and the compiler runtime libraries the wheel
-repair step copies in from the toolchain. The license of each redistributed
+OpenBLAS builds the wheel vendors, and the runtime libraries the wheel repair
+step copies in from the build image. The license of each redistributed
 component is reproduced below.
 """
 
@@ -259,6 +269,13 @@ def render(source_roots: Sequence[Path], *, gcc_version: str | None = None) -> s
             _GPL_3_TEXT.read_text(encoding="utf-8"),
         )
     )
+    for library, filename in SYSTEM_LIBRARY_LICENSES.items():
+        sections.append(
+            _section(
+                f"{library} (vendored from the build image)",
+                (_DATA / filename).read_text(encoding="utf-8"),
+            )
+        )
     return "\n".join(sections)
 
 
@@ -270,9 +287,13 @@ def _section(title: str, body: str) -> str:
 def library_stem(name: str) -> str:
     """Return the library name behind a vendored file name.
 
-    ``auditwheel`` renames what it copies, inserting a hash of the contents:
-    ``libgfortran-83c28eba.so.5.0.0``. The name before that hash is what a
-    notice can be matched against.
+    ``auditwheel`` renames what it copies, inserting a hash of the contents
+    after the part of the name before its first dot. That is the end of the
+    name for ``libgfortran.so.5.0.0``, which becomes
+    ``libgfortran-83c28eba.so.5.0.0``, but not for a library whose version is
+    in the name: ``libopenblasp-r0.3.34.so`` becomes
+    ``libopenblasp-r0-a160b4b8.3.34.so``, with the hash in the middle. The
+    name with the hash taken out is what a notice can be matched against.
 
     Args:
         name: File name as it appears in the wheel's vendored library
@@ -281,8 +302,8 @@ def library_stem(name: str) -> str:
     Returns:
         The library name, without the hash, the extension or the soversion.
     """
-    stem = re.split(r"\.so|\.dylib", name, maxsplit=1)[0]
-    return re.sub(r"-[0-9a-f]{6,}$", "", stem)
+    unhashed = re.sub(r"-[0-9a-f]{6,}(?=\.|$)", "", name)
+    return re.split(r"\.so|\.dylib", unhashed, maxsplit=1)[0]
 
 
 def vendored_libraries(wheel: Path) -> list[str]:
@@ -311,10 +332,11 @@ def audit_wheel(*, wheel: Path, install_prefix: Path) -> list[str]:
 
     A vendored library is accounted for when it was built here — it exists in
     the superbuild's install prefix, so the harvest walked its sources — or
-    when it is one of the :data:`COMPILER_RUNTIME_LIBRARIES` the notices cover
-    from shipped texts. Anything else entered the wheel without a license
-    section and fails the build, which is the guard the source-tree walk cannot
-    provide for libraries that have no source tree.
+    when it is one of the :data:`COMPILER_RUNTIME_LIBRARIES` or
+    :data:`SYSTEM_LIBRARY_LICENSES` the notices cover from shipped texts.
+    Anything else entered the wheel without a license section and fails the
+    build, which is the guard the source-tree walk cannot provide for libraries
+    that have no source tree.
 
     Args:
         wheel: The repaired wheel.
@@ -333,18 +355,16 @@ def audit_wheel(*, wheel: Path, install_prefix: Path) -> list[str]:
         if ".so" in path.name or path.name.endswith(".dylib")
     }
     found = vendored_libraries(wheel)
-    unattributed = [
-        name
-        for name in found
-        if name not in built_here and name not in COMPILER_RUNTIME_LIBRARIES
-    ]
+    covered = built_here.union(COMPILER_RUNTIME_LIBRARIES, SYSTEM_LIBRARY_LICENSES)
+    unattributed = [name for name in found if name not in covered]
     if unattributed:
         raise UnattributedLibraryError(
             f"{wheel.name} vendors libraries with no license notice: "
             f"{', '.join(unattributed)}. Either they are built by the "
             "superbuild and the harvest missed them, or they come from the "
-            "toolchain and belong in COMPILER_RUNTIME_LIBRARIES with their "
-            "license text in wheelbuild/data."
+            "build image and belong in COMPILER_RUNTIME_LIBRARIES or "
+            "SYSTEM_LIBRARY_LICENSES with their license text in "
+            "wheelbuild/data."
         )
     return found
 

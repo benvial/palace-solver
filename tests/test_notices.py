@@ -144,6 +144,7 @@ def test_harvest_covers_the_compiler_runtime_the_repair_step_vendors(tmp_path):
     ).read_text()
 
     assert "GNU GENERAL PUBLIC LICENSE" in text
+    assert "libpciaccess (vendored from the build image)" in text
     assert "GCC RUNTIME LIBRARY EXCEPTION" in text
     assert notices.GCC_SOURCE_URL in text
     assert "GCC 12.2.1" in text
@@ -172,7 +173,10 @@ def _install_prefix(root: Path, libraries: list[str]) -> Path:
     [
         ("libgfortran-83c28eba.so.5.0.0", "libgfortran"),
         ("libmpi-1a2b3c4d.so.12.1.8", "libmpi"),
-        ("libopenblasp-r0.3.28-9f8e7d6c.so", "libopenblasp-r0.3.28"),
+        # auditwheel hashes the part before the first dot, which for a library
+        # carrying its version in the name puts the hash in the middle.
+        ("libopenblasp-r0-a160b4b8.3.34.so", "libopenblasp-r0.3.34"),
+        ("libpciaccess-9f8e7d6c.so.0.11.1", "libpciaccess"),
         ("libmpi.so.12", "libmpi"),
         ("libomp-abcdef12.dylib", "libomp"),
     ],
@@ -204,3 +208,27 @@ def test_audit_fails_when_the_repair_step_vendors_an_unaccounted_library(tmp_pat
 
     with pytest.raises(notices.UnattributedLibraryError, match="libsomething"):
         notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_audit_matches_a_library_whose_version_is_in_its_name(tmp_path):
+    """OpenBLAS is the case the hash lands in the middle of."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libopenblasp-r0-a160b4b8.3.34.so"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libopenblasp-r0.3.34.so"])
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == [
+        "libopenblasp-r0.3.34"
+    ]
+
+
+def test_audit_accepts_a_library_vendored_from_the_build_image(tmp_path):
+    """libpciaccess reaches the payload through hwloc and is built by nobody here."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libpciaccess-9f8e7d6c.so.0.11.1"],
+    )
+    prefix = _install_prefix(tmp_path / "install", [])
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == ["libpciaccess"]
