@@ -30,7 +30,7 @@ def test_source_url_points_at_the_pinned_release():
 
 
 def test_install_is_validated_by_the_fortran_artefacts(tmp_path):
-    for relative in mpich.REQUIRED_ARTEFACTS:
+    for relative in mpich.required_artefacts():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")
@@ -44,3 +44,28 @@ def test_validate_rejects_an_install_without_fortran_support(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="libmpifort"):
         mpich.validate(tmp_path)
+
+
+def test_required_artefacts_name_the_dylibs_on_darwin():
+    """MPICH installs libmpi.12.dylib on macOS, not libmpi.so.12."""
+    artefacts = mpich.required_artefacts(system="Darwin")
+
+    assert Path("lib/libmpi.12.dylib") in artefacts
+    assert Path("lib/libmpifort.12.dylib") in artefacts
+
+
+def test_validate_accepts_a_darwin_install_tree(tmp_path):
+    for relative in mpich.required_artefacts(system="Darwin"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+
+    assert mpich.validate(tmp_path, system="Darwin") == tmp_path
+
+
+def test_validate_rejects_a_darwin_install_without_fortran_support(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "libmpi.12.dylib").write_text("")
+
+    with pytest.raises(FileNotFoundError, match="libmpifort"):
+        mpich.validate(tmp_path, system="Darwin")

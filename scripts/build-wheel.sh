@@ -28,6 +28,19 @@ export CCACHE_DIR="${CCACHE_DIR:-$build_root/ccache}"
 # lands on an older tree and ccache is what keeps the partial rebuild cheap.
 # Bounded so the cached tree is a size chosen rather than observed.
 export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
+# The Palace source tree below is a git repository, and Palace's CMake runs
+# `git describe` in it at configure time to stamp `palace --version`. It is
+# created once and then restored from a cache — or, locally, from a directory
+# the developer owns — while this script runs as root inside the container, so
+# git sees a repository someone else owns and refuses it with "detected dubious
+# ownership". The failure is quiet in the worst way: `palace --version` reports
+# UNKNOWN, the stamp check below then finds a mismatch and reconfigures the
+# superbuild on every single run. Set through the environment rather than
+# `git config --global` so it applies to the git CMake spawns as well and
+# touches no file.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="*"
 
 source_dir="$build_root/palace-$palace_version"
 superbuild_dir="$build_root/superbuild"

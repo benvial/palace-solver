@@ -15,16 +15,28 @@ import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from wheelbuild import platforms
 from wheelbuild._process import check_call
 
 #: OpenBLAS release vendored into the wheel.
 OPENBLAS_VERSION = "0.3.34"
 
-#: Files an OpenBLAS install must have for Palace to configure against it.
-REQUIRED_ARTEFACTS = (
-    Path("include/cblas.h"),
-    Path("lib/libopenblas.so"),
-)
+
+def required_artefacts(*, system: str | None = None) -> tuple[Path, ...]:
+    """Files an OpenBLAS install must have for Palace to configure against it.
+
+    Args:
+        system: ``platform.system()`` value; defaults to the running platform.
+            OpenBLAS installs an unversioned ``lib/libopenblas.so`` on Linux and
+            ``lib/libopenblas.dylib`` on Darwin.
+
+    Returns:
+        Paths relative to the install prefix.
+    """
+    return (
+        Path("include/cblas.h"),
+        platforms.library_path("libopenblas", system=system),
+    )
 
 
 def source_url(version: str = OPENBLAS_VERSION) -> str:
@@ -63,11 +75,12 @@ def install_arguments(*, prefix: Path) -> list[str]:
     return ["make", "install", f"PREFIX={prefix}", "NO_STATIC=1"]
 
 
-def validate(prefix: Path) -> Path:
+def validate(prefix: Path, *, system: str | None = None) -> Path:
     """Check that an OpenBLAS install carries what Palace's CMake looks for.
 
     Args:
         prefix: OpenBLAS install prefix.
+        system: ``platform.system()`` value; defaults to the running platform.
 
     Returns:
         The validated prefix.
@@ -76,7 +89,9 @@ def validate(prefix: Path) -> Path:
         FileNotFoundError: If any required artefact is missing.
     """
     missing = [
-        relative for relative in REQUIRED_ARTEFACTS if not (prefix / relative).exists()
+        relative
+        for relative in required_artefacts(system=system)
+        if not (prefix / relative).exists()
     ]
     if missing:
         raise FileNotFoundError(

@@ -2,9 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from wheelbuild import assemble
+from wheelbuild import assemble, platforms
 
 ELF_MAGIC = b"\x7fELF\x02\x01\x01\x00"
+MACH_O_MAGIC = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"
 
 
 def _install_tree(root: Path) -> Path:
@@ -22,6 +23,18 @@ def _install_tree(root: Path) -> Path:
     (root / "lib" / "libHYPRE.so").write_bytes(ELF_MAGIC + b"lib")
     (root / "lib" / "cmake").mkdir()
     (root / "lib" / "cmake" / "mfem-config.cmake").write_text("cmake noise")
+    return root
+
+
+def _darwin_install_tree(root: Path) -> Path:
+    """The same tree as a macOS superbuild leaves: Mach-O binaries, no ELF."""
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "palace").write_text('#!/bin/sh\nexec palace-arm64.bin "$@"\n')
+    (root / "bin" / "palace-arm64.bin").write_bytes(MACH_O_MAGIC + b"binary")
+    for launcher in ("mpiexec.hydra", "hydra_pmi_proxy"):
+        (root / "bin" / launcher).write_bytes(MACH_O_MAGIC + b"launcher")
+    (root / "bin" / "mpiexec").symlink_to("mpiexec.hydra")
+    (root / "bin" / "mpicc").write_text("#!/bin/sh\n# compiler wrapper\n")
     return root
 
 
@@ -54,6 +67,25 @@ def test_stage_fails_when_the_install_tree_has_no_palace_binary(tmp_path):
         assemble.stage(install_prefix=empty, package_dir=tmp_path / "pkg")
 
 
+def test_find_palace_binary_accepts_a_mach_o_install_tree(tmp_path):
+    """The macOS payload is Mach-O, so an ELF-only filter would find nothing."""
+    install_prefix = _darwin_install_tree(tmp_path / "install")
+
+    assert assemble.find_palace_binary(install_prefix).name == "palace-arm64.bin"
+
+
+def test_stage_ships_the_mach_o_process_manager_binaries(tmp_path):
+    install_prefix = _darwin_install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "palace_solver"
+
+    assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
+
+    shipped = {path.name for path in (package_dir / "bin").iterdir()}
+    assert {"mpiexec", "mpiexec.hydra", "hydra_pmi_proxy"} <= shipped
+    # Build-time shell wrappers stay out whichever platform they came from.
+    assert "mpicc" not in shipped
+
+
 def test_repair_command_vendors_every_library_including_mpi(tmp_path):
     command = assemble.repair_command(
         wheel=tmp_path / "dist" / "palace_solver-0.17.0-py3-none-linux_x86_64.whl",
@@ -62,7 +94,7 @@ def test_repair_command_vendors_every_library_including_mpi(tmp_path):
 
     assert command[:2] == ["auditwheel", "repair"]
     assert "--exclude" not in command
-    assert command[command.index("--plat") + 1] == assemble.PLATFORM_TAG
+    assert command[command.index("--plat") + 1] == platforms.platform_tag()
 
 
 def test_retag_command_forces_the_python_agnostic_tag(tmp_path):
@@ -72,7 +104,7 @@ def test_retag_command_forces_the_python_agnostic_tag(tmp_path):
     assert command[:2] == ["wheel", "tags"]
     assert command[command.index("--python-tag") + 1] == "py3"
     assert command[command.index("--abi-tag") + 1] == "none"
-    assert command[command.index("--platform-tag") + 1] == assemble.PLATFORM_TAG
+    assert command[command.index("--platform-tag") + 1] == platforms.platform_tag()
     assert command[-1] == str(wheel)
 
 

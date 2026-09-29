@@ -41,14 +41,46 @@ jobs:
         run: python -m wheelbuild.tag_check "$GITHUB_REF_NAME"
 
   wheel:
-    name: build manylinux_2_28 x86_64 wheel
-    # Pinned rather than ubuntu-latest: the label moves to Ubuntu 26 on
-    # 2026-10-19, and a 40-minute superbuild is not where a runner image
-    # should change underneath us.
-    runs-on: ubuntu-24.04
-    container: quay.io/pypa/manylinux_2_28_x86_64
+    name: build ${{ matrix.name }} wheel
+    # One row today. Everything that names a platform comes from the row rather
+    # than from the step that uses it, so a second architecture is one entry
+    # here and no other edit. See
+    # docs/adr/0006-parameterised-raw-jobs-not-cibuildwheel.md.
+    strategy:
+      # Three platforms share a 10 GB cache budget and each saves its own
+      # entry; cancelling the others because one failed would throw away
+      # 40 minutes of build for no gain.
+      fail-fast: false
+      matrix:
+        include:
+          # Pinned runner labels rather than *-latest: the ubuntu-latest label
+          # moves to Ubuntu 26 on 2026-10-19, and a 40-minute superbuild is not
+          # where a runner image should change underneath us. On macOS a moving
+          # label would also change the published filename.
+          - name: manylinux_2_28 x86_64
+            runner: ubuntu-24.04
+            image: quay.io/pypa/manylinux_2_28_x86_64
+            tag: manylinux_2_28_x86_64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
+
+      # Every action in this job runs on the runner, not in the build image.
+      # That is the point of driving the container with `docker run` instead of
+      # a `container:` key: commit 2b37f36 had actions/cache and
+      # actions/upload-artifact running on the manylinux image's Node, and that
+      # class of problem is gone once they run on the runner's.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # The cache path is a runner directory bind-mounted into the container,
+      # so it has to exist and belong to the runner user before the restore
+      # writes into it.
+      - name: Create the build directory the cache and the container share
+        run: |
+          sudo mkdir -p /build
+          sudo chown "$(id -u):$(id -g)" /build
 
       # palace_solver.__version__ is the only place the version is written
       # down; the Palace release is that minus any .postN packaging segment,
@@ -61,7 +93,17 @@ jobs:
           # a second architecture cannot collide with this one. runner.arch was
           # the alternative and would label a manylinux_2_28-specific tree
           # "X64", which can drift from what the tree actually is.
-          echo "PLATFORM_TAG=$(python3 -c 'from wheelbuild.assemble import PLATFORM_TAG; print(PLATFORM_TAG)')" >> "$GITHUB_ENV"
+          #
+          # Derived from this runner, which is right because every platform
+          # builds natively — the manylinux image matches the runner's
+          # architecture. Checked against the row so a mismatched matrix entry
+          # fails in seconds rather than by mis-tagging a wheel 40 minutes on.
+          tag=$(python3 -c 'from wheelbuild.platforms import platform_tag; print(platform_tag())')
+          if [[ "$tag" != "${{ matrix.tag }}" ]]; then
+            echo "::error::runner derives platform tag $tag, matrix row says ${{ matrix.tag }}"
+            exit 1
+          fi
+          echo "PLATFORM_TAG=$tag" >> "$GITHUB_ENV"
 
       # The build compiles MPICH, OpenBLAS and the Palace superbuild (hypre, MFEM,
       # libCEED, SuperLU_DIST, STRUMPACK, MUMPS, SLEPc, ARPACK, LIBXSMM,
@@ -75,30 +117,64 @@ jobs:
       # in the key (the Palace version plus the hash of the five build scripts),
       # so the first build of a given key claims the entry and later builds of
       # the same key are exact hits that skip the save.
+      #
+      # scripts/build-in-container.sh is keyed along with the scripts it drives
+      # because it chooses the image the tree is compiled in, and a tree built
+      # in a different image is a different tree. It was not keyed before this
+      # job shape existed only because the image was named by a `container:` key
+      # the hash could not reach either — which was the same gap, unclosed.
+      # wheelbuild/platforms.py is keyed for the same reason: it owns the library
+      # filenames mpich.py and openblas.py validate an install against, and both
+      # of those are in the key already.
       - name: Restore build cache
         id: build-cache
         uses: actions/cache/restore@v5
         with:
           path: /build
-          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/platforms.py', 'wheelbuild/prefix.py') }}
           restore-keys: |
             superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
             superbuild-${{ env.PLATFORM_TAG }}-
 
-      # Paths stay relative to the working directory: inside a container job
-      # `github.workspace` is the host path, which does not exist here.
+      # The same script a developer runs locally, against the same image, with
+      # the cache directory pointed at the one the restore just filled. CI
+      # running the documented command is what keeps "reproducible on a
+      # developer machine" a fact rather than a claim.
       - name: Build wheel
-        run: scripts/build-wheel.sh "$PALACE_VERSION"
+        run: scripts/build-in-container.sh "$PALACE_VERSION"
         env:
-          BUILD_ROOT: /build
-          OUTPUT_DIR: wheelhouse
+          MANYLINUX_IMAGE: ${{ matrix.image }}
+          BUILD_CACHE: /build
+
+      # The container needs root — the build installs ccache and patchelf with
+      # dnf — so everything it writes is owned by root, and the runner user is
+      # the one that then saves the cache, reads the wheel and uploads it.
+      # Handing both trees over explicitly is cheaper than the alternatives: a
+      # `--user` that keeps them readable cannot run dnf, and relying on the
+      # build's umask leaving every directory world-readable is a silent
+      # dependency on every sub-project's install step.
+      #
+      # Unconditional, and covering wheelhouse, because the wheel is written on
+      # every run including an exact cache hit, and because the tree is worth
+      # handing back even when the build failed — the save step keeps partial
+      # progress.
+      #
+      # scripts/build-wheel.sh sets git's safe.directory for the mirror image of
+      # this: once /build belongs to the runner user, the root process in the
+      # container is the one looking at a repository it does not own.
+      - name: Take ownership of what the container wrote as root
+        if: always()
+        run: |
+          sudo chown -R "$(id -u):$(id -g)" /build
+          if [[ -d wheelhouse ]]; then
+            sudo chown -R "$(id -u):$(id -g)" wheelhouse
+          fi
 
       # A cache that fails open is worse than no cache: one file the saving user
       # cannot read makes actions/cache/save's tar exit 2, which the action
       # downgrades to a warning, so the next run pays a full cold build with
-      # nothing anywhere to explain why. Fail the job instead. Today every step
-      # runs as root in the container and this can only pass, but it stops being
-      # free the moment a platform saves as the runner user.
+      # nothing anywhere to explain why. Fail the job instead. This is what
+      # proves the ownership hand-over above actually covered the tree.
       #
       # `tar -cf /dev/null` is not a substitute: GNU tar special-cases /dev/null
       # and never reads file data, so it reports success on a tree the real save
@@ -121,6 +197,10 @@ jobs:
           path: /build
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
+      # Run on the runner rather than back inside the build image, for the same
+      # reason a user's machine is not a manylinux container: it proves the
+      # wheel is self-contained outside the environment that produced it. It is
+      # also the shape macOS has no choice about, so that row adds no step here.
       - name: Smoke test in a clean virtual environment
         run: |
           scripts/smoke-test.sh \
@@ -151,7 +231,7 @@ jobs:
 
       - uses: actions/upload-artifact@v5
         with:
-          name: palace-solver-manylinux_2_28_x86_64
+          name: palace-solver-${{ matrix.tag }}
           path: wheelhouse/*.whl
 
   # A version bump or an edit to any keyed build script orphans one entry per
@@ -178,10 +258,16 @@ jobs:
       - name: Delete superbuild caches that no longer match main
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUT_HASH: ${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          INPUT_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/platforms.py', 'wheelbuild/prefix.py') }}
         run: |
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
-          tag=$(python3 -c "from wheelbuild.assemble import PLATFORM_TAG; print(PLATFORM_TAG)")
+          # This runner derives its own tag, which is the x86_64 one. That is
+          # correct only while the wheel matrix has one row: with several
+          # platforms the job has to keep one current entry per platform instead
+          # of one overall, or it would delete the other platforms' live caches
+          # and hand them a cold build. Whoever adds the second row changes this
+          # in the same commit.
+          tag=$(python3 -c "from wheelbuild.platforms import platform_tag; print(platform_tag())")
           current="superbuild-$tag-$version-$INPUT_HASH"
           echo "keeping $current"
           gh cache list --ref refs/heads/main --key superbuild- --limit 100 \

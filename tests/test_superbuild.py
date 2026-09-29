@@ -81,7 +81,7 @@ def test_cmake_arguments_enable_ccache_when_requested():
 
 
 def test_mpi_home_is_the_prefix_of_the_vendored_mpich_build(tmp_path):
-    for relative in mpich.REQUIRED_ARTEFACTS:
+    for relative in mpich.required_artefacts():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")

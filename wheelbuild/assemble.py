@@ -16,10 +16,8 @@ from pathlib import Path
 
 from palace_solver import BINARY_NAME, LAUNCHER_NAME
 from wheelbuild import notices as notices_module
-from wheelbuild._process import check_call, is_elf
-
-#: Wheel platform tag, per the spec (manylinux_2_28, x86_64 first).
-PLATFORM_TAG = "manylinux_2_28_x86_64"
+from wheelbuild import platforms
+from wheelbuild._process import check_call
 
 #: PyPI's default per-file upload limit. Exceeding it needs a limit request.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
@@ -58,25 +56,27 @@ def find_palace_binary(install_prefix: Path) -> Path:
     """Locate the real Palace executable in a superbuild install tree.
 
     Palace installs a small ``bin/palace`` launcher script alongside the actual
-    ELF binary (``palace-<arch>.bin``); the wheel ships the ELF one and
-    provides its own console script.
+    binary (``palace-<arch>.bin``); the wheel ships the binary and provides its
+    own console script. Which of the two is which is decided by the file's
+    format — ELF on Linux, Mach-O on Darwin — not by its name, because the name
+    carries the architecture.
 
     Args:
         install_prefix: Superbuild install prefix.
 
     Returns:
-        Path of the ELF Palace binary.
+        Path of the Palace binary.
 
     Raises:
-        FileNotFoundError: If no ELF ``palace*`` binary is installed.
+        FileNotFoundError: If no ``palace*`` binary is installed.
     """
     candidates = sorted(
         path
         for path in (install_prefix / "bin").glob("palace*")
-        if path.is_file() and not path.is_symlink() and is_elf(path)
+        if path.is_file() and not path.is_symlink() and platforms.is_native_binary(path)
     )
     if not candidates:
-        raise FileNotFoundError(f"no Palace ELF binary under {install_prefix / 'bin'}")
+        raise FileNotFoundError(f"no Palace binary under {install_prefix / 'bin'}")
     return candidates[0]
 
 
@@ -137,7 +137,7 @@ def _process_manager_binaries(install_prefix: Path) -> list[Path]:
         path
         for path in (install_prefix / "bin").iterdir()
         if path.is_file()
-        and is_elf(path)
+        and platforms.is_native_binary(path)
         and (path.name == LAUNCHER_NAME or path.name.startswith(("mpiexec", "hydra_")))
     )
 
@@ -152,7 +152,7 @@ def repair_command(*, wheel: Path, output_dir: Path) -> list[str]:
         "auditwheel",
         "repair",
         "--plat",
-        PLATFORM_TAG,
+        platforms.platform_tag(),
         "--wheel-dir",
         str(output_dir),
         str(wheel),
@@ -169,7 +169,7 @@ def retag_command(wheel: Path) -> list[str]:
         "--abi-tag",
         "none",
         "--platform-tag",
-        PLATFORM_TAG,
+        platforms.platform_tag(),
         "--remove",
         str(wheel),
     ]

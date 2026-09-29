@@ -29,7 +29,7 @@ def test_source_url_points_at_the_pinned_release():
 
 
 def test_validate_accepts_an_install_with_library_and_headers(tmp_path):
-    for relative in openblas.REQUIRED_ARTEFACTS:
+    for relative in openblas.required_artefacts():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("")
@@ -43,3 +43,24 @@ def test_validate_rejects_an_install_without_the_cblas_header(tmp_path):
 
     with pytest.raises(FileNotFoundError, match=r"cblas\.h"):
         openblas.validate(tmp_path)
+
+
+def test_required_artefacts_name_the_dylib_on_darwin():
+    assert Path("lib/libopenblas.dylib") in openblas.required_artefacts(system="Darwin")
+
+
+def test_validate_accepts_a_darwin_install_tree(tmp_path):
+    for relative in openblas.required_artefacts(system="Darwin"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+
+    assert openblas.validate(tmp_path, system="Darwin") == tmp_path
+
+
+def test_validate_rejects_a_darwin_install_without_the_library(tmp_path):
+    (tmp_path / "include").mkdir()
+    (tmp_path / "include" / "cblas.h").write_text("")
+
+    with pytest.raises(FileNotFoundError, match="libopenblas"):
+        openblas.validate(tmp_path, system="Darwin")
