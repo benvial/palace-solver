@@ -86,15 +86,42 @@ export PATH="$install_prefix/bin:$PATH"
 
 echo "==> OpenBLAS (vendored into the wheel)"
 # Palace requires a system BLAS/LAPACK and the manylinux image has none, so
-# OpenBLAS is built here with DYNAMIC_ARCH so one wheel runs on any x86-64 CPU.
+# OpenBLAS is built here: DYNAMIC_ARCH so one binary picks its kernels at run
+# time, and, on arm, a named TARGET so the common objects around those kernels
+# are compiled for the oldest CPU the wheel claims instead of for the runner.
+# See BASELINE_TARGETS in wheelbuild/openblas.py.
 openblas_version="$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.openblas import OPENBLAS_VERSION; print(OPENBLAS_VERSION)')"
 openblas_source="$build_root/OpenBLAS-$openblas_version"
-if [[ ! -d "$openblas_source" ]]; then
-  curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v$openblas_version/OpenBLAS-$openblas_version.tar.gz" \
-    -o "$build_root/OpenBLAS-$openblas_version.tar.gz"
-  tar -xzf "$build_root/OpenBLAS-$openblas_version.tar.gz" -C "$build_root"
+openblas_tarball="$build_root/OpenBLAS-$openblas_version.tar.gz"
+unpack_openblas() {
+  if [[ ! -f "$openblas_tarball" ]]; then
+    curl -fsSL "$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.openblas import source_url; print(source_url())')" \
+      -o "$openblas_tarball"
+  fi
+  rm -rf "$openblas_source"
+  tar -xzf "$openblas_tarball" -C "$build_root"
+}
+[[ -d "$openblas_source" ]] || unpack_openblas
+# The question is not whether libopenblas is installed, it is what it was
+# compiled for -- the same shape as the Palace stamp check below, and for the
+# same reason. A restored tree can carry an OpenBLAS built before the CPU
+# baseline was pinned; the exact cache key changing is no protection, because
+# the fallback restore-keys are what hand that tree back. The verdicts are
+# CHECK_NO_INSTALL and CHECK_WRONG_CPU in wheelbuild/openblas.py.
+openblas_verdict=0
+PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
+  --prefix "$install_prefix" --check || openblas_verdict=$?
+if (( openblas_verdict == 3 )); then
+  # `make` does not notice a changed TARGET: the objects in a restored source
+  # tree keep the -march they were compiled with, so building in place would
+  # reinstall the same wrong code. Re-extracting is the only clean that cannot
+  # leave one behind. The tarball stays, so this costs an unpack, not a
+  # download -- and only this verdict pays it, because a merely absent install
+  # has no wrongly compiled objects to discard.
+  echo "==> discarding an OpenBLAS tree configured for another CPU baseline"
+  unpack_openblas
 fi
-if [[ ! -f "$install_prefix/lib/libopenblas.so" ]]; then
+if (( openblas_verdict != 0 )); then
   PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
     --source-dir "$openblas_source" \
     --prefix "$install_prefix" \

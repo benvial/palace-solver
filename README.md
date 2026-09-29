@@ -30,6 +30,15 @@ an explicit executable argument or `PALAIS_PALACE_EXE`.
   provides.
 - `THIRD-PARTY-NOTICES`, harvested from the superbuild's own source checkouts.
 
+The CPU requirement is what the platform tag implies and no more. OpenBLAS is
+built with `DYNAMIC_ARCH`, so it picks its kernels at run time, and the code
+around those kernels is compiled for a CPU baseline rather than for the machine
+that built it. On `aarch64` that baseline is ARMv8-A, which includes Graviton2
+and every later arm server core and requires neither SVE nor any ARMv8.1+
+extension; on `x86_64` it is the plain x86-64 architectural level, which the
+build already leaves in place. A newer CPU is used through the run-time
+dispatch, not by installing a different wheel.
+
 The package version mirrors the Palace release it ships (`.postN` for
 packaging-only fixes). Palace is Apache-2.0; see `LICENSE` and
 `THIRD-PARTY-NOTICES`.
@@ -125,10 +134,11 @@ access to, so it is a release-time step run locally.
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS → superbuild →
 notice harvest → wheel assembly → `auditwheel repair` → retag to
-`py3-none-manylinux_2_28_x86_64`. The steps are Python modules under
+`py3-none-manylinux_2_28_<arch>`. The steps are Python modules under
 `wheelbuild/` and are unit-tested with `pytest`.
 
-Linux aarch64 and macOS are later milestones.
+CI builds `x86_64` and `aarch64` as two rows of one matrix, each on a native
+runner. macOS arm64 is a later milestone.
 
 ## Releasing
 
