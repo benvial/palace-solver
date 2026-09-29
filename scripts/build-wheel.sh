@@ -7,6 +7,10 @@
 #   BUILD_ROOT   scratch root for sources and the superbuild (default /build);
 #                keep it on a cached volume to reuse the dependency tree
 #   CCACHE_DIR   ccache directory (default /build/ccache)
+#   CCACHE_MAXSIZE
+#                ccache size bound (default 2G); ccache's own default is
+#                unbounded growth, and this directory sits inside a build tree
+#                that has to fit the 10 GB GitHub Actions cache budget
 #   JOBS         parallel build jobs (default: nproc)
 #   OUTPUT_DIR   where the repaired wheel is written (default <repo>/wheelhouse)
 set -euo pipefail
@@ -20,6 +24,10 @@ build_root="${BUILD_ROOT:-/build}"
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 jobs="${JOBS:-$(nproc)}"
 export CCACHE_DIR="${CCACHE_DIR:-$build_root/ccache}"
+# ccache earns its place on the fallback restore, where a changed cache key
+# lands on an older tree and ccache is what keeps the partial rebuild cheap.
+# Bounded so the cached tree is a size chosen rather than observed.
+export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 
 source_dir="$build_root/palace-$palace_version"
 superbuild_dir="$build_root/superbuild"

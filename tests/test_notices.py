@@ -1,3 +1,4 @@
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -132,3 +133,102 @@ def test_harvest_fails_when_a_vendored_runtime_library_has_no_license(tmp_path):
 
     with pytest.raises(notices.MissingLicenseError, match="mpich"):
         notices.harvest(source_roots=[superbuild], output=tmp_path / "NOTICES")
+
+
+def test_harvest_covers_the_compiler_runtime_the_repair_step_vendors(tmp_path):
+    """libgfortran and friends have no source checkout, so no walk can find them."""
+    source_root = _full_tree(tmp_path / "build")
+
+    text = notices.harvest(
+        source_roots=[source_root], output=tmp_path / "NOTICES", gcc_version="12.2.1"
+    ).read_text()
+
+    assert "GNU GENERAL PUBLIC LICENSE" in text
+    assert "libpciaccess (vendored from the build image)" in text
+    assert "GCC RUNTIME LIBRARY EXCEPTION" in text
+    assert notices.GCC_SOURCE_URL in text
+    assert "GCC 12.2.1" in text
+    for library in notices.COMPILER_RUNTIME_LIBRARIES:
+        assert library in text
+
+
+def _wheel_carrying(path: Path, vendored: list[str]) -> Path:
+    """Write a wheel whose .libs directory holds the given file names."""
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("palace_solver/__init__.py", "")
+        for name in vendored:
+            archive.writestr(f"palace_solver.libs/{name}", "\x7fELF")
+    return path
+
+
+def _install_prefix(root: Path, libraries: list[str]) -> Path:
+    (root / "lib").mkdir(parents=True)
+    for name in libraries:
+        (root / "lib" / name).write_text("")
+    return root
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        ("libgfortran-83c28eba.so.5.0.0", "libgfortran"),
+        ("libmpi-1a2b3c4d.so.12.1.8", "libmpi"),
+        # auditwheel hashes the part before the first dot, which for a library
+        # carrying its version in the name puts the hash in the middle.
+        ("libopenblasp-r0-a160b4b8.3.34.so", "libopenblasp-r0.3.34"),
+        ("libpciaccess-9f8e7d6c.so.0.11.1", "libpciaccess"),
+        ("libmpi.so.12", "libmpi"),
+        ("libomp-abcdef12.dylib", "libomp"),
+    ],
+)
+def test_library_stem_strips_auditwheels_hash_and_the_soversion(name, expected):
+    assert notices.library_stem(name) == expected
+
+
+def test_audit_accepts_libraries_built_here_and_the_named_compiler_runtime(tmp_path):
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libmpi-1a2b3c4d.so.12.1.8", "libgfortran-83c28eba.so.5.0.0"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libmpi.so.12"])
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == [
+        "libgfortran",
+        "libmpi",
+    ]
+
+
+def test_audit_fails_when_the_repair_step_vendors_an_unaccounted_library(tmp_path):
+    """The failure the source-tree walk structurally cannot produce."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libmpi-1a2b3c4d.so.12.1.8", "libsomething-5e6f7a8b.so.2"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libmpi.so.12"])
+
+    with pytest.raises(notices.UnattributedLibraryError, match="libsomething"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_audit_matches_a_library_whose_version_is_in_its_name(tmp_path):
+    """OpenBLAS is the case the hash lands in the middle of."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libopenblasp-r0-a160b4b8.3.34.so"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libopenblasp-r0.3.34.so"])
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == [
+        "libopenblasp-r0.3.34"
+    ]
+
+
+def test_audit_accepts_a_library_vendored_from_the_build_image(tmp_path):
+    """libpciaccess reaches the payload through hwloc and is built by nobody here."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libpciaccess-9f8e7d6c.so.0.11.1"],
+    )
+    prefix = _install_prefix(tmp_path / "install", [])
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == ["libpciaccess"]

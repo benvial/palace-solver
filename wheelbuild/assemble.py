@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from palace_solver import BINARY_NAME, LAUNCHER_NAME
+from wheelbuild import notices as notices_module
 from wheelbuild._process import check_call, is_elf
 
 #: Wheel platform tag, per the spec (manylinux_2_28, x86_64 first).
@@ -191,6 +192,10 @@ def build(
 
     Returns:
         Path of the final wheel.
+
+    Raises:
+        UnattributedLibraryError: If the repaired wheel carries a library no
+            license notice in it accounts for.
     """
     package_dir = project_dir / "palace_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
@@ -216,6 +221,11 @@ def build(
     final = pick_wheel(
         before=before_retag, after=_wheels(output_dir), fallback=repaired
     )
+    # The repair step is what pulls the compiler runtime in, after the notices
+    # were harvested from source checkouts it has none of, so what the wheel
+    # ended up carrying is only knowable here.
+    vendored = notices_module.audit_wheel(wheel=final, install_prefix=install_prefix)
+    print(f"vendored libraries: {', '.join(vendored)}", flush=True)
     print(size_report(final).text, flush=True)
     return final
 
