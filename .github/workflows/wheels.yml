@@ -53,24 +53,37 @@ jobs:
       # palace_solver.__version__ is the only place the version is written
       # down; the Palace release is that minus any .postN packaging segment,
       # which ships the same Palace under a tag upstream does not have.
-      - name: Resolve Palace version
+      - name: Resolve Palace version and platform tag
         run: |
           version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
           echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
+          # The cache key is namespaced by the tag the wheel itself carries, so
+          # a second architecture cannot collide with this one. runner.arch was
+          # the alternative and would label a manylinux_2_28-specific tree
+          # "X64", which can drift from what the tree actually is.
+          echo "PLATFORM_TAG=$(python3 -c 'from wheelbuild.assemble import PLATFORM_TAG; print(PLATFORM_TAG)')" >> "$GITHUB_ENV"
 
       # The build compiles MPICH, OpenBLAS and the Palace superbuild (hypre, MFEM,
       # libCEED, SuperLU_DIST, STRUMPACK, MUMPS, SLEPc, ARPACK, LIBXSMM,
       # GSLIB): 30-60+ minutes cold. The cache holds the sources, the build
       # trees, the shared install prefix and ccache.
+      #
+      # The key deliberately carries no `github.sha`: with it, the exact key
+      # could never hit, so every run — warm or cold — wrote another 2.4 GiB
+      # entry and the repository sat at 9.6 GiB against GitHub's 10 GB cap on
+      # one platform alone. Everything in the tree is pinned by what is already
+      # in the key (the Palace version plus the hash of the five build scripts),
+      # so the first build of a given key claims the entry and later builds of
+      # the same key are exact hits that skip the save.
       - name: Restore build cache
         id: build-cache
         uses: actions/cache/restore@v5
         with:
           path: /build
-          key: superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-${{ github.sha }}
+          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
           restore-keys: |
-            superbuild-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}-
-            superbuild-${{ env.PALACE_VERSION }}-
+            superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
+            superbuild-${{ env.PLATFORM_TAG }}-
 
       # Paths stay relative to the working directory: inside a container job
       # `github.workspace` is the host path, which does not exist here.
@@ -80,8 +93,29 @@ jobs:
           BUILD_ROOT: /build
           OUTPUT_DIR: wheelhouse
 
-      - name: Save build cache
+      # A cache that fails open is worse than no cache: one file the saving user
+      # cannot read makes actions/cache/save's tar exit 2, which the action
+      # downgrades to a warning, so the next run pays a full cold build with
+      # nothing anywhere to explain why. Fail the job instead. Today every step
+      # runs as root in the container and this can only pass, but it stops being
+      # free the moment a platform saves as the runner user.
+      #
+      # `tar -cf /dev/null` is not a substitute: GNU tar special-cases /dev/null
+      # and never reads file data, so it reports success on a tree the real save
+      # fails on.
+      - name: Check the build tree is readable before saving it
+        id: cache-guard
         if: always() && steps.build-cache.outputs.cache-hit != 'true'
+        run: |
+          unreadable=$(find /build \( ! -readable -o \( -type d ! -executable \) \) -print 2>&1 | head -20)
+          if [[ -n "$unreadable" ]]; then
+            echo "::error::unreadable entries under /build would make the cache save fail silently"
+            echo "$unreadable"
+            exit 1
+          fi
+
+      - name: Save build cache
+        if: always() && steps.build-cache.outputs.cache-hit != 'true' && steps.cache-guard.outcome == 'success'
         uses: actions/cache/save@v5
         with:
           path: /build
@@ -119,6 +153,45 @@ jobs:
         with:
           name: palace-solver-manylinux_2_28_x86_64
           path: wheelhouse/*.whl
+
+  # A version bump or an edit to any keyed build script orphans one entry per
+  # platform — and GitHub holds an unused entry for seven days. Left to
+  # least-recently-used eviction, the entry dropped is the least recently
+  # *read*, so the platform that builds least often is the one that loses its
+  # cache and pays a cold build; that is the failure this job exists to prevent.
+  cache-cleanup:
+    name: delete stale build caches
+    needs: [wheel]
+    # Only after main has saved its replacement entry. Caches for a pull
+    # request live on refs/pull/N/merge and GitHub deletes them when the pull
+    # request closes, so they are never this job's business — deleting one
+    # would make a pull request that edits the build scripts rebuild cold on
+    # every push, which is exactly what dropping github.sha from the key
+    # avoided.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Delete superbuild caches that no longer match main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_HASH: ${{ hashFiles('scripts/build-wheel.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+        run: |
+          version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
+          tag=$(python3 -c "from wheelbuild.assemble import PLATFORM_TAG; print(PLATFORM_TAG)")
+          current="superbuild-$tag-$version-$INPUT_HASH"
+          echo "keeping $current"
+          gh cache list --ref refs/heads/main --key superbuild- --limit 100 \
+            --json id,key --jq '.[] | [.id, .key] | @tsv' \
+            | while IFS=$'\t' read -r id key; do
+                if [[ "$key" != "$current" ]]; then
+                  echo "deleting stale $key"
+                  gh cache delete "$id"
+                fi
+              done
 
   publish:
     name: publish to PyPI
