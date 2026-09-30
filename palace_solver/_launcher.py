@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -76,6 +77,11 @@ OVERRIDE_ENV = "PALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER"
 #: How long to wait for a foreign ``mpiexec --version`` to answer.
 PROBE_TIMEOUT_SECONDS = 10
 
+#: Buffer ``proc_pidpath`` is documented to want: ``PROC_PIDPATHINFO_MAXSIZE``
+#: in ``<sys/proc_info.h>``, four times ``MAXPATHLEN``. Darwin's real path
+#: limit is a quarter of it.
+PROC_PIDPATH_BUFFER_SIZE = 4 * 1024
+
 #: Names of the launcher executable to probe inside a foreign install.
 PROBE_CANDIDATES = ("mpiexec", "mpiexec.hydra", "mpirun")
 
@@ -116,17 +122,71 @@ def requested_ranks(environ: Mapping[str, str]) -> int | None:
     return None
 
 
+def _proc_executable(pid: int) -> Path | None:
+    """Read a process's executable out of ``/proc``, as Linux answers it."""
+    try:
+        return Path(f"/proc/{pid}/exe").readlink()
+    except OSError:
+        return None
+
+
+def _libproc_executable(pid: int) -> Path | None:
+    """Ask ``libproc`` for a process's executable, as macOS answers it.
+
+    Darwin mounts no ``/proc`` at all, so the path the Linux reader takes is
+    not merely empty there — it is absent. ``proc_pidpath`` is the supported
+    way to ask, it lives in ``libSystem``, and it needs no subprocess, which
+    matters because this runs once in every rank at startup.
+    """
+    try:
+        import ctypes  # noqa: PLC0415
+
+        proc_pidpath = ctypes.CDLL(None).proc_pidpath
+    except (ImportError, OSError, AttributeError):
+        # Not a Darwin host, a libSystem without the symbol, or a Python built
+        # without ctypes. A reader that cannot answer leaves the guard open,
+        # which is the failure direction this whole module prefers.
+        return None
+    proc_pidpath.argtypes = (ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32)
+    proc_pidpath.restype = ctypes.c_int
+    buffer = ctypes.create_string_buffer(PROC_PIDPATH_BUFFER_SIZE)
+    if proc_pidpath(pid, buffer, PROC_PIDPATH_BUFFER_SIZE) <= 0:
+        # The documented failure report: a pid that is gone, or one this
+        # process may not look at.
+        return None
+    return Path(os.fsdecode(buffer.value))
+
+
+def process_executable(pid: int, *, system: str | None = None) -> Path | None:
+    """Return the executable a process is running.
+
+    Asked of ``sys.platform`` rather than of ``platform.system()``, which the
+    build tooling uses: this runs in every rank at startup and ``sys`` is
+    already imported, while the ``platform`` module costs a further 2 ms of
+    import to answer the same question.
+
+    Args:
+        pid: Process to ask about.
+        system: ``sys.platform`` value; defaults to the running platform.
+
+    Returns:
+        Absolute path of that process's executable, or ``None`` where the
+        platform will not say (a process that has gone, one this process may
+        not look at, a platform neither reader knows).
+    """
+    if (system or sys.platform) == "darwin":
+        return _libproc_executable(pid)
+    return _proc_executable(pid)
+
+
 def parent_executable() -> Path | None:
     """Return the executable of the process that started this one.
 
     Returns:
-        Absolute path of the parent's executable, or ``None`` where ``/proc``
-        does not answer (a non-Linux host, a vanished parent).
+        Absolute path of the parent's executable, or ``None`` where the
+        platform does not answer.
     """
-    try:
-        return Path(f"/proc/{os.getppid()}/exe").readlink()
-    except OSError:
-        return None
+    return process_executable(os.getppid())
 
 
 def refusal_reason(environ: Mapping[str, str], parent_exe: Path | None) -> str | None:
@@ -237,6 +297,10 @@ def version_note(
         except FileNotFoundError:
             return None
     launcher_dir = parent_exe.parent
+    # Both sides are real paths already -- the platform answers with one, and
+    # palace_solver._PACKAGE_DIR resolves the package's own -- so they compare
+    # equal for the vendored launcher on macOS too, where /var and /private/var
+    # are the same directory under two names.
     if launcher_dir == vendored_bin:
         return None
     read_version = probe_launcher_version if probe is None else probe

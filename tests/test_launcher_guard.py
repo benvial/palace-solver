@@ -1,3 +1,7 @@
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -220,3 +224,67 @@ def test_the_vendored_launcher_itself_is_not_guarded(tmp_path, monkeypatch):
     _exec.mpiexec(["-n", "2"])
 
     assert calls
+
+
+# The reader the running host does not use. Both branches are exercised from
+# either platform: the foreign one is the half a Linux test run would otherwise
+# never touch, and it is the half that was wrong.
+FOREIGN_SYSTEM = "linux" if sys.platform == "darwin" else "darwin"
+
+
+def _running_cat():
+    """A process this test knows the executable of, kept alive on its stdin."""
+    known = Path(shutil.which("cat")).resolve()
+    return known, subprocess.Popen([str(known)], stdin=subprocess.PIPE)
+
+
+def test_a_process_is_reported_as_the_binary_it_was_started_from():
+    # Asked about a process started from a binary this test chose, the reader
+    # names that binary. sys.executable is deliberately not the comparison: a
+    # macOS framework build runs from inside Python.app while sys.executable
+    # names the bin/ stub beside it, so the two disagree for a reason that says
+    # nothing about the reader.
+    known, child = _running_cat()
+    try:
+        assert _launcher.process_executable(child.pid) == known
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_a_process_that_has_gone_reports_nothing():
+    # The guard runs inside every rank, so a parent that has already exited
+    # must leave it with no answer rather than an exception. Asked of a pid
+    # this test has watched die rather than of a low number, which on Darwin
+    # would be kernel_task rather than nothing at all.
+    _, child = _running_cat()
+    child.kill()
+    child.wait()
+
+    assert _launcher.process_executable(child.pid) is None
+
+
+def test_the_reader_for_another_platform_answers_nothing_rather_than_guessing():
+    # Off Linux there is no /proc to read, and off Darwin no libproc to ask.
+    # Either way the wrong reader must decline, not raise.
+    assert _launcher.process_executable(os.getpid(), system=FOREIGN_SYSTEM) is None
+
+
+def test_a_rank_reads_the_process_that_launched_it():
+    # The guard's whole premise, exercised against real processes rather than a
+    # path fixture: what it keys off is the parent's executable, and the way to
+    # read that differs per platform. This test process stands in for the
+    # process manager.
+    repo_root = Path(__file__).resolve().parent.parent
+    program = (
+        "from palace_solver import _launcher\nprint(_launcher.parent_executable())"
+    )
+    reported = subprocess.run(
+        [sys.executable, "-c", program],
+        capture_output=True,
+        text=True,
+        check=True,
+        cwd=repo_root,
+    ).stdout.strip()
+
+    assert Path(reported) == _launcher.process_executable(os.getpid())
