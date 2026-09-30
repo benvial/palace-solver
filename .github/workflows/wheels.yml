@@ -62,7 +62,6 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_x86_64
             tag: manylinux_2_28_x86_64
             build_root: /build
-            interop: true
           # Every platform builds natively, so the arm image needs an arm
           # runner: ubuntu-24.04-arm is free and unlimited on a public
           # repository and carries the same 4 vCPU / 16 GB as the x86_64 one.
@@ -85,7 +84,6 @@ jobs:
             image: quay.io/pypa/manylinux_2_28_aarch64
             tag: manylinux_2_28_aarch64
             build_root: /build
-            interop: true
 
           # Apple Silicon. The label is pinned harder than the Linux ones: on
           # macOS the runner image decides the published filename and the set
@@ -115,7 +113,6 @@ jobs:
             runner: macos-15
             tag: macosx_15_0_arm64
             build_root: /Users/runner/palace-build
-            interop: false
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -293,16 +290,12 @@ jobs:
       # two ranks under both launchers, so collective communication is
       # exercised and the two results must agree.
       #
-      # The only step still gated by a row value, and the gate is a ticket rather
-      # than a platform difference: proving the launcher survives delocate's
-      # install-name rewriting is
-      # .scratch/platform-expansion/issues/10-macos-launcher-and-interop.md, and
-      # its foreign-launcher stage needs an mpiexec on the runner that the macOS
-      # row has no source for yet. Running it before then would paint the macOS
-      # row red for a reason that is not the wheel it built, which is the signal
-      # this row exists to give. That ticket deletes this gate.
+      # Ungated, on every platform. The foreign launcher it pairs the wheel
+      # with is the PyPI `mpich` wheel, which publishes a macosx_11_0_arm64
+      # wheel for both the `mpich<5` series the vendored MPICH belongs to and
+      # the `mpich>=5` one stage 4 reaches for -- so macOS needs no Homebrew
+      # mpiexec and no source of its own.
       - name: Launcher interoperability
-        if: matrix.interop
         run: |
           scripts/interop-test.sh \
             "$(ls wheelhouse/*.whl)" \

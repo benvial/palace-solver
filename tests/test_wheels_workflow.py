@@ -234,16 +234,16 @@ def test_the_artifact_is_uploaded_for_every_row(steps):
     assert "if" not in upload
 
 
-def test_the_interop_proof_is_gated_by_the_row_that_has_not_had_it(rows, named_step):
-    """The one remaining per-row gate, and it stands for a ticket rather than a
-    platform difference: the macOS row has no foreign mpiexec to run the
-    interoperability test's last stage against yet, and a row failing on that
-    would hide whether the wheel it built is sound.
+def test_every_row_proves_the_launcher(rows, named_step):
+    """A platform that builds a wheel it cannot launch ranks with is not done,
+    so this step runs everywhere rather than on the platforms that happened to
+    have a foreign mpiexec first. The `interop` row value that gated it is gone
+    rather than set true everywhere: a gate nothing closes is how a platform
+    comes to be tested on one branch and not another.
     """
-    interop = named_step("Launcher interoperability")
-
-    assert interop["if"] == "matrix.interop"
-    assert [row["interop"] for row in rows].count(False) == 1
+    assert "if" not in named_step("Launcher interoperability")
+    for row in rows:
+        assert "interop" not in row
 
 
 def test_no_row_carries_a_flag_for_whether_it_builds_a_wheel(rows):
@@ -257,9 +257,8 @@ def test_no_row_carries_a_flag_for_whether_it_builds_a_wheel(rows):
 
 def test_the_row_shape_differs_only_by_whether_there_is_a_container(rows):
     """Every row carries the same values but `image`, which is the one genuine
-    difference in kind between the platforms. `interop` is a value on every row
-    rather than an absence on one, so the gate reads as a decision taken per
-    platform instead of a key someone forgot.
+    difference in kind between the platforms — no container on macOS. Any other
+    divergence is a step that one platform silently skips.
     """
     keys = {frozenset(row) - {"image"} for row in rows}
 

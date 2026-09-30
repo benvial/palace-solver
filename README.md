@@ -224,14 +224,13 @@ Per release:
 2. Run the check CI cannot: `scripts/e2e-test.sh wheelhouse/*.whl
    <checkout>` against a current palais checkout, on Linux.
 3. Tag and push the tag. The tag runs the checks, builds every platform's wheel
-   and smoke-tests each one on its own runner, then publishes to PyPI.
+   and, on its own runner, smoke-tests it and solves a real example under both
+   launchers, then publishes to PyPI.
 
-Two gaps to know about before cutting a tag, both being closed. The `publish`
-job still downloads the `manylinux_2_28_x86_64` artifact alone, so a tag today
-uploads that one wheel while the other two are built, tested and left in the
-workflow's artifacts. And the launcher interoperability test runs on the Linux
-rows only, because the macOS row has no second `mpiexec` to test a foreign
-launcher against yet.
+One gap to know about before cutting a tag, and it is being closed. The
+`publish` job still downloads the `manylinux_2_28_x86_64` artifact alone, so a
+tag today uploads that one wheel while the other two are built, tested and left
+in the workflow's artifacts.
 
 Publishing is entirely CI's: the `publish` job runs only for `refs/tags/v*`,
 in the `release` environment, and uploads through PyPI's trusted publishing —
