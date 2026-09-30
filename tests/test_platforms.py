@@ -192,3 +192,30 @@ def test_an_old_macos_tag_keeps_its_minor():
         platforms.platform_tag(system="Darwin", machine="arm64", macos_version="10.15")
         == "macosx_10_15_arm64"
     )
+
+
+def test_supported_platform_tags_are_the_three_platforms_adr_0006_fixes():
+    assert platforms.supported_platform_tags() == (
+        "manylinux_2_28_x86_64",
+        "manylinux_2_28_aarch64",
+        "macosx_15_0_arm64",
+    )
+
+
+def test_supported_platform_tags_does_not_read_the_environment(monkeypatch):
+    """A release's platform set is the same question on every builder, so the
+    macOS entry comes from the pinned floor rather than from whatever the
+    process happens to export.
+    """
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "13.0")
+
+    assert "macosx_15_0_arm64" in platforms.supported_platform_tags()
+
+
+def test_supported_platform_tags_lists_each_platform_once():
+    """The architecture table maps several machine spellings onto one
+    architecture; each is an alias, not a further platform.
+    """
+    tags = platforms.supported_platform_tags()
+
+    assert len(tags) == len(set(tags))

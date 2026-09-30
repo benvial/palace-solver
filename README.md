@@ -227,10 +227,13 @@ Per release:
    and, on its own runner, smoke-tests it and solves a real example under both
    launchers, then publishes to PyPI.
 
-One gap to know about before cutting a tag, and it is being closed. The
-`publish` job still downloads the `manylinux_2_28_x86_64` artifact alone, so a
-tag today uploads that one wheel while the other two are built, tested and left
-in the workflow's artifacts.
+A release is all or nothing across the platforms. The `publish` job waits for
+every matrix row, collects each row's artifact by pattern into one directory,
+and `python -m wheelbuild.release_check dist` refuses the upload unless that
+directory holds exactly one wheel per supported platform and nothing else. A
+row that failed skips the job rather than publishing a subset, because a
+release missing a platform cannot be repaired — PyPI never lets a filename be
+reused, so the only fix is another version number.
 
 Publishing is entirely CI's: the `publish` job runs only for `refs/tags/v*`,
 in the `release` environment, and uploads through PyPI's trusted publishing —

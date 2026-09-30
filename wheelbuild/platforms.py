@@ -188,6 +188,36 @@ def architecture(*, system: str | None = None, machine: str | None = None) -> st
     return known[resolved_machine]
 
 
+def supported_platform_tags() -> tuple[str, ...]:
+    """Return the platform tag of every platform this package builds a wheel for.
+
+    Derived from the same architecture table :func:`architecture` reads, so the
+    set cannot drift from what the build accepts: a platform this returns a tag
+    for is a platform the validators, the repair step and the cache namespace
+    all already know. The macOS entry is resolved against
+    :data:`MACOS_DEPLOYMENT_TARGET` rather than the environment, because the
+    question here is which platforms a *release* carries and that is the same
+    answer off Darwin as on it.
+
+    A matrix row is still the thing that builds one, so
+    ``tests/test_wheels_workflow.py`` asserts these are exactly the rows'
+    tags — a platform added to one and not the other fails the unit suite
+    rather than a release.
+
+    Returns:
+        One tag per supported platform, Linux platforms first.
+    """
+    return tuple(
+        platform_tag(
+            system=system, machine=machine, macos_version=MACOS_DEPLOYMENT_TARGET
+        )
+        for system, machines in _ARCHITECTURES.items()
+        # The table maps several spellings onto each architecture, so the
+        # canonical values are the platforms and the keys are only aliases.
+        for machine in dict.fromkeys(machines.values())
+    )
+
+
 def platform_tag(
     *,
     system: str | None = None,

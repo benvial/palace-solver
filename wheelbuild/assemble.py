@@ -44,6 +44,14 @@ PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
 #: platform is told is the one this platform is asked for.
 DELOCATE_REQUIREMENT = "delocate>=0.13.0"
 
+#: The Python and ABI tags every finished wheel carries. The payload is a
+#: compiled binary with no Python ABI, so both are forced by :func:`retag_command`
+#: rather than inherited from the interpreter that built the wheel — and they
+#: are named here because the release check reconstructs finished filenames
+#: from them.
+PYTHON_TAG = "py3"
+ABI_TAG = "none"
+
 
 class PlatformTagError(RuntimeError):
     """Raised when a built wheel does not carry the tag the platform claims."""
@@ -276,9 +284,9 @@ def retag_command(
         "wheel",
         "tags",
         "--python-tag",
-        "py3",
+        PYTHON_TAG,
         "--abi-tag",
-        "none",
+        ABI_TAG,
         *tag_arguments,
         "--remove",
         str(wheel),

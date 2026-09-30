@@ -353,6 +353,16 @@ jobs:
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
           scripts/prune-build-caches.sh "$version" "$INPUTS_HASH"
 
+  # One release carrying every platform's wheel, uploaded once. Charting
+  # decision 1 of .scratch/platform-expansion/map.md: nothing publishes until
+  # every platform is green, because a release missing a platform is not
+  # correctable -- PyPI never lets a filename be reused, so the repair is a new
+  # version number rather than a re-run.
+  #
+  # `needs: [checks, wheel]` is what enforces that. It waits for the whole
+  # matrix, and a failed row fails the `wheel` job, which skips this one: the
+  # `if` gates on the ref alone and deliberately carries no always() or
+  # !cancelled(), either of which would let a partial matrix publish a subset.
   publish:
     name: publish to PyPI
     needs: [checks, wheel]
@@ -363,15 +373,32 @@ jobs:
       # Trusted publishing: no API token stored in the repository.
       id-token: write
     steps:
-      # Still one platform, while the wheel matrix has three. The matrix uploads
-      # one artifact per row, so nothing is being overwritten -- the aarch64 and
-      # macOS wheels are simply not collected here yet, and a tag cut today
-      # would publish the x86_64 wheel alone. Downloading every artifact is the
-      # publish-side change, and it is
-      # .scratch/platform-expansion/issues/11-per-platform-artifacts-and-publish.md
-      # rather than a row's business.
+      # For wheelbuild.release_check below, which is stdlib-only and runs on the
+      # runner's preinstalled Python -- nothing is installed into the job that
+      # holds the publishing token.
+      - uses: actions/checkout@v5
+
+      # By pattern rather than by name: the matrix uploads one artifact per row
+      # named from the row, so naming them here is how this job came to collect
+      # the x86_64 wheel alone while the other two sat in the run's artifacts.
+      # merge-multiple puts all three wheels in one flat directory, which is
+      # what the upload step publishes; without it each artifact lands in a
+      # subdirectory of its own and the upload finds no wheel at all.
+      #
+      # tests/test_wheels_workflow.py derives this pattern from the upload
+      # step's own name, so a renamed artifact cannot be collected by one and
+      # missed by the other.
       - uses: actions/download-artifact@v5
         with:
-          name: palace-solver-manylinux_2_28_x86_64
+          pattern: palace-solver-*
+          merge-multiple: true
           path: dist
+
+      # Nothing between the download and the upload would otherwise notice a
+      # missing platform: matching no artifact is a warning rather than an
+      # error, and gh-action-pypi-publish uploads whatever the directory holds.
+      # This is the last point at which a release is still repairable.
+      - name: Check dist holds exactly one wheel per supported platform
+        run: python3 -m wheelbuild.release_check dist
+
       - uses: pypa/gh-action-pypi-publish@release/v1

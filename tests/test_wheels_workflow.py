@@ -11,7 +11,11 @@ from pathlib import Path
 import pytest
 import yaml
 
-from wheelbuild.platforms import MACOS_DEPLOYMENT_TARGET, platform_tag
+from wheelbuild.platforms import (
+    MACOS_DEPLOYMENT_TARGET,
+    platform_tag,
+    supported_platform_tags,
+)
 
 WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "wheels.yml"
 
@@ -270,3 +274,77 @@ def test_the_cache_key_covers_the_macos_build_driver(build_cache):
     so an edit to it changes the bytes in that platform's tree.
     """
     assert "scripts/build-macos.sh" in build_cache["with"]["key"]
+
+
+@pytest.fixture(scope="module")
+def publish(workflow):
+    return workflow["jobs"]["publish"]
+
+
+@pytest.fixture(scope="module")
+def upload(steps):
+    return next(
+        s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")
+    )
+
+
+@pytest.fixture(scope="module")
+def download(publish):
+    return next(
+        s
+        for s in publish["steps"]
+        if str(s.get("uses", "")).startswith("actions/download-artifact")
+    )
+
+
+def test_the_supported_platform_set_is_exactly_the_matrix_rows(rows):
+    """`wheelbuild.platforms` is what the release check counts wheels against,
+    and the matrix is what builds them. A platform added to one and not the
+    other publishes a release short a wheel, or fails a release that is
+    complete.
+    """
+    assert set(supported_platform_tags()) == {row["tag"] for row in rows}
+
+
+def test_publish_collects_every_row_by_pattern_not_by_name(upload, download):
+    """Naming one artifact is how the job came to collect the x86_64 wheel
+    alone. The pattern is the upload's own name with the row value wildcarded,
+    so a renamed artifact cannot be collected by one and missed by the other.
+    """
+    assert "name" not in download["with"]
+    assert download["with"]["pattern"] == upload["with"]["name"].replace(
+        "${{ matrix.tag }}", "*"
+    )
+
+
+def test_publish_merges_the_artifacts_into_one_directory(download):
+    """Without this each artifact lands in a subdirectory of its own and the
+    upload step, which publishes a flat directory, finds no wheel at all.
+    """
+    assert download["with"]["merge-multiple"] is True
+    assert download["with"]["path"] == "dist"
+
+
+def test_publish_waits_for_every_platform(publish):
+    """Charting decision 1: one release, all three wheels. A row that fails
+    fails the `wheel` job, and a dependent job with no always()/!cancelled()
+    override is then skipped -- which is the only thing standing between a
+    partial matrix and an unrepairable release.
+    """
+    assert set(publish["needs"]) == {"checks", "wheel"}
+    assert publish["if"] == "startsWith(github.ref, 'refs/tags/v')"
+
+
+def test_publish_checks_the_wheel_set_before_uploading(publish):
+    """The download step treats matching no artifact as a warning and the
+    upload step publishes whatever the directory holds, so nothing between them
+    would notice a missing platform.
+    """
+    names = [
+        str(step.get("run", "")) + str(step.get("uses", ""))
+        for step in publish["steps"]
+    ]
+    check = next(i for i, text in enumerate(names) if "release_check" in text)
+    upload = next(i for i, text in enumerate(names) if "pypi-publish" in text)
+
+    assert check < upload
