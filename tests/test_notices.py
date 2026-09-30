@@ -1,4 +1,5 @@
 import zipfile
+from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
@@ -144,7 +145,7 @@ def test_harvest_covers_the_compiler_runtime_the_repair_step_vendors(tmp_path):
     ).read_text()
 
     assert "GNU GENERAL PUBLIC LICENSE" in text
-    assert "libpciaccess (vendored from the build image)" in text
+    assert "libpciaccess (vendored from the build image where the payload" in text
     assert "GCC RUNTIME LIBRARY EXCEPTION" in text
     assert notices.GCC_SOURCE_URL in text
     assert "GCC 12.2.1" in text
@@ -232,3 +233,183 @@ def test_audit_accepts_a_library_vendored_from_the_build_image(tmp_path):
     prefix = _install_prefix(tmp_path / "install", [])
 
     assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == ["libpciaccess"]
+
+
+#: The macOS wheel's vendored payload, as delocate wrote it in run 36705373848
+#: — the first macOS wheel this project built. Names are verbatim, because the
+#: point of the fixture is that delocate does not rename what it copies.
+_MACOS_VENDORED = (
+    "libHYPRE.3.0.0.dylib",
+    "libarpack.2.1.0.dylib",
+    "libceed.dylib",
+    "libdmumps.5.7.3.2.dylib",
+    "libfmt.12.1.0.dylib",
+    "libgcc_s.1.1.dylib",
+    "libgfortran.5.dylib",
+    "libgomp.1.dylib",
+    "libgs.dylib",
+    "libmetis.dylib",
+    "libmfem.4.9.0.dylib",
+    "libmpi.12.dylib",
+    "libmpicxx.12.dylib",
+    "libmpifort.12.dylib",
+    "libmumps_common.5.7.3.2.dylib",
+    "libnlohmann_json_schema_validator.2.4.0.dylib",
+    "libopenblasp-r0.3.34.dylib",
+    "libpalace.dylib",
+    "libparmetis.dylib",
+    "libparpack.2.1.0.dylib",
+    "libpetsc.3.24.3.dylib",
+    "libpmpi.12.dylib",
+    "libpord.dylib",
+    "libquadmath.0.dylib",
+    "libscalapack.2.2.2.dylib",
+    "libscn.4.dylib",
+    "libslepc.3.24.1.dylib",
+    "libstdc++.6.dylib",
+    "libstrumpack.8.0.0.dylib",
+    "libsundials_arkode.6.5.0.dylib",
+    "libsundials_core.7.5.0.dylib",
+    "libsundials_cvodes.7.5.0.dylib",
+    "libsundials_kinsol.7.5.0.dylib",
+    "libsundials_nvecmpiplusx.7.5.0.dylib",
+    "libsundials_nvecparallel.7.5.0.dylib",
+    "libsundials_nvecserial.7.5.0.dylib",
+    "libsuperlu_dist.9.2.1.dylib",
+    "libxsmm.1.dylib",
+    "libzfp.1.0.1.dylib",
+)
+
+#: The five of them the toolchain provides rather than the superbuild.
+_MACOS_COMPILER_RUNTIME = (
+    "libgcc_s.1.1.dylib",
+    "libgfortran.5.dylib",
+    "libgomp.1.dylib",
+    "libquadmath.0.dylib",
+    "libstdc++.6.dylib",
+)
+
+
+def _macos_wheel_carrying(path: Path, vendored: Sequence[str]) -> Path:
+    """Write a wheel shaped the way delocate leaves one.
+
+    delocate bundles into a ``.dylibs`` directory *inside* the package, not a
+    ``<package>.libs`` directory beside it, and copies each library under the
+    name it already had.
+    """
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("palace_solver/__init__.py", "")
+        for name in vendored:
+            archive.writestr(f"palace_solver/.dylibs/{name}", "\xcf\xfa\xed\xfe")
+    return path
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # Mach-O puts the version before the suffix, so the whole trailing
+        # run of numeric components is the soversion.
+        ("libgfortran.5.dylib", "libgfortran"),
+        ("libgcc_s.1.1.dylib", "libgcc_s"),
+        ("libstdc++.6.dylib", "libstdc++"),
+        ("libmumps_common.5.7.3.2.dylib", "libmumps_common"),
+        (
+            "libnlohmann_json_schema_validator.2.4.0.dylib",
+            "libnlohmann_json_schema_validator",
+        ),
+        ("libpalace.dylib", "libpalace"),
+    ],
+)
+def test_library_stem_drops_the_mach_o_soversion(name, expected):
+    assert notices.library_stem(name) == expected
+
+
+def test_vendored_libraries_reads_delocates_dylibs_directory(tmp_path):
+    """auditwheel's directory is beside the package; delocate's is inside it."""
+    wheel = _macos_wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl",
+        ["libmpi.12.dylib", "libgfortran.5.dylib"],
+    )
+
+    assert notices.vendored_libraries(wheel) == ["libgfortran", "libmpi"]
+
+
+def test_audit_accounts_for_every_library_the_macos_wheel_carries(tmp_path):
+    """The whole payload of the first macOS wheel, against its install prefix."""
+    wheel = _macos_wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl",
+        _MACOS_VENDORED,
+    )
+    prefix = _install_prefix(
+        tmp_path / "install",
+        [name for name in _MACOS_VENDORED if name not in _MACOS_COMPILER_RUNTIME],
+    )
+
+    assert len(notices.audit_wheel(wheel=wheel, install_prefix=prefix)) == 39
+
+
+def test_audit_fails_on_an_openmp_runtime_the_notices_do_not_cover(tmp_path):
+    """A clang toolchain would vendor libomp, which is not the GCC runtime."""
+    wheel = _macos_wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl",
+        ["libmpi.12.dylib", "libomp.dylib"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libmpi.12.dylib"])
+
+    with pytest.raises(notices.UnattributedLibraryError, match="libomp"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def _fake_compiler(path: Path, *, version: str, vendor: str) -> Path:
+    path.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-dumpfullversion" ]; then\n'
+        f"  echo {version}\n"
+        "  exit 0\n"
+        "fi\n"
+        f'if [ "$1" = "--version" ]; then\n  echo "{vendor}"\n  exit 0\nfi\n'
+        "exit 1\n"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def test_detect_gcc_version_asks_the_compiler_the_build_used(tmp_path, monkeypatch):
+    """`gcc` on PATH is Apple clang on a macOS runner; CC names the real one."""
+    compiler = _fake_compiler(
+        tmp_path / "gcc-15",
+        version="15.3.0",
+        vendor="gcc-15 (Homebrew GCC 15.3.0) 15.3.0\n"
+        "Copyright (C) 2025 Free Software Foundation, Inc.",
+    )
+    monkeypatch.setenv("CC", str(compiler))
+
+    assert notices.detect_gcc_version() == "15.3.0"
+
+
+def test_detect_gcc_version_refuses_a_compiler_that_is_not_gcc(tmp_path, monkeypatch):
+    """Apple clang answers -dumpfullversion on some releases, with its own version."""
+    compiler = _fake_compiler(
+        tmp_path / "cc",
+        version="17.0.0",
+        vendor="Apple clang version 17.0.0 (clang-1700.0.13.3)",
+    )
+    monkeypatch.setenv("CC", str(compiler))
+
+    assert notices.detect_gcc_version() is None
+
+
+def test_audit_refuses_a_vendored_file_whose_name_it_cannot_reduce(tmp_path):
+    """Everything the repair tool put there counts, whatever it is called."""
+    path = tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("palace_solver/__init__.py", "")
+        # A zip may or may not carry directory entries; this one does, and it
+        # is not a library.
+        archive.writestr("palace_solver/.dylibs/", "")
+        archive.writestr("palace_solver/.dylibs/libmpi.12.dylib", "\xcf\xfa\xed\xfe")
+        archive.writestr("palace_solver/.dylibs/Python", "\xcf\xfa\xed\xfe")
+    prefix = _install_prefix(tmp_path / "install", ["libmpi.12.dylib"])
+
+    with pytest.raises(notices.UnattributedLibraryError, match="Python"):
+        notices.audit_wheel(wheel=path, install_prefix=prefix)

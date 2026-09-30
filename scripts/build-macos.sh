@@ -275,11 +275,10 @@ echo "==> Palace is installed in $install_prefix"
 
 echo "==> third-party notices"
 # The same harvest the Linux driver runs, over the same three source roots.
-# What it renders for the compiler runtime is still the GCC note, which is
-# correct here because this toolchain is GCC -- but the version it names comes
-# from `gcc -dumpfullversion` on PATH, which on a macOS runner is Apple clang.
-# That, and LLVM's OpenMP runtime if the toolchain choice is ever revisited, is
-# ticket 09 of the platform-expansion effort.
+# What it renders for the compiler runtime is the GCC note, which is correct
+# here because this toolchain is GCC -- libgomp and not LLVM's libomp, which
+# the audit would refuse. The release it names comes from $CC, exported above,
+# rather than from the `gcc` on PATH, which on a macOS runner is Apple clang.
 PYTHONPATH="$repo_root" python3 -m wheelbuild.notices \
   --source-root "$superbuild_dir" \
   --source-root "$mpich_source" \
