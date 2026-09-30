@@ -201,7 +201,7 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
   --prefix "$install_prefix" --check || openblas_verdict=$?
 case "$openblas_verdict" in
   0) ;;
-  1) ;;
+  6) ;;
   3)
     # make does not notice a changed TARGET, so the objects in the restored
     # source tree have to go with the install.

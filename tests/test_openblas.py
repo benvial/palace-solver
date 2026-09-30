@@ -1,4 +1,5 @@
 import platform
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,11 @@ import pytest
 from wheelbuild import openblas
 
 BUILD_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build-wheel.sh"
+MACOS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build-macos.sh"
+
+#: Every driver that branches on a `--check` verdict. They have to agree, and
+#: each holds the numbers as shell literals rather than importing them.
+DRIVERS = (BUILD_SCRIPT, MACOS_SCRIPT)
 
 
 def install_tree(tmp_path, *, system="Linux", machine=None, corename=None, stamp=True):
@@ -260,14 +266,22 @@ def test_the_build_script_asks_what_the_openblas_is_not_whether_it_exists():
     assert "libopenblas.so" not in script
 
 
-def test_the_build_script_discards_the_tree_only_for_the_stale_verdict():
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_every_driver_discards_the_tree_only_for_the_stale_verdict(driver):
     """A missing install must not cost a re-extract: on x86_64, which pins no
     baseline, that is the only failing verdict there is, and the objects in the
     tree are good.
     """
-    script = BUILD_SCRIPT.read_text()
+    script = driver.read_text()
 
-    assert f"== {openblas.CHECK_WRONG_CPU} " in script
+    assert "unpack_openblas" in _case_arm(script, openblas.CHECK_WRONG_CPU)
+    assert "unpack_openblas" not in _case_arm(script, openblas.CHECK_NO_INSTALL)
+
+
+def _case_arm(script, verdict):
+    """The body of one arm of a driver's `case "$openblas_verdict"`."""
+    start = script.index(f"  {verdict})") + len(f"  {verdict})")
+    return script[start : script.index(";;", start)]
 
 
 def test_build_arguments_disable_sve_on_darwin_arm64():
@@ -471,3 +485,75 @@ def test_a_built_install_records_what_built_it(tmp_path, monkeypatch):
     assert openblas.stamped_recipe(tmp_path) == openblas.recipe(
         openblas.build_arguments(jobs=2)
     )
+
+
+def test_no_verdict_is_an_exit_code_something_else_already_means():
+    """1 and 2 are not available to a verdict. An unhandled exception exits 1
+    and argparse exits 2 on a usage error, and a driver branching on the number
+    cannot tell either of those from a verdict it was told to act on -- which
+    for the verdict that used to hold 1 meant rebuilding in place after a
+    question that was never answered.
+    """
+    verdicts = {
+        openblas.CHECK_NO_INSTALL,
+        openblas.CHECK_WRONG_CPU,
+        openblas.CHECK_MIXED_OPENMP,
+        openblas.CHECK_CANNOT_INSPECT,
+    }
+
+    assert len(verdicts) == 4
+    assert not verdicts & {1, 2}
+
+
+def test_an_otool_that_fails_is_an_uninspectable_install(monkeypatch, tmp_path):
+    """A non-zero `otool -L` is not "nothing is installed". Reaching main as a
+    CalledProcessError it would exit 1, and a driver reading that as a verdict
+    rebuilds in place on the strength of a question that was never answered.
+    """
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+
+    def failing_otool(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["otool", "-L"], stderr="truncated")
+
+    monkeypatch.setattr(openblas.subprocess, "run", failing_otool)
+
+    with pytest.raises(openblas.InstallInspectionError):
+        openblas.linked_libraries(tmp_path / "libopenblas.dylib")
+
+
+def test_check_reports_a_failing_otool_as_uninspectable(monkeypatch, tmp_path, capsys):
+    """End to end through main: the verdict a driver acts on, not exit 1."""
+    monkeypatch.setattr(platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(platform, "machine", lambda: "arm64")
+    install_tree(tmp_path, system="Darwin", corename="ARMV8")
+    real_run = openblas.subprocess.run
+
+    def failing_otool(command, *args, **kwargs):
+        if command and command[0] == "otool":
+            raise subprocess.CalledProcessError(1, command, stderr="truncated")
+        return real_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(openblas.subprocess, "run", failing_otool)
+
+    code = openblas.main(["--check", "--prefix", str(tmp_path)])
+
+    assert code == openblas.CHECK_CANNOT_INSPECT
+    assert "otool" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("driver", DRIVERS)
+def test_every_driver_rebuilds_only_for_the_verdicts_that_say_to(driver):
+    """Neither driver may treat "not zero" as "build it": that reads an
+    unhandled exception, and every verdict a later version of this module
+    adds, as an instruction to spend 40 minutes on a rebuild that will not fix
+    it. The two drivers ask the same question, so they answer it the same way.
+    """
+    script = driver.read_text()
+
+    assert f"{openblas.CHECK_NO_INSTALL})" in script
+    assert f"{openblas.CHECK_WRONG_CPU})" in script
+    # The catch-all that makes an unrecognised verdict -- an unhandled
+    # exception's 1 included -- fatal rather than a rebuild.
+    assert "*)" in script
+    assert "not rebuilding" in script

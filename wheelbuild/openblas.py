@@ -81,9 +81,16 @@ BUILD_STAMP = Path(".openblas-build-arguments")
 #: ``--check`` verdicts, for a caller that has to do something about them.
 #: There is nothing usable installed, so build one; or there is, and it is
 #: built for the wrong CPU, which also means the source tree's objects carry
-#: the wrong ``-march`` and have to go. 2 is skipped because argparse exits
-#: with it on a usage error.
-CHECK_NO_INSTALL = 1
+#: the wrong ``-march`` and have to go.
+#:
+#: 1 and 2 are not available to a verdict, for the same reason: something else
+#: already exits with them. argparse exits 2 on a usage error, and an unhandled
+#: exception exits 1 -- and a driver branching on the number cannot tell either
+#: from a verdict it was told to act on. That is not hypothetical: this is
+#: where ``CHECK_NO_INSTALL`` used to be, so any exception escaping
+#: :func:`validate` read as "nothing is installed" and bought a rebuild in
+#: place on the strength of a question that was never answered.
+CHECK_NO_INSTALL = 6
 CHECK_WRONG_CPU = 3
 #: A third verdict, and the one no rebuild fixes: the library links both OpenMP
 #: runtimes and only a toolchain change can make it link one.
@@ -346,6 +353,15 @@ def linked_libraries(binary: Path) -> tuple[str, ...]:
         raise InstallInspectionError(
             f"otool is not installed, so nothing can say what {binary} links"
         ) from error
+    except subprocess.CalledProcessError as error:
+        # otool rejects the file -- truncated, not Mach-O, or unreadable. The
+        # same verdict as a missing otool rather than a rebuild, because what
+        # this reports is that the question could not be answered, and a
+        # rebuild decided on an unanswered question is 40 minutes spent before
+        # failing on whatever is really wrong.
+        raise InstallInspectionError(
+            f"otool could not read {binary}: {error.stderr or error}"
+        ) from error
     return parse_linked_libraries(completed.stdout)
 
 
@@ -489,8 +505,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--check",
         action="store_true",
         help="report on the install at --prefix instead of building one; exit "
-        f"{CHECK_NO_INSTALL} if there is nothing usable installed and "
+        f"{CHECK_NO_INSTALL} if there is nothing usable installed, "
         f"{CHECK_WRONG_CPU} if what is installed is built for the wrong CPU, "
+        f"{CHECK_MIXED_OPENMP} if it links both OpenMP runtimes and "
+        f"{CHECK_CANNOT_INSPECT} if the question could not be asked at all, "
         "with the reason on stdout",
     )
     args = parser.parse_args(argv)

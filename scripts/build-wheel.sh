@@ -111,16 +111,29 @@ unpack_openblas() {
 openblas_verdict=0
 PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
   --prefix "$install_prefix" --check || openblas_verdict=$?
-if (( openblas_verdict == 3 )); then
-  # `make` does not notice a changed TARGET: the objects in a restored source
-  # tree keep the -march they were compiled with, so building in place would
-  # reinstall the same wrong code. Re-extracting is the only clean that cannot
-  # leave one behind. The tarball stays, so this costs an unpack, not a
-  # download -- and only this verdict pays it, because a merely absent install
-  # has no wrongly compiled objects to discard.
-  echo "==> discarding an OpenBLAS tree configured for another CPU baseline"
-  unpack_openblas
-fi
+# Enumerated rather than "not zero", and the same case the macOS driver uses:
+# an unhandled exception exits 1 and a verdict this script predates could be
+# anything, and neither is an instruction to spend 40 minutes rebuilding a
+# library whose state was never established. tests/test_openblas.py ties these
+# numbers to the constants.
+case "$openblas_verdict" in
+  0) ;;
+  6) ;;
+  3)
+    # `make` does not notice a changed TARGET: the objects in a restored source
+    # tree keep the -march they were compiled with, so building in place would
+    # reinstall the same wrong code. Re-extracting is the only clean that cannot
+    # leave one behind. The tarball stays, so this costs an unpack, not a
+    # download -- and only this verdict pays it, because a merely absent install
+    # has no wrongly compiled objects to discard.
+    echo "==> discarding an OpenBLAS tree configured for another CPU baseline"
+    unpack_openblas
+    ;;
+  *)
+    echo "::error::OpenBLAS check returned $openblas_verdict; not rebuilding" >&2
+    exit 1
+    ;;
+esac
 if (( openblas_verdict != 0 )); then
   PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
     --source-dir "$openblas_source" \
