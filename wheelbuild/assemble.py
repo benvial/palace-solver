@@ -29,7 +29,16 @@ from wheelbuild import notices as notices_module
 from wheelbuild import platforms
 from wheelbuild._process import check_call
 
-#: PyPI's default per-file upload limit. Exceeding it needs a limit request.
+#: PyPI's default per-file upload limit, ``MAX_FILESIZE`` in
+#: ``warehouse/constants.py``: 100 *mebi*\ bytes, not 100 million, which is why
+#: this is written as a power of two. It is the limit the project has, not a
+#: constant of PyPI — a granted file-size limit request replaces it per project,
+#: capped at ``UPLOAD_LIMIT_CAP`` of 1 GiB — so if one is ever granted for
+#: palace-solver this number moves with it. None has been asked for: at
+#: 0.18.1.post1 the largest of the three wheels is the x86_64 one at 68.7 MiB,
+#: which is 69% of this, and the smallest is macOS at 55.5 MiB. The other limit
+#: is the 10 GiB per-*project* quota, which no build can check because it counts
+#: every file of every version; see the wheel size budget in ``CONTEXT.md``.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
 
 #: The delocate the macOS driver installs, pinned at the floor rather than the
@@ -55,6 +64,10 @@ ABI_TAG = "none"
 
 class PlatformTagError(RuntimeError):
     """Raised when a built wheel does not carry the tag the platform claims."""
+
+
+class WheelTooLargeError(RuntimeError):
+    """Raised when a built wheel is larger than PyPI would accept."""
 
 
 @dataclass(frozen=True)
@@ -84,6 +97,45 @@ class SizeReport:
 def size_report(wheel: Path) -> SizeReport:
     """Measure ``wheel`` against PyPI's upload limit."""
     return SizeReport(path=wheel, size_bytes=wheel.stat().st_size)
+
+
+def verify_size(wheel: Path) -> SizeReport:
+    """Refuse a wheel PyPI would reject on size.
+
+    A refusal here costs one build. The same wheel discovered at upload costs a
+    version number: the release is one unrecoverable event across three
+    filenames, the publish step uploads them in a fixed order, and a rejected
+    file leaves a tag that no re-run can complete — see
+    :mod:`wheelbuild.release_check`. So the measurement that was only reported
+    stops the build instead, on every row and on every pull request, which is
+    long before a tag exists.
+
+    The remedy is a judgement call, which is why this reports rather than
+    chooses: either the payload shrinks, or PyPI is asked to raise the limit for
+    this project, and only a human can decide that a release should wait on an
+    issue in ``pypi/support``.
+
+    Args:
+        wheel: The finished wheel.
+
+    Returns:
+        The size report, so a caller that wants to print it need not stat twice.
+
+    Raises:
+        WheelTooLargeError: If the wheel is over the limit.
+    """
+    report = size_report(wheel)
+    if report.exceeds_pypi_limit:
+        limit = PYPI_SIZE_LIMIT_BYTES // (1024 * 1024)
+        raise WheelTooLargeError(
+            f"{report.text}. PyPI would reject this file, and a release that "
+            "gets that far cannot be repaired under the same version number. "
+            "Either shrink the payload, or raise the project's limit with a "
+            f"file-size limit request at https://pypi.org/help/#file-size-limit "
+            f"and move PYPI_SIZE_LIMIT_BYTES off the {limit} MB default to "
+            "match what was granted."
+        )
+    return report
 
 
 def find_palace_binary(install_prefix: Path) -> Path:
@@ -411,6 +463,7 @@ def build(
         UnattributedLibraryError: If the repaired wheel carries a library no
             license notice in it accounts for.
         PlatformTagError: If the finished wheel is tagged for another platform.
+        WheelTooLargeError: If the finished wheel is over PyPI's upload limit.
     """
     package_dir = project_dir / "palace_solver"
     stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
@@ -460,7 +513,7 @@ def build(
     # ended up carrying is only knowable here.
     vendored = notices_module.audit_wheel(wheel=final, install_prefix=install_prefix)
     print(f"vendored libraries: {', '.join(vendored)}", flush=True)
-    print(size_report(final).text, flush=True)
+    print(verify_size(final).text, flush=True)
     return final
 
 

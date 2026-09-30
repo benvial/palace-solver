@@ -226,6 +226,19 @@ def test_the_wheel_steps_run_for_every_row(named_step, name):
     assert "if" not in named_step(name)
 
 
+def test_the_size_step_fails_on_a_wheel_pypi_would_reject(named_step):
+    """The step writes the job summary, so it is the size verdict a human
+    reads -- and a step that prints OVER and exits 0 is how an oversized wheel
+    reaches a tag that cannot be taken back. The build already refuses one
+    (`wheelbuild.assemble.verify_size`); this is the same refusal on the
+    directory the artifact is uploaded from.
+    """
+    run = named_step("Report wheel size")["run"]
+
+    assert "sys.exit(0)" not in run
+    assert "exceeds_pypi_limit" in run
+
+
 def test_the_artifact_is_uploaded_for_every_row(steps):
     """One artifact per row, whatever the publish job currently collects: a gate
     here would drop a platform silently, since an artifact that was never

@@ -360,3 +360,25 @@ def test_build_environment_follows_the_floor_the_build_exported(monkeypatch):
     environment = assemble.build_environment(system="Darwin", machine="arm64")
 
     assert environment == {"_PYTHON_HOST_PLATFORM": "macosx-16.0-arm64"}
+
+
+def test_verify_size_refuses_a_wheel_over_the_pypi_upload_limit(tmp_path):
+    wheel = tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl"
+    wheel.write_bytes(b"0" * (assemble.PYPI_SIZE_LIMIT_BYTES + 1))
+
+    with pytest.raises(assemble.WheelTooLargeError) as excinfo:
+        assemble.verify_size(wheel)
+
+    message = str(excinfo.value)
+    assert wheel.name in message
+    # The build stops here so a human can choose between shrinking the payload
+    # and asking PyPI to raise the limit; the message has to name the second
+    # option, because nothing else in the repository does.
+    assert "limit request" in message
+
+
+def test_verify_size_returns_the_report_for_a_wheel_under_the_limit(tmp_path):
+    wheel = tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl"
+    wheel.write_bytes(b"0" * 1024)
+
+    assert assemble.verify_size(wheel).size_bytes == 1024
