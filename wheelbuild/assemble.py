@@ -337,6 +337,50 @@ def verify_platform_tag(wheel: Path, *, expected: str | None = None) -> None:
         )
 
 
+def build_environment(
+    *, system: str | None = None, machine: str | None = None
+) -> dict[str, str]:
+    """Return the environment variables the wheel build needs, per platform.
+
+    Nothing is needed on Linux: the raw wheel is tagged ``linux_<arch>`` and
+    ``auditwheel repair --plat`` replaces that with the manylinux tag.
+
+    On Darwin one variable is load-bearing. ``actions/setup-python`` installs a
+    *universal2* CPython, so ``sysconfig.get_platform()`` reports
+    ``macosx-<floor>-universal2`` and ``python -m build`` stamps that onto the
+    raw wheel although the payload is arm64 only. ``delocate`` reads the
+    incoming tag as the set of architectures the payload must have -- the same
+    property that lets it derive the floor from the payload -- and fails with
+    "Failed to find any binary with the required architecture: 'x86_64'".
+    ``_PYTHON_HOST_PLATFORM`` is what ``sysconfig.get_platform()`` returns
+    verbatim when set, so the raw wheel names the architecture that was built.
+
+    The value is derived from :func:`wheelbuild.platforms.platform_tag` rather
+    than spelled out, so the floor cannot disagree between the raw wheel and
+    the finished one; the two differ only in how they punctuate it, since
+    ``sysconfig`` dots the version and separates with dashes where a wheel tag
+    joins everything with underscores.
+
+    Args:
+        system: ``platform.system()`` value; defaults to the running platform.
+        machine: ``platform.machine()`` value; defaults to the running machine.
+
+    Returns:
+        Extra environment variables, layered over the build's own environment.
+
+    Raises:
+        platforms.UnsupportedPlatformError: For an unsupported platform, or on
+            Darwin when the build exported no ``MACOSX_DEPLOYMENT_TARGET``.
+    """
+    resolved = system or platform.system()
+    if resolved != "Darwin":
+        return {}
+    prefix, major, minor, architecture = platforms.platform_tag(
+        system=resolved, machine=machine
+    ).split("_", 3)
+    return {"_PYTHON_HOST_PLATFORM": f"{prefix}-{major}.{minor}-{architecture}"}
+
+
 def build(
     *,
     project_dir: Path,
@@ -367,7 +411,16 @@ def build(
     raw_dir = output_dir / "raw"
     shutil.rmtree(raw_dir, ignore_errors=True)
     check_call(
-        ["python", "-m", "build", "--wheel", "--outdir", str(raw_dir), str(project_dir)]
+        [
+            "python",
+            "-m",
+            "build",
+            "--wheel",
+            "--outdir",
+            str(raw_dir),
+            str(project_dir),
+        ],
+        env=build_environment(),
     )
     raw_wheel = _single_wheel(raw_dir)
 

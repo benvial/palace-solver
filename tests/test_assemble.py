@@ -317,3 +317,46 @@ def test_verify_platform_tag_refuses_a_wheel_claiming_several_platforms(tmp_path
 
     with pytest.raises(assemble.PlatformTagError):
         assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_build_environment_adds_nothing_on_linux():
+    """The raw wheel's tag is replaced by `auditwheel repair --plat` anyway."""
+    assert assemble.build_environment(system="Linux", machine="x86_64") == {}
+
+
+def test_build_environment_pins_the_host_platform_on_darwin(monkeypatch):
+    """A universal2 interpreter would otherwise tag an arm64-only payload fat.
+
+    GitHub's macOS runners install a universal2 CPython, so
+    ``sysconfig.get_platform()`` reports ``macosx-15.0-universal2`` and the raw
+    wheel claims both architectures. delocate then reads that tag as the
+    architectures the payload must have and fails on the missing x86_64 half.
+    """
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "15.0")
+
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    assert environment == {"_PYTHON_HOST_PLATFORM": "macosx-15.0-arm64"}
+
+
+def test_the_host_platform_names_the_same_platform_as_the_wheel_tag(monkeypatch):
+    """One derivation, two spellings: sysconfig dots what a wheel tag joins."""
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "15.0")
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    spelled = environment["_PYTHON_HOST_PLATFORM"].replace("-", "_").replace(".", "_")
+
+    assert spelled == platforms.platform_tag(system="Darwin", machine="arm64")
+
+
+def test_build_environment_follows_the_floor_the_build_exported(monkeypatch):
+    """The host platform is not read off the constant: it tracks the build.
+
+    A raw wheel tagged for a floor the build did not compile to is the same
+    mistake as guessing the tag, one step earlier.
+    """
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "16.0")
+
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    assert environment == {"_PYTHON_HOST_PLATFORM": "macosx-16.0-arm64"}
