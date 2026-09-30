@@ -17,6 +17,14 @@ an install name is acceptable when it is loader-relative (``@loader_path``,
 or when it names a library macOS itself ships. Anything else is a dependency the
 wheel cannot satisfy, whether or not it happens to resolve on this machine.
 
+One wrinkle belongs to ``otool -L`` rather than to the payload: asked about a
+dylib it prints that dylib's *own* install id first, and ``delocate`` rewrites
+the id of every library it copies to a deliberately unusable ``/DLC/`` path,
+because dependents reach the bundled copy through ``@loader_path`` and nothing
+should name it absolutely. The id is not a dependency, so it is read separately
+with ``otool -D`` and dropped -- by value rather than by position, so a binary
+that really does name another library's bundled copy is still reported.
+
 Used by ``scripts/smoke-test.sh``, which has one payload and two platforms.
 """
 
@@ -45,6 +53,11 @@ _LOADER_RELATIVE_PREFIXES = ("@loader_path", "@rpath", "@executable_path")
 #: unsupported in one place and the two halves cannot disagree about which
 #: platforms are known.
 _TOOLS = {"Linux": ("ldd",), "Darwin": ("otool", "-L")}
+
+#: The install-id lister, where the platform has the concept. ELF has no
+#: equivalent question: a soname is not printed by ``ldd`` and never appears in
+#: its own dependency list, so Linux needs no entry and gets none.
+_IDENTITY_TOOLS = {"Darwin": ("otool", "-D")}
 
 
 @dataclass(frozen=True)
@@ -100,13 +113,55 @@ def dependency_tool(*, system: str | None = None) -> list[str]:
     return list(tool)
 
 
-def parse(output: str, *, binary: Path, system: str | None = None) -> LinkReport:
+def identity_tool(*, system: str | None = None) -> list[str] | None:
+    """Return the command that prints a binary's own install id, if any.
+
+    Args:
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Returns:
+        The command, to which the binary is appended, or None on a platform
+        where a binary's dependency list cannot contain its own name.
+    """
+    tool = _IDENTITY_TOOLS.get(system or platform.system())
+    return None if tool is None else list(tool)
+
+
+def parse_identity(output: str) -> str | None:
+    """Return the install id ``otool -D`` printed, or None for a non-dylib.
+
+    ``otool -D`` prints the file it was asked about, then the id on its own
+    line. An executable has no id, so the header is all there is.
+
+    Args:
+        output: Standard output of :func:`identity_tool`.
+
+    Returns:
+        The install id, or None.
+    """
+    for line in output.splitlines()[1:]:
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def parse(
+    output: str,
+    *,
+    binary: Path,
+    system: str | None = None,
+    identity: str | None = None,
+) -> LinkReport:
     """Read the dependency listing one platform's tool produced.
 
     Args:
         output: Standard output of :func:`dependency_tool`.
         binary: The binary it was run on, for the report.
         system: ``platform.system()`` value; defaults to the running platform.
+        identity: The binary's own install id, from :func:`parse_identity`,
+            which ``otool -L`` lists among the dependencies although it is not
+            one.
 
     Returns:
         The dependencies found and those the wheel cannot satisfy.
@@ -121,7 +176,7 @@ def parse(output: str, *, binary: Path, system: str | None = None) -> LinkReport
         raise platforms_module.UnsupportedPlatformError(
             f"no shared library lister for {resolved}"
         )
-    dependencies, unsatisfied = reader(output)
+    dependencies, unsatisfied = reader(output, identity)
     return LinkReport(
         binary=binary,
         dependencies=tuple(dependencies),
@@ -129,8 +184,14 @@ def parse(output: str, *, binary: Path, system: str | None = None) -> LinkReport
     )
 
 
-def _parse_ldd(output: str) -> tuple[list[str], list[str]]:
-    """Return ``ldd``'s dependency names, and those it reported as not found."""
+def _parse_ldd(
+    output: str, _identity: str | None = None
+) -> tuple[list[str], list[str]]:
+    """Return ``ldd``'s dependency names, and those it reported as not found.
+
+    The install id is accepted and ignored: ELF has none in this listing, and
+    the two readers share one signature so :func:`parse` needs no branch.
+    """
     dependencies: list[str] = []
     unsatisfied: list[str] = []
     for line in output.splitlines():
@@ -150,11 +211,15 @@ def _parse_ldd(output: str) -> tuple[list[str], list[str]]:
     return dependencies, unsatisfied
 
 
-def _parse_otool(output: str) -> tuple[list[str], list[str]]:
+def _parse_otool(
+    output: str, identity: str | None = None
+) -> tuple[list[str], list[str]]:
     """Return the install names ``otool -L`` printed, and those that escape.
 
     The first line is the file otool was asked about, printed unindented; every
-    dependency line is indented by a tab.
+    dependency line is indented by a tab. When the file is a dylib the first of
+    those is its own install id, which ``identity`` names and which is dropped
+    -- it is what the file *is*, not something it needs.
     """
     dependencies: list[str] = []
     unsatisfied: list[str] = []
@@ -162,7 +227,7 @@ def _parse_otool(output: str) -> tuple[list[str], list[str]]:
         if not line.startswith(("\t", " ")):
             continue
         name = line.strip().split(" ", maxsplit=1)[0]
-        if not name:
+        if not name or name == identity:
             continue
         dependencies.append(name)
         if not _travels_with_the_wheel(name):
@@ -194,12 +259,26 @@ def inspect_binary(binary: Path, *, system: str | None = None) -> LinkReport:
         platforms_module.UnsupportedPlatformError: For a platform with no tool
             here.
     """
-    command = [*dependency_tool(system=system), str(binary)]
-    # Not check=True: ldd exits non-zero on a binary it could not fully resolve,
-    # which is the case being diagnosed rather than a reason to stop before
-    # reporting it.
-    completed = subprocess.run(command, capture_output=True, text=True, check=False)
-    return parse(completed.stdout, binary=binary, system=system)
+    identity = None
+    id_command = identity_tool(system=system)
+    if id_command is not None:
+        identity = parse_identity(_run([*id_command, str(binary)]))
+    return parse(
+        _run([*dependency_tool(system=system), str(binary)]),
+        binary=binary,
+        system=system,
+        identity=identity,
+    )
+
+
+def _run(command: list[str]) -> str:
+    """Return a lister's standard output, whatever its exit status.
+
+    Not ``check=True``: ``ldd`` exits non-zero on a binary it could not fully
+    resolve, which is the case being diagnosed rather than a reason to stop
+    before reporting it.
+    """
+    return subprocess.run(command, capture_output=True, text=True, check=False).stdout
 
 
 def main(argv: Sequence[str] | None = None) -> int:

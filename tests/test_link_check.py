@@ -35,6 +35,23 @@ OTOOL_UNREPAIRED = """\
 """
 
 
+OTOOL_VENDORED_LIBRARY = """\
+/venv/lib/python3.13/site-packages/palace_solver/.dylibs/libpalace.dylib:
+\t/DLC/palace_solver/.dylibs/libpalace.dylib (compatibility version 0.0.0)
+\t@loader_path/libmpi.12.dylib (compatibility version 0.0.0)
+\t/usr/lib/libSystem.B.dylib (compatibility version 1.0.0, current version 1351.0)
+"""
+
+OTOOL_IDENTITY = """\
+/venv/lib/python3.13/site-packages/palace_solver/.dylibs/libpalace.dylib:
+/DLC/palace_solver/.dylibs/libpalace.dylib
+"""
+
+OTOOL_NO_IDENTITY = """\
+/venv/lib/python3.13/site-packages/palace_solver/bin/palace-real:
+"""
+
+
 def test_the_tool_is_the_platforms_own():
     assert link_check.dependency_tool(system="Linux") == ["ldd"]
     assert link_check.dependency_tool(system="Darwin") == ["otool", "-L"]
@@ -172,3 +189,59 @@ def test_an_absent_path_is_a_failure_rather_than_nothing_to_do(tmp_path):
     """
     with pytest.raises(FileNotFoundError):
         link_check.main([str(tmp_path / "dylibs-that-were-never-created")])
+
+
+def test_a_dylibs_own_install_id_is_not_one_of_its_dependencies(tmp_path):
+    """`otool -L` prints a dylib's own LC_ID_DYLIB as its first entry.
+
+    delocate rewrites the id of every library it copies to a deliberately
+    unusable `/DLC/` path, since dependents reach it through `@loader_path` and
+    nothing should name the bundled copy absolutely. Read as a dependency it
+    fails every test this module applies, which failed the macOS smoke test on
+    all 39 vendored libraries at once.
+    """
+    report = link_check.parse(
+        OTOOL_VENDORED_LIBRARY,
+        binary=tmp_path / "libpalace.dylib",
+        system="Darwin",
+        identity="/DLC/palace_solver/.dylibs/libpalace.dylib",
+    )
+
+    assert report.unsatisfied == ()
+    assert report.dependencies == (
+        "@loader_path/libmpi.12.dylib",
+        "/usr/lib/libSystem.B.dylib",
+    )
+
+
+def test_an_install_id_is_still_reported_when_it_is_not_the_files_own(tmp_path):
+    """Only the file's own id is dropped, not every `/DLC/` path.
+
+    A binary naming another library's bundled copy absolutely is exactly the
+    unsatisfiable dependency this check exists to find.
+    """
+    report = link_check.parse(
+        OTOOL_VENDORED_LIBRARY,
+        binary=tmp_path / "libpalace.dylib",
+        system="Darwin",
+        identity="/DLC/palace_solver/.dylibs/libsomethingelse.dylib",
+    )
+
+    assert report.unsatisfied == ("/DLC/palace_solver/.dylibs/libpalace.dylib",)
+
+
+def test_the_identity_tool_is_asked_only_on_darwin():
+    assert link_check.identity_tool(system="Darwin") == ["otool", "-D"]
+    assert link_check.identity_tool(system="Linux") is None
+
+
+def test_parse_identity_reads_the_id_otool_printed():
+    assert (
+        link_check.parse_identity(OTOOL_IDENTITY)
+        == "/DLC/palace_solver/.dylibs/libpalace.dylib"
+    )
+
+
+def test_parse_identity_is_none_for_a_file_that_is_not_a_dylib():
+    """`otool -D` prints the header alone for an executable, which has no id."""
+    assert link_check.parse_identity(OTOOL_NO_IDENTITY) is None
