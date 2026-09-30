@@ -286,10 +286,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     Every binary is reported before anything fails, because one unsatisfied
     dependency in the process manager and one in the solver are different
-    diagnoses and a run that stops at the first hides the second.
-
-    Raises:
-        FileNotFoundError: If an argument is neither a file nor a directory.
+    diagnoses and a run that stops at the first hides the second. That includes
+    an argument that names nothing: the smoke test passes the payload's ``bin``
+    directory and the vendored-library directory in one invocation, so
+    resolving the arguments up front threw away the whole report from the one
+    that existed in order to complain about the one that did not. An absent
+    path is therefore a finding reported at the end, alongside the unsatisfied
+    install names, rather than a traceback before the first listing.
     """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -305,14 +308,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     failed = False
-    for binary in _expand(args.binaries):
-        report = inspect_binary(binary)
-        print(report.text, flush=True)
-        if report.unsatisfied:
-            failed = True
-        if args.require_mpi and not report.links_mpi:
-            print(f"ERROR: {binary.name} links no MPI library", flush=True)
-            failed = True
+    missing: list[Path] = []
+    for path in args.binaries:
+        # One argument at a time, so an absent one costs only its own report.
+        try:
+            binaries = _expand([path])
+        except FileNotFoundError:
+            missing.append(path)
+            continue
+        for binary in binaries:
+            report = inspect_binary(binary)
+            print(report.text, flush=True)
+            if report.unsatisfied:
+                failed = True
+            if args.require_mpi and not report.links_mpi:
+                print(f"ERROR: {binary.name} links no MPI library", flush=True)
+                failed = True
+    # After the listings rather than among them: the absence is a finding about
+    # the repair step, and the listings are the evidence a reader wants first.
+    for path in missing:
+        print(f"ERROR: nothing to inspect at {path}", flush=True)
+        failed = True
     return 1 if failed else 0
 
 

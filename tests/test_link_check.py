@@ -182,13 +182,32 @@ def test_a_directory_with_no_binaries_inspects_nothing(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_an_absent_path_is_a_failure_rather_than_nothing_to_do(tmp_path):
+def test_an_absent_path_is_a_failure_rather_than_nothing_to_do(tmp_path, capsys):
     """The smoke test names the directory the repair tool should have filled, so
     its absence is the finding — and a missing path handed to the lister would be
     reported as a binary with no dependencies, which reads as a pass.
     """
-    with pytest.raises(FileNotFoundError):
-        link_check.main([str(tmp_path / "dylibs-that-were-never-created")])
+    assert link_check.main([str(tmp_path / "dylibs-that-were-never-created")]) == 1
+    assert "dylibs-that-were-never-created" in capsys.readouterr().out
+
+
+def test_every_binary_is_reported_before_an_absent_path_fails(tmp_path, capsys):
+    """An absent vendor directory and an unsatisfied install name are different
+    diagnoses, and the absent directory is named second by the smoke test. A
+    run that resolved the arguments before listing anything threw away the
+    evidence from the one it could read — which is the whole output on the
+    platform this check exists for.
+    """
+    present = tmp_path / "bin"
+    present.mkdir()
+    (present / "palace-real").write_bytes(b"\x7fELF\x02\x01\x01\x00rest")
+
+    code = link_check.main([str(present), str(tmp_path / "absent")])
+
+    output = capsys.readouterr().out
+    assert code == 1
+    assert "palace-real" in output
+    assert "absent" in output
 
 
 def test_a_dylibs_own_install_id_is_not_one_of_its_dependencies(tmp_path):
