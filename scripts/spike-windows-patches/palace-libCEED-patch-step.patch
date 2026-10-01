@@ -4,7 +4,7 @@
    PREFIX            ${CMAKE_BINARY_DIR}/extern/libCEED-cmake
    BUILD_IN_SOURCE   TRUE
    UPDATE_COMMAND    ""
-+  PATCH_COMMAND     git apply "${CMAKE_SOURCE_DIR}/extern/patch/libCEED/patch_posix-memalign.diff"
++  PATCH_COMMAND     git apply "${CMAKE_SOURCE_DIR}/extern/patch/libCEED/patch_windows.diff"
    CONFIGURE_COMMAND ""
    BUILD_COMMAND     ""
    INSTALL_COMMAND   ${CMAKE_MAKE_PROGRAM} ${LIBCEED_OPTIONS} install

@@ -131,11 +131,12 @@ source)
     git -C "$source_dir" tag "v$palace_version"
   fi
   # PATCH: Palace's own sources. palace-memoryreporting is the one POSIX-only
-  # file ticket 02 found; palace-<dep>-patch-step wires a dependency patch
-  # (<dep>-*.diff, copied into extern/patch/<dep>/) into that dependency's
-  # ExternalProject, the way upstream already patches MFEM or MUMPS.
-  # <Dep>-<name>.diff lands as extern/patch/<Dep>/patch_<name>.diff; <Dep> is
-  # the dependency's directory name under the superbuild's extern/.
+  # file ticket 02 found; palace-<Dep>-patch-step wires <Dep>-<name>.diff
+  # (copied to extern/patch/<Dep>/patch_<name>.diff) into that dependency's
+  # ExternalProject, the way upstream already patches MFEM or MUMPS. The tree
+  # is reset to the release tarball first, so an edited patch re-applies.
+  git -C "$source_dir" reset --quiet --hard "v$palace_version"
+  git -C "$source_dir" clean --quiet -fd
   for diff in "$repo_root"/scripts/spike-windows-patches/*.diff; do
     base="${diff##*/}"
     dep="${base%%-*}"
@@ -143,21 +144,21 @@ source)
     cp "$diff" "$source_dir/extern/patch/$dep/patch_${base#*-}"
   done
   for patch in "$repo_root"/scripts/spike-windows-patches/palace-*.patch; do
-    if git -C "$source_dir" apply --reverse --check "$patch" 2>/dev/null; then
-      echo "already applied: $(basename "$patch")"
-    elif git -C "$source_dir" apply --check "$patch"; then
-      git -C "$source_dir" apply "$patch"
-      echo "applied $(basename "$patch")"
-      # A cached checkout of the dependency predates its new patch step.
-      dep="${patch##*/palace-}"
-      dep="${dep%-patch-step.patch}"
-      if [[ "$dep" != "${patch##*/palace-}" ]]; then
-        rm -rf "$superbuild_dir/extern/$dep" "$superbuild_dir/extern/$dep-cmake"
-        echo "discarded the cached $dep checkout"
-      fi
-    else
-      echo "ERROR: $(basename "$patch") neither applies nor is applied" >&2
-      exit 1
+    git -C "$source_dir" apply "$patch"
+    echo "applied $(basename "$patch")"
+  done
+  # A cached dependency checkout was patched with whatever its diffs were
+  # then; discard it when they changed, so the patch step runs on a clean one.
+  mkdir -p "$superbuild_dir/extern"
+  for step in "$repo_root"/scripts/spike-windows-patches/palace-*-patch-step.patch; do
+    dep="${step##*/palace-}"
+    dep="${dep%-patch-step.patch}"
+    digest="$(cat "$step" "$repo_root"/scripts/spike-windows-patches/"$dep"-*.diff | sha256sum | cut -c1-16)"
+    stamp="$superbuild_dir/extern/.spike-patches-$dep"
+    if [[ "$(cat "$stamp" 2>/dev/null)" != "$digest" ]]; then
+      rm -rf "$superbuild_dir/extern/$dep" "$superbuild_dir/extern/$dep-cmake"
+      echo "$digest" >"$stamp"
+      echo "patches for $dep changed: discarded its cached checkout"
     fi
   done
   ;;
@@ -196,12 +197,13 @@ print("\n".join(FEATURE_FLAGS))')
 
 target)
   target="${2:?usage: spike-windows-build.sh target TARGET}"
-  (cd "$superbuild_dir" && make -j"$jobs" "$target")
+  # -k: report every failing object in one run, not just the first.
+  (cd "$superbuild_dir" && make -k -j"$jobs" "$target")
   ccache --show-stats || true
   ;;
 
 superbuild)
-  (cd "$superbuild_dir" && make -j"$jobs")
+  (cd "$superbuild_dir" && make -k -j"$jobs")
   ccache --show-stats || true
   ;;
 

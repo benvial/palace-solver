@@ -93,3 +93,16 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
 - **36923058833.** The configure stage exited silently: the new NMake
   cleanup's `grep` found nothing, returned 1, and `pipefail` ended the
   script. A spike bug. Fixed.
+- **36923522364.** libCEED compiled with patch 3, including the XSMM
+  backends. GCC warns that the weak-symbol visibility attribute is ignored on
+  PE. libCEED then failed writing `ceed.pc`: its rule is
+  `sed -e "s:%prefix%:$(prefix):"`, and the colon in `D:/b/install` ends the
+  expression early. The fix changes the delimiter to `|`. It goes into the
+  same libCEED diff, now `libCEED-windows.diff`, so it is still patch 3.
+  STRUMPACK got past `MPIWrapper.hpp` and failed in `GMResMPI.cpp`:
+  `std::max(n, 1ul)` mixes `size_t` (`unsigned long long` on Windows) with
+  `unsigned long`. That is the only such literal in STRUMPACK's sources. The
+  fix goes into patch 4. Spike changes: build stages use `make -k`, so one
+  run reports every failing object, and the source stage resets Palace's tree
+  and re-patches each run. A cached dependency checkout is discarded
+  whenever its diffs change.
