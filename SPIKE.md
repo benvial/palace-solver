@@ -90,3 +90,6 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     that specialization (`MPI_UNSIGNED_LONG_LONG`, which MS-MPI's `mpi.h`
     defines). It is harmless on LP64, where the two types are distinct.
   Patch count: 4, all patchable. The spike has found nothing structural so far.
+- **36923058833.** The configure stage exited silently: the new NMake
+  cleanup's `grep` found nothing, returned 1, and `pipefail` ended the
+  script. A spike bug. Fixed.

@@ -177,7 +177,7 @@ print("\n".join(FEATURE_FLAGS))')
     | while read -r cache; do
         echo "discarding NMake-configured $(dirname "$cache")"
         rm -rf "$cache" "$(dirname "$cache")/CMakeFiles"
-      done
+      done || true  # grep finding nothing is the normal case
   # DEVIATION: the generator. Palace runs `${CMAKE_MAKE_PROGRAM} VAR=value
   # install` for libCEED, GSLIB and LIBXSMM, which needs GNU make and sh.
   # No MPI_HOME: MS-MPI comes from MSYS2's mingw-w64-msmpi (headers, import
