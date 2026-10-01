@@ -1,0 +1,2 @@
+scripts/spike-windows-patches/* -text
+*.sh text eol=lf

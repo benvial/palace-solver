@@ -59,3 +59,18 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     never configured: Palace configures them with a bare
     `${CMAKE_COMMAND} <SOURCE_DIR>`, so CMake fell back to NMake. Fixed in
     the driver by exporting `CMAKE_GENERATOR="MSYS Makefiles"`. Not a patch.
+- **36920388161.** The probe settled the slow OpenBLAS compile: a
+  translation unit holding only `#include <windows.h>` takes 0.78 s on this
+  runner, and OpenBLAS's `common.h` includes it in every object. That is
+  most of the ~1.3 s per object. The cost comes from OpenBLAS's sources,
+  not the toolchain, so the remedy is caching the OpenBLAS install. Neither
+  fix from the previous run took effect, both because of bugs in the spike:
+  - The patches were never applied, and the driver reported them as
+    "already applied (or stale)". A plain `git apply` passes locally, so the
+    likely cause is CRLF from the Windows checkout. Fixed with
+    `.gitattributes` (`-text` on the patches). The driver now fails loudly
+    when a patch neither applies nor is already applied. **Correction:** the
+    `memoryreporting` patch was not applied in run 36917961846 either.
+  - METIS, ZFP and ScaLAPACK still reported NMake: their build trees had
+    cached NMake from the failed configure. The configure stage now discards
+    any sub-project cache that recorded NMake.

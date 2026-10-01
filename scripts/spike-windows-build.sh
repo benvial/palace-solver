@@ -139,7 +139,9 @@ source)
     cp "$diff" "$source_dir/extern/patch/libxsmm/patch_${diff##*/libxsmm-}"
   done
   for patch in "$repo_root"/scripts/spike-windows-patches/palace-*.patch; do
-    if git -C "$source_dir" apply --check "$patch" 2>/dev/null; then
+    if git -C "$source_dir" apply --reverse --check "$patch" 2>/dev/null; then
+      echo "already applied: $(basename "$patch")"
+    elif git -C "$source_dir" apply --check "$patch"; then
       git -C "$source_dir" apply "$patch"
       echo "applied $(basename "$patch")"
       # A cached checkout of the dependency predates its new patch step.
@@ -150,7 +152,8 @@ source)
         echo "discarded the cached $dep checkout"
       fi
     else
-      echo "already applied (or stale): $(basename "$patch")"
+      echo "ERROR: $(basename "$patch") neither applies nor is applied" >&2
+      exit 1
     fi
   done
   ;;
@@ -164,6 +167,13 @@ print("\n".join(FEATURE_FLAGS))')
   features=("${features[@]/-DBUILD_SHARED_LIBS=ON/-DBUILD_SHARED_LIBS=OFF}")
   export OPENBLAS_DIR="$(win "$install_prefix")"
   mkdir -p "$superbuild_dir"
+  # A sub-project configured before CMAKE_GENERATOR was exported cached NMake
+  # as its generator, and CMake refuses to switch an existing build tree.
+  grep -l 'CMAKE_GENERATOR:INTERNAL=NMake' -r "$superbuild_dir/extern" --include=CMakeCache.txt 2>/dev/null \
+    | while read -r cache; do
+        echo "discarding NMake-configured $(dirname "$cache")"
+        rm -rf "$cache" "$(dirname "$cache")/CMakeFiles"
+      done
   # DEVIATION: the generator. Palace runs `${CMAKE_MAKE_PROGRAM} VAR=value
   # install` for libCEED, GSLIB and LIBXSMM, which needs GNU make and sh.
   # No MPI_HOME: MS-MPI comes from MSYS2's mingw-w64-msmpi (headers, import
