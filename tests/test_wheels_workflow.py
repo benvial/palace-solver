@@ -1,0 +1,564 @@
+"""Facts about the wheel matrix that are cheaper to assert than to run.
+
+The wheel job takes 30-60 minutes per platform, so a mistyped row is an
+expensive way to find out. These are the properties that hold for every row and
+that a second platform made possible to get wrong.
+"""
+
+import re
+import tomllib
+from pathlib import Path
+
+import pytest
+import yaml
+
+from wheelbuild.platforms import (
+    MACOS_DEPLOYMENT_TARGET,
+    platform_tag,
+    supported_platform_tags,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "wheels.yml"
+
+
+def _step_index(job, needle):
+    """Where a step naming ``needle`` sits in ``job``'s step list.
+
+    Both publishing jobs are checked for the order of the same two steps, and
+    the thing that identifies a step is either what it runs or what it uses, so
+    the two are searched together.
+
+    Args:
+        job: A parsed workflow job.
+        needle: Substring of the step's ``run`` or ``uses``.
+
+    Returns:
+        The index of the first matching step.
+    """
+    return next(
+        index
+        for index, step in enumerate(job["steps"])
+        if needle in str(step.get("run", "")) + str(step.get("uses", ""))
+    )
+
+
+def _publish_step(job):
+    """The step in ``job`` that uploads to an index."""
+    return next(
+        step for step in job["steps"] if "pypi-publish" in str(step.get("uses", ""))
+    )
+
+
+@pytest.fixture(scope="module")
+def workflow():
+    return yaml.safe_load(WORKFLOW.read_text())
+
+
+@pytest.fixture(scope="module")
+def rows(workflow):
+    return workflow["jobs"]["wheel"]["strategy"]["matrix"]["include"]
+
+
+@pytest.fixture(scope="module")
+def steps(workflow):
+    return workflow["jobs"]["wheel"]["steps"]
+
+
+@pytest.fixture(scope="module")
+def named_step(steps):
+    def find(name):
+        return next(step for step in steps if step.get("name") == name)
+
+    return find
+
+
+@pytest.fixture(scope="module")
+def build_cache(workflow):
+    """The step whose key decides which trees a run may restore."""
+    steps = workflow["jobs"]["wheel"]["steps"]
+    return next(step for step in steps if step.get("id") == "build-cache")
+
+
+def test_both_linux_platforms_have_a_row(rows):
+    tags = {row["tag"] for row in rows}
+
+    assert {"manylinux_2_28_x86_64", "manylinux_2_28_aarch64"} <= tags
+
+
+def test_every_row_has_a_distinct_tag(rows):
+    """The tag names the cache namespace and the artifact; a duplicate loses one."""
+    tags = [row["tag"] for row in rows]
+
+    assert len(tags) == len(set(tags))
+
+
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+def test_the_row_tag_is_what_the_build_would_derive(rows, machine):
+    """The job fails in seconds on a mismatch; this fails before it is pushed."""
+    expected = platform_tag(system="Linux", machine=machine)
+    row = next(row for row in rows if row["tag"] == expected)
+
+    assert row["image"].endswith(expected)
+
+
+def test_an_arm_row_names_an_arm_runner(rows):
+    """Every platform builds natively, so the runner and the image must agree."""
+    for row in rows:
+        assert row["runner"].endswith("-arm") == row["tag"].endswith("aarch64")
+
+
+def test_no_row_names_a_moving_runner_label(rows):
+    """A moving label changes the image, and on macOS the published filename."""
+    for row in rows:
+        assert not row["runner"].endswith("-latest")
+
+
+def test_the_artifact_name_carries_the_platform(workflow):
+    """Two rows uploading one name means the second silently overwrites the first."""
+    steps = workflow["jobs"]["wheel"]["steps"]
+    upload = next(
+        s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")
+    )
+
+    assert "matrix.tag" in upload["with"]["name"]
+
+
+def test_the_cache_key_is_namespaced_by_platform(build_cache):
+    """Without the tag component the two platforms restore each other's tree."""
+    assert "PLATFORM_TAG" in build_cache["with"]["key"]
+
+
+def test_cache_cleanup_does_not_derive_a_tag_from_its_own_runner(workflow):
+    """That is the shape that deletes every other platform's live cache."""
+    steps = workflow["jobs"]["cache-cleanup"]["steps"]
+    script = "".join(step.get("run", "") for step in steps)
+
+    assert "platform_tag" not in script
+    assert "scripts/prune-build-caches.sh" in script
+
+
+def test_the_cache_key_covers_the_openblas_build_module(build_cache):
+    """A tree is only as reusable as the key admits.
+
+    wheelbuild/openblas.py decides the CPU baseline the vendored library is
+    compiled for, so an edit to it has to orphan the entries built before it.
+    """
+    assert "wheelbuild/openblas.py" in build_cache["with"]["key"]
+
+
+def test_the_cleanup_job_hashes_exactly_what_the_cache_key_hashes(
+    workflow, build_cache
+):
+    """The pruner matches on the trailing hash, so a divergent file list here
+    makes every live entry look stale and deletes it.
+    """
+    cleanup = workflow["jobs"]["cache-cleanup"]["steps"]
+    keyed = _hashed_files(build_cache["with"]["key"])
+    pruned = _hashed_files(
+        next(step["env"]["INPUTS_HASH"] for step in cleanup if "env" in step)
+    )
+
+    assert keyed is not None
+    assert keyed == pruned
+
+
+def _hashed_files(expression):
+    """The argument list of the hashFiles() call in one workflow expression."""
+    found = re.search(r"hashFiles\((.*?)\)", expression, re.DOTALL)
+    return None if found is None else found.group(1)
+
+
+def test_the_macos_row_claims_the_tag_the_build_would_derive(rows):
+    """On Darwin the tag is a floor the build compiles to, so nothing on the
+    runner can be asked what it should be — it has to match the constant the
+    driver exports as MACOSX_DEPLOYMENT_TARGET.
+    """
+    expected = platform_tag(
+        system="Darwin", machine="arm64", macos_version=MACOS_DEPLOYMENT_TARGET
+    )
+    row = next(row for row in rows if row["runner"].startswith("macos"))
+
+    assert row["tag"] == expected
+
+
+def test_every_row_names_the_build_root_the_cache_uses(rows, build_cache, named_step):
+    """macOS cannot use /build — the root volume is sealed — and Mach-O records
+    absolute install names, so a row whose build root and cache path disagree
+    restores a tree the build then rebuilds beside.
+    """
+    save = named_step("Save build cache")
+
+    for row in rows:
+        assert row["build_root"]
+    assert build_cache["with"]["path"] == "${{ matrix.build_root }}"
+    assert save["with"]["path"] == "${{ matrix.build_root }}"
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Create the build directory the cache and the container share",
+        "Build wheel in the container",
+        "Take ownership of what the container wrote as root",
+    ],
+)
+def test_the_container_only_steps_run_only_for_a_row_with_an_image(named_step, name):
+    """The macOS row has no container: there is nothing to mount a build
+    directory into and nothing writing as root.
+    """
+    assert "matrix.image" in named_step(name)["if"]
+
+
+def test_a_row_without_an_image_builds_on_the_runner(named_step):
+    build = named_step("Build wheel on the runner")
+
+    assert build["if"] == "${{ !matrix.image }}"
+    assert "scripts/build-macos.sh" in build["run"]
+    assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
+    """The steps after the build name `wheelhouse/*.whl` with no row value in
+    the path, so the two drivers have to agree about it without being told.
+    """
+    smoke = named_step("Smoke test in a clean virtual environment")
+
+    assert "wheelhouse/*.whl" in smoke["run"]
+    for name in ("Build wheel in the container", "Build wheel on the runner"):
+        assert "OUTPUT_DIR" not in named_step(name).get("env", {})
+
+
+def test_the_readability_guard_covers_every_row(named_step):
+    """A silent half-saved cache costs the same hour on any platform, so the
+    guard is not the container's: it runs wherever a tree is about to be saved,
+    which is why it cannot be spelled with a GNU-only `find`.
+    """
+    guard = named_step("Check the build tree is readable before saving it")
+    save = named_step("Save build cache")
+
+    assert "matrix.image" not in guard["if"]
+    assert "wheelbuild.cache_guard" in guard["run"]
+    assert "steps.cache-guard.outcome == 'success'" in save["if"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "Smoke test in a clean virtual environment",
+        "Report wheel size",
+    ],
+)
+def test_the_wheel_steps_run_for_every_row(named_step, name):
+    """Every platform now emits a wheel, so these are unconditional. A row that
+    built one and tested nothing would be the worst of the three states.
+    """
+    assert "if" not in named_step(name)
+
+
+def test_the_size_step_fails_on_a_wheel_pypi_would_reject(named_step):
+    """The step writes the job summary, so it is the size verdict a human
+    reads -- and a step that prints OVER and exits 0 is how an oversized wheel
+    reaches a tag that cannot be taken back. The build already refuses one
+    (`wheelbuild.assemble.verify_size`); this is the same refusal on the
+    directory the artifact is uploaded from.
+    """
+    run = named_step("Report wheel size")["run"]
+
+    assert "sys.exit(0)" not in run
+    assert "exceeds_pypi_limit" in run
+
+
+def test_the_artifact_is_uploaded_for_every_row(steps):
+    """One artifact per row, whatever the publish job currently collects: a gate
+    here would drop a platform silently, since an artifact that was never
+    uploaded is not an error until something downloads it.
+    """
+    upload = next(
+        s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")
+    )
+
+    assert "if" not in upload
+
+
+def test_every_row_proves_the_launcher(rows, named_step):
+    """A platform that builds a wheel it cannot launch ranks with is not done,
+    so this step runs everywhere rather than on the platforms that happened to
+    have a foreign mpiexec first. The `interop` row value that gated it is gone
+    rather than set true everywhere: a gate nothing closes is how a platform
+    comes to be tested on one branch and not another.
+    """
+    assert "if" not in named_step("Launcher interoperability")
+    for row in rows:
+        assert "interop" not in row
+
+
+def test_no_row_carries_a_flag_for_whether_it_builds_a_wheel(rows):
+    """It existed for the one row that stopped at an install prefix. Keeping it
+    once every row builds one leaves a gate nothing closes, which is how a
+    platform comes to be tested on one branch and not another.
+    """
+    for row in rows:
+        assert "wheel" not in row
+
+
+def test_the_row_shape_differs_only_by_whether_there_is_a_container(rows):
+    """Every row carries the same values but `image`, which is the one genuine
+    difference in kind between the platforms — no container on macOS. Any other
+    divergence is a step that one platform silently skips.
+    """
+    keys = {frozenset(row) - {"image"} for row in rows}
+
+    assert len(keys) == 1
+
+
+def test_the_cache_key_covers_the_macos_build_driver(build_cache):
+    """It is the whole macOS recipe — toolchain, deployment target, CMake pin —
+    so an edit to it changes the bytes in that platform's tree.
+    """
+    assert "scripts/build-macos.sh" in build_cache["with"]["key"]
+
+
+@pytest.fixture(scope="module")
+def publish(workflow):
+    return workflow["jobs"]["publish"]
+
+
+@pytest.fixture(scope="module")
+def upload(steps):
+    return next(
+        s for s in steps if str(s.get("uses", "")).startswith("actions/upload-artifact")
+    )
+
+
+@pytest.fixture(scope="module")
+def download(publish):
+    return next(
+        s
+        for s in publish["steps"]
+        if str(s.get("uses", "")).startswith("actions/download-artifact")
+    )
+
+
+def test_the_supported_platform_set_is_exactly_the_matrix_rows(rows):
+    """`wheelbuild.platforms` is what the release check counts wheels against,
+    and the matrix is what builds them. A platform added to one and not the
+    other publishes a release short a wheel, or fails a release that is
+    complete.
+    """
+    assert set(supported_platform_tags()) == {row["tag"] for row in rows}
+
+
+def test_publish_collects_every_row_by_pattern_not_by_name(upload, download):
+    """Naming one artifact is how the job came to collect the x86_64 wheel
+    alone. The pattern is the upload's own name with the row value wildcarded,
+    so a renamed artifact cannot be collected by one and missed by the other.
+    """
+    assert "name" not in download["with"]
+    assert download["with"]["pattern"] == upload["with"]["name"].replace(
+        "${{ matrix.tag }}", "*"
+    )
+
+
+def test_publish_merges_the_artifacts_into_one_directory(download):
+    """Without this each artifact lands in a subdirectory of its own and the
+    upload step, which publishes a flat directory, finds no wheel at all.
+    """
+    assert download["with"]["merge-multiple"] is True
+    assert download["with"]["path"] == "dist"
+
+
+def test_publish_waits_for_every_platform(publish):
+    """Charting decision 1: one release, all three wheels. A row that fails
+    fails the `wheel` job, and a dependent job with no always()/!cancelled()
+    override is then skipped -- which is the only thing standing between a
+    partial matrix and an unrepairable release.
+    """
+    assert set(publish["needs"]) == {"checks", "wheel"}
+    assert publish["if"] == "startsWith(github.ref, 'refs/tags/v')"
+
+
+def test_publish_checks_the_wheel_set_before_uploading(publish):
+    """The download step treats matching no artifact as a warning and the
+    upload step publishes whatever the directory holds, so nothing between them
+    would notice a missing platform.
+    """
+    assert _step_index(publish, "release_check") < _step_index(publish, "pypi-publish")
+
+
+@pytest.fixture(scope="module")
+def dry_run(workflow):
+    return workflow["jobs"]["publish-testpypi"]
+
+
+def test_the_dry_run_is_never_triggered_by_a_tag(workflow, dry_run):
+    """The dry run exists to happen *before* the tag. A condition that also
+    matched `refs/tags/v*` would upload the same three wheels to two indexes
+    from one event, which is the opposite of a rehearsal: the thing it is meant
+    to de-risk would already have happened by the time it reported.
+    """
+    assert "refs/tags" not in dry_run["if"]
+    assert dry_run["if"] == (
+        "github.event_name == 'workflow_dispatch' && inputs.testpypi"
+    )
+    assert workflow[True]["workflow_dispatch"]["inputs"]["testpypi"]["default"] is False
+
+
+def test_the_dry_run_waits_for_every_platform_as_the_real_publish_does(
+    dry_run, publish
+):
+    """It proves nothing about a three-wheel release if it can run on a subset,
+    and the whole question it answers -- does this *set* of filenames upload --
+    needs the set to be complete.
+    """
+    assert set(dry_run["needs"]) == set(publish["needs"])
+
+
+def test_the_dry_run_collects_the_wheels_the_way_the_real_publish_does(
+    dry_run, download
+):
+    """A rehearsal that assembles its directory differently rehearses a
+    different upload.
+    """
+    collect = next(
+        step
+        for step in dry_run["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact")
+    )
+
+    assert collect["with"] == download["with"]
+
+
+def test_the_dry_run_checks_the_wheel_set_before_uploading(dry_run):
+    """Same gate, same order as `publish`: an incomplete directory would upload
+    a subset to TestPyPI and report that a three-wheel release is proven.
+    """
+    assert _step_index(dry_run, "release_check") < _step_index(dry_run, "pypi-publish")
+
+
+def test_the_dry_run_uploads_to_testpypi_and_the_real_publish_does_not(
+    dry_run, publish
+):
+    """One mistyped repository-url and the dry run is the release."""
+    rehearsal = _publish_step(dry_run)
+
+    assert rehearsal["with"]["repository-url"] == "https://test.pypi.org/legacy/"
+    assert "repository-url" not in _publish_step(publish).get("with", {})
+
+
+def test_the_dry_run_does_not_skip_a_file_already_on_testpypi(dry_run):
+    """skip-existing would make the rehearsal repeatable where the event it
+    rehearses is not: a green run over a version TestPyPI already holds proves
+    nothing about the wheels in the directory. The remedy for a collision is a
+    .postN bump, which costs nothing before a tag exists.
+    """
+    assert "skip-existing" not in _publish_step(dry_run).get("with", {})
+
+
+def test_the_dry_run_uses_its_own_environment_and_no_token(dry_run, publish):
+    """Trusted publishing on both sides -- a TestPyPI API token on the
+    workstation is the thing this project has avoided from the start. The
+    environments are separate because they are separate publishers and a
+    required reviewer on the release gate should not also gate a rehearsal.
+    """
+    assert dry_run["permissions"] == {"id-token": "write"}
+    assert dry_run["environment"] != publish["environment"]
+
+
+def test_the_metadata_is_validated_on_every_row_before_any_upload(named_step):
+    """`twine check` is the half of the TestPyPI dry run that needs no index:
+    PyPI validates a wheel's metadata and its rendered description more
+    strictly than `wheel` does, and finding that out at upload time is finding
+    it out after the tag exists.
+    """
+    check = named_step("Check the wheel's metadata the way PyPI will")
+
+    assert "if" not in check
+    assert "twine check --strict" in check["run"]
+
+
+@pytest.fixture(scope="module")
+def readme():
+    return (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def dispatch_inputs(workflow):
+    # PyYAML reads the `on:` key as the boolean True.
+    return workflow[True]["workflow_dispatch"]["inputs"]
+
+
+def test_the_readme_names_the_input_a_release_operator_has_to_tick(
+    readme, dispatch_inputs
+):
+    """The release procedure tells an operator to run the workflow with one
+    named input, by its label in the Actions UI and by its name on the command
+    line. A renamed input leaves that instruction describing a flag the
+    workflow does not have, and the operator finds that out mid-release.
+    """
+    assert len(dispatch_inputs) == 1, "a second input would need its own check here"
+    (name,) = dispatch_inputs
+
+    assert f"-f {name}=true" in readme
+    assert dispatch_inputs[name]["description"] in readme
+
+
+def test_the_readme_names_both_publishing_environments(readme, dry_run, publish):
+    """Each environment is half of a trusted publisher registered outside this
+    repository against that exact string, so the README's prerequisite list is
+    the only place the names can be checked against the jobs that use them.
+    """
+    for environment in (dry_run["environment"], publish["environment"]):
+        assert f"`{environment}`" in readme
+
+
+def test_a_dispatched_run_cannot_be_cancelled_by_a_push_to_the_same_ref(workflow):
+    """The dry run is dispatched against main, so without the event in the
+    concurrency group it shares one with every push to main and
+    cancel-in-progress throws away whichever started first -- three
+    40-minute builds, or the rehearsal a release is waiting on.
+    """
+    group = workflow["concurrency"]["group"]
+
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert "github.event_name" in group
+    assert "github.ref" in group
+
+
+#: The linter's version is pinned rather than floating, and the pin is spelled
+#: in two places that install it -- the `checks` job and the ``dev`` extra a
+#: contributor installs from. ``==`` rather than a lower bound: the failure this
+#: prevents is a *new* release adding a rule, which a floor does not hold back.
+RUFF_REQUIREMENT = re.compile(r"ruff==(\d+\.\d+\.\d+)")
+
+
+def test_the_checks_job_pins_the_linter(workflow):
+    """An unpinned ruff turns a green branch red without a commit touching its
+    code, and makes a local run unable to predict CI. It has happened twice on
+    this repository: 0.16 began formatting Python inside Markdown, and 0.16.9
+    added ISC004. A pin moves both into a commit that says so.
+    """
+    install = next(
+        step["run"]
+        for step in workflow["jobs"]["checks"]["steps"]
+        if "pip install" in str(step.get("run", ""))
+    )
+
+    assert RUFF_REQUIREMENT.search(install), install
+
+
+def test_the_pinned_linter_is_the_one_a_contributor_installs(workflow):
+    """Two spellings of the version is how "it passed locally" and "it failed in
+    CI" come to be true at once. The dev extra is what a contributor installs,
+    so it has to name the version the gate runs.
+    """
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        extra = tomllib.load(handle)["project"]["optional-dependencies"]["dev"]
+    install = next(
+        step["run"]
+        for step in workflow["jobs"]["checks"]["steps"]
+        if "pip install" in str(step.get("run", ""))
+    )
+
+    declared = {requirement for requirement in extra if requirement.startswith("ruff")}
+    assert declared == {RUFF_REQUIREMENT.search(install).group(0)}

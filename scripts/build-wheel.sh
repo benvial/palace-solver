@@ -28,6 +28,19 @@ export CCACHE_DIR="${CCACHE_DIR:-$build_root/ccache}"
 # lands on an older tree and ccache is what keeps the partial rebuild cheap.
 # Bounded so the cached tree is a size chosen rather than observed.
 export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
+# The Palace source tree below is a git repository, and Palace's CMake runs
+# `git describe` in it at configure time to stamp `palace --version`. It is
+# created once and then restored from a cache — or, locally, from a directory
+# the developer owns — while this script runs as root inside the container, so
+# git sees a repository someone else owns and refuses it with "detected dubious
+# ownership". The failure is quiet in the worst way: `palace --version` reports
+# UNKNOWN, the stamp check below then finds a mismatch and reconfigures the
+# superbuild on every single run. Set through the environment rather than
+# `git config --global` so it applies to the git CMake spawns as well and
+# touches no file.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=safe.directory
+export GIT_CONFIG_VALUE_0="*"
 
 source_dir="$build_root/palace-$palace_version"
 superbuild_dir="$build_root/superbuild"
@@ -73,15 +86,55 @@ export PATH="$install_prefix/bin:$PATH"
 
 echo "==> OpenBLAS (vendored into the wheel)"
 # Palace requires a system BLAS/LAPACK and the manylinux image has none, so
-# OpenBLAS is built here with DYNAMIC_ARCH so one wheel runs on any x86-64 CPU.
+# OpenBLAS is built here: DYNAMIC_ARCH so one binary picks its kernels at run
+# time, and, on arm, a named TARGET so the common objects around those kernels
+# are compiled for the oldest CPU the wheel claims instead of for the runner.
+# See BASELINE_TARGETS in wheelbuild/openblas.py.
 openblas_version="$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.openblas import OPENBLAS_VERSION; print(OPENBLAS_VERSION)')"
 openblas_source="$build_root/OpenBLAS-$openblas_version"
-if [[ ! -d "$openblas_source" ]]; then
-  curl -fsSL "https://github.com/OpenMathLib/OpenBLAS/releases/download/v$openblas_version/OpenBLAS-$openblas_version.tar.gz" \
-    -o "$build_root/OpenBLAS-$openblas_version.tar.gz"
-  tar -xzf "$build_root/OpenBLAS-$openblas_version.tar.gz" -C "$build_root"
-fi
-if [[ ! -f "$install_prefix/lib/libopenblas.so" ]]; then
+openblas_tarball="$build_root/OpenBLAS-$openblas_version.tar.gz"
+unpack_openblas() {
+  if [[ ! -f "$openblas_tarball" ]]; then
+    curl -fsSL "$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.openblas import source_url; print(source_url())')" \
+      -o "$openblas_tarball"
+  fi
+  rm -rf "$openblas_source"
+  tar -xzf "$openblas_tarball" -C "$build_root"
+}
+[[ -d "$openblas_source" ]] || unpack_openblas
+# The question is not whether libopenblas is installed, it is what it was
+# compiled for -- the same shape as the Palace stamp check below, and for the
+# same reason. A restored tree can carry an OpenBLAS built before the CPU
+# baseline was pinned; the exact cache key changing is no protection, because
+# the fallback restore-keys are what hand that tree back. The verdicts are
+# CHECK_NO_INSTALL and CHECK_WRONG_CPU in wheelbuild/openblas.py.
+openblas_verdict=0
+PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
+  --prefix "$install_prefix" --check || openblas_verdict=$?
+# Enumerated rather than "not zero", and the same case the macOS driver uses:
+# an unhandled exception exits 1 and a verdict this script predates could be
+# anything, and neither is an instruction to spend 40 minutes rebuilding a
+# library whose state was never established. tests/test_openblas.py ties these
+# numbers to the constants.
+case "$openblas_verdict" in
+  0) ;;
+  6) ;;
+  3)
+    # `make` does not notice a changed TARGET: the objects in a restored source
+    # tree keep the -march they were compiled with, so building in place would
+    # reinstall the same wrong code. Re-extracting is the only clean that cannot
+    # leave one behind. The tarball stays, so this costs an unpack, not a
+    # download -- and only this verdict pays it, because a merely absent install
+    # has no wrongly compiled objects to discard.
+    echo "==> discarding an OpenBLAS tree configured for another CPU baseline"
+    unpack_openblas
+    ;;
+  *)
+    echo "::error::OpenBLAS check returned $openblas_verdict; not rebuilding" >&2
+    exit 1
+    ;;
+esac
+if (( openblas_verdict != 0 )); then
   PYTHONPATH="$repo_root" python3 -m wheelbuild.openblas \
     --source-dir "$openblas_source" \
     --prefix "$install_prefix" \

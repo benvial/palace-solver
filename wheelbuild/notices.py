@@ -9,22 +9,44 @@ The harvest fails the build when a known dependency contributes no license
 file, so a superbuild layout change cannot silently drop a notice.
 
 One class of redistributed library has no source checkout to walk: what the
-build image provides rather than what the superbuild compiles. The compiler
-runtime — ``libgfortran``, ``libgomp``, ``libquadmath`` — is the bulk of it,
-and ``libpciaccess``, which reaches the payload through hwloc, is the rest.
-These enter the wheel *after* this harvest, as a side effect of ``auditwheel
-repair``. Their notices are therefore added from the texts shipped in
+toolchain and the build image provide rather than what the superbuild compiles.
+The compiler runtime — ``libgfortran``, ``libgomp``, ``libquadmath`` — is the
+bulk of it, and ``libpciaccess``, which reaches the payload through hwloc, is
+the rest. These enter the wheel *after* this harvest, as a side effect of the
+wheel repair step. Their notices are therefore added from the texts shipped in
 ``wheelbuild/data``, and :func:`audit_wheel` checks the finished wheel so that
 a library neither harvested nor named here fails the build rather than shipping
 unnoticed.
+
+The audit is the same question on both platforms asked of two different file
+name conventions, because the repair tools differ in where they put what they
+copy and in what they call it. ``auditwheel`` bundles into a
+``palace_solver.libs`` directory beside the package and renames each library
+with a hash of its contents; ``delocate`` bundles into a ``.dylibs`` directory
+*inside* the package and copies each library under the name it already had,
+which on Mach-O carries the soversion before the suffix rather than after it.
+:func:`library_stem` and :func:`vendored_libraries` own both conventions, since
+a name the audit cannot parse is a hard build failure rather than a silent gap.
+
+The macOS toolchain is GCC, chosen by ``scripts/build-macos.sh``, so the OpenMP
+runtime the wheel vendors there is GCC's ``libgomp`` and the note above covers
+it. A clang toolchain would vendor LLVM's ``libomp`` instead, which is
+Apache-2.0 with the LLVM exception and a different note with a different source
+pointer. That note is deliberately not written here: an unshipped license in a
+THIRD-PARTY-NOTICES is a claim about the payload that is not true. ``libomp``
+is absent from :data:`COMPILER_RUNTIME_LIBRARIES` for the same reason, so a
+toolchain change that vendors it fails the audit and whoever makes that change
+writes the note then.
 """
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import os
 import re
 import subprocess
+import sys
 import zipfile
 from collections.abc import Sequence
 from fnmatch import fnmatch
@@ -55,14 +77,15 @@ REQUIRED_DEPENDENCIES = (
 MUMPS_SOURCE_URL = "https://mumps-solver.org/index.php?page=dwnld"
 
 #: Runtime libraries that come from the compiler rather than from a source
-#: checkout, keyed by the name they carry before ``auditwheel`` adds its hash.
+#: checkout, under the name :func:`library_stem` reduces them to on either
+#: platform.
 #: ``libgfortran``, ``libgomp`` and ``libquadmath`` are vendored because the
 #: manylinux_2_28 policy whitelist does not cover them; ``libstdc++`` and
-#: ``libgcc_s`` are whitelisted on Linux and so are not vendored there, but a
-#: macOS wheel built with a GCC toolchain would carry them, and they are under
-#: the same license. All of them are GPL-3.0 with the GCC Runtime Library
-#: Exception, which permits this redistribution but does not remove the
-#: obligation to reproduce the notice.
+#: ``libgcc_s`` are whitelisted on Linux and so are not vendored there, but the
+#: macOS wheel carries them, which the first macOS build confirmed. All of them
+#: are GPL-3.0 with the GCC Runtime Library Exception, which permits this
+#: redistribution but does not remove the obligation to reproduce the notice.
+#: LLVM's ``libomp`` is deliberately not here — see the module docstring.
 COMPILER_RUNTIME_LIBRARIES = (
     "libgcc_s",
     "libgfortran",
@@ -74,13 +97,29 @@ COMPILER_RUNTIME_LIBRARIES = (
 #: Where the GPL's "corresponding sources" pointer aims for the GCC runtime.
 GCC_SOURCE_URL = "https://gcc.gnu.org/mirrors.html"
 
-#: Libraries the repair step vendors out of the build image rather than from
+#: Libraries the repair step may vendor out of the build image rather than from
 #: the compiler or from anything built here, mapped to the license text shipped
 #: for them in ``data``. ``libpciaccess`` arrives through hwloc, which the
-#: vendored MPICH links to discover the machine's topology.
+#: vendored MPICH links to discover the machine's topology on Linux; the macOS
+#: hwloc uses no such library. The notice is written whether or not that build's
+#: payload ended up carrying it, because the harvest runs before the repair that
+#: decides.
 SYSTEM_LIBRARY_LICENSES = {
     "libpciaccess": "libpciaccess-COPYING.txt",
 }
+
+#: Where a repair tool leaves what it copied, as a suffix of the directory
+#: name. ``auditwheel`` writes ``palace_solver.libs`` beside the package and
+#: ``delocate`` writes ``.dylibs`` inside it, so neither ends with the other's
+#: suffix and one test covers both. A wheel repaired by neither has no such
+#: directory and audits as carrying nothing, so the audit is not what catches a
+#: repair that did not run: on Linux
+#: :func:`wheelbuild.assemble.verify_platform_tag` does, because an unrepaired
+#: wheel is tagged ``linux_<arch>``, and on macOS, where an unrepaired wheel
+#: already carries the ``macosx`` tag, it is the smoke test's link check, which
+#: reads the payload's install names and is handed a vendor directory that is
+#: not there.
+_VENDOR_DIRECTORIES = (".libs", ".dylibs")
 
 #: File names that hold a license or copyright notice.
 LICENSE_FILE_PATTERNS = (
@@ -138,16 +177,58 @@ def _gcc_runtime_note(gcc_version: str | None) -> str:
     )
 
 
-def detect_gcc_version() -> str | None:
-    """Return the version of the ``gcc`` on PATH, or ``None`` if there is none.
+def detect_gcc_version(compiler: str | None = None) -> str | None:
+    """Return the GCC release that built the payload, or ``None``.
 
     The GPL's source pointer has to name a release, so the notices record the
     compiler that actually built the payload rather than a version written down
     by hand and left to drift.
+
+    Which compiler that is comes from the build's own environment rather than
+    from the name ``gcc``. On a macOS runner ``gcc`` on ``PATH`` is Apple
+    clang, and the runtime the wheel vendors is the Homebrew GCC that
+    ``scripts/build-macos.sh`` selected and exported as ``CC``; naming Apple
+    clang's version beside a pointer to the GCC sources would be a notice that
+    describes nothing in the wheel. The Linux driver exports neither variable,
+    so it falls through to ``gcc`` and is unchanged.
+
+    The answer is refused rather than reported when it does not come from GCC.
+    ``-dumpfullversion`` is a GCC spelling that some clang releases accept and
+    answer with their own version, which is the failure mode that looks like a
+    success.
+
+    Args:
+        compiler: Compiler to ask; defaults to ``CC``, then ``FC``, then the
+            ``gcc`` on ``PATH``. The macOS driver refuses to set one of ``CC``,
+            ``CXX`` and ``FC`` without the others, so they name one toolchain.
+
+    Returns:
+        The release, such as ``15.3.0``, or ``None`` when no GCC answered.
     """
+    executable = compiler or _resolve_compiler()
+    version = _ask(executable, "-dumpfullversion")
+    if version is None or not re.fullmatch(r"\d+(\.\d+)*", version):
+        return None
+    identification = _ask(executable, "--version")
+    # Every GCC front end prints the FSF copyright line; Apple clang prints no
+    # such line, and neither does LLVM's. Deliberately not a test for "GCC" in
+    # the version banner, which several distributions replace with their own
+    # package name.
+    if identification is None or "Free Software Foundation" not in identification:
+        return None
+    return version
+
+
+def _resolve_compiler() -> str:
+    """Return the compiler the build exported, or the ``gcc`` on PATH."""
+    return os.environ.get("CC") or os.environ.get("FC") or "gcc"
+
+
+def _ask(executable: str, flag: str) -> str | None:
+    """Run ``executable flag`` and return its output, or ``None`` if it failed."""
     try:
         completed = subprocess.run(
-            ["gcc", "-dumpfullversion"],
+            [executable, flag],
             capture_output=True,
             text=True,
             check=True,
@@ -272,7 +353,12 @@ def render(source_roots: Sequence[Path], *, gcc_version: str | None = None) -> s
     for library, filename in SYSTEM_LIBRARY_LICENSES.items():
         sections.append(
             _section(
-                f"{library} (vendored from the build image)",
+                # Conditional, because this file is written before the repair
+                # step that decides. libpciaccess reaches the Linux payload
+                # through hwloc and the macOS one through nothing, so a flat
+                # claim that it is redistributed would be false on one of the
+                # two platforms this text ships on.
+                f"{library} (vendored from the build image where the payload links it)",
                 (_DATA / filename).read_text(encoding="utf-8"),
             )
         )
@@ -295,6 +381,22 @@ def library_stem(name: str) -> str:
     ``libopenblasp-r0-a160b4b8.3.34.so``, with the hash in the middle. The
     name with the hash taken out is what a notice can be matched against.
 
+    ``delocate`` renames nothing — it refuses a payload where two libraries
+    share a basename rather than disambiguating them — so on Mach-O the whole
+    name is the library's own. The soversion is the difference that matters:
+    ELF appends it after ``.so``, where dropping the suffix drops it too, while
+    Mach-O puts it *before* ``.dylib``, so ``libgfortran.5.dylib`` would
+    otherwise reduce to ``libgfortran.5`` and match no notice. Every trailing
+    numeric component is therefore dropped there. The cost is that a Mach-O
+    library carrying its version in its name cannot be told from one carrying a
+    soversion — ``libopenblasp-r0.3.34.dylib`` reduces to ``libopenblasp-r0``
+    where the ELF spelling keeps the version — which is harmless because both
+    sides of every comparison in :func:`audit_wheel` come through here.
+
+    Which convention applies is decided by the file name rather than by the
+    running platform: the name is the evidence, and the same audit reads names
+    out of a wheel and out of an install prefix.
+
     Args:
         name: File name as it appears in the wheel's vendored library
             directory.
@@ -303,11 +405,21 @@ def library_stem(name: str) -> str:
         The library name, without the hash, the extension or the soversion.
     """
     unhashed = re.sub(r"-[0-9a-f]{6,}(?=\.|$)", "", name)
-    return re.split(r"\.so|\.dylib", unhashed, maxsplit=1)[0]
+    if ".dylib" in unhashed:
+        return re.sub(r"(\.\d+)+$", "", unhashed.split(".dylib", maxsplit=1)[0])
+    return unhashed.split(".so", maxsplit=1)[0]
 
 
 def vendored_libraries(wheel: Path) -> list[str]:
     """Return the library names a built wheel carries, deduplicated and sorted.
+
+    Everything in a vendor directory counts. Only the repair tool writes there
+    and it writes nothing but the libraries it copied, so a filter on ``.so``
+    or ``.dylib`` would add no precision and would subtract a guarantee: a file
+    whose name the filter did not expect would be dropped silently, and this
+    function is the audit's only view of what the repair added. A name
+    :func:`library_stem` cannot reduce to a known library therefore fails the
+    build, which is the direction to fail in.
 
     Args:
         wheel: The repaired wheel.
@@ -316,13 +428,14 @@ def vendored_libraries(wheel: Path) -> list[str]:
         One entry per vendored library, as :func:`library_stem` names it.
     """
     with zipfile.ZipFile(wheel) as archive:
-        members = [Path(name) for name in archive.namelist()]
+        # Directory entries are optional in a zip and carry a trailing slash,
+        # which Path() drops, so they are excluded by name rather than by path.
+        members = [Path(name) for name in archive.namelist() if not name.endswith("/")]
     return sorted(
         {
             library_stem(member.name)
             for member in members
-            if member.parent.name.endswith(".libs")
-            and (".so" in member.name or member.name.endswith(".dylib"))
+            if member.parent.name.endswith(_VENDOR_DIRECTORIES)
         }
     )
 
@@ -405,13 +518,27 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--gcc-version",
         default=None,
         help="compiler release named in the GCC runtime source pointer "
-        "(default: what `gcc -dumpfullversion` reports)",
+        "(default: what the build's own CC, FC or the gcc on PATH reports)",
     )
     args = parser.parse_args(argv)
+    gcc_version = args.gcc_version
+    if not gcc_version:
+        compiler = _resolve_compiler()
+        gcc_version = detect_gcc_version(compiler)
+        if gcc_version is None:
+            # Not fatal: the GPL's obligation is the license text and a source
+            # pointer, and both are written either way. But an unnamed release
+            # in a macOS build is the toolchain going unrecognised rather than
+            # the compiler being unusual, so it is said out loud.
+            print(
+                f"warning: {compiler} reported no GCC release, so the notices "
+                "name none; pass --gcc-version to say which built the payload",
+                file=sys.stderr,
+            )
     path = harvest(
         source_roots=args.source_roots,
         output=args.output,
-        gcc_version=args.gcc_version or detect_gcc_version(),
+        gcc_version=gcc_version,
     )
     print(f"wrote {path} ({path.stat().st_size} bytes)")
     return 0

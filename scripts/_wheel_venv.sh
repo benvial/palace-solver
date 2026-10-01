@@ -1,8 +1,8 @@
-# Shared helpers for the scripts that exercise a built wheel. Sourced, not run.
+# Shared helpers for the scripts that exercise a built solver. Sourced, not run.
 #
-# Both callers work from a temporary directory outside the repository: a source
-# checkout's palace_solver package shadows the installed one, and these tests
-# must exercise what the wheel ships.
+# Every caller works from a temporary directory outside the repository: a
+# source checkout's palace_solver package shadows the installed one, and these
+# tests must exercise what was built rather than what is checked out.
 
 # make_wheel_venv VENV WHEEL [REQUIREMENT...]
 #

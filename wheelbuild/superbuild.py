@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -75,6 +76,7 @@ def cmake_arguments(
     install_prefix: Path,
     mpi_home: Path,
     ccache: bool = True,
+    system: str | None = None,
 ) -> list[str]:
     """Build the CMake configure command for the superbuild.
 
@@ -83,6 +85,7 @@ def cmake_arguments(
         install_prefix: Where the built Palace tree is installed.
         mpi_home: MPICH install prefix to compile against.
         ccache: Route the compilers through ccache.
+        system: ``platform.system()`` value; defaults to the running platform.
 
     Returns:
         The full ``cmake`` argument vector, source directory last.
@@ -94,6 +97,20 @@ def cmake_arguments(
         f"-DMPI_HOME={mpi_home}",
         *FEATURE_FLAGS,
     ]
+    if (system or platform.system()) == "Darwin":
+        # Palace links some STRUMPACK companions by bare package name --
+        # palace/CMakeLists.txt loops over zfp, slate, lapackpp, blaspp and
+        # ptscotch and emits a plain `-lzfp` — and Apple's linker searches no
+        # path that reaches the shared install prefix, so the build dies at 97%
+        # of libpalace.dylib with `ld: library 'zfp' not found` even though
+        # libzfp.dylib is installed in that very prefix. Same family as the
+        # lib64/lib mismatch wheelbuild.prefix papers over, and upstream
+        # fragility rather than anything macOS did wrong.
+        library_dir = f"-L{install_prefix / 'lib'}"
+        arguments += [
+            f"-DCMAKE_EXE_LINKER_FLAGS={library_dir}",
+            f"-DCMAKE_SHARED_LINKER_FLAGS={library_dir}",
+        ]
     if ccache:
         arguments += [
             "-DCMAKE_C_COMPILER_LAUNCHER=ccache",

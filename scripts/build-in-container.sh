@@ -16,6 +16,7 @@ exec docker run --rm \
   -v "$repo_root:/repo" \
   -v "$cache_dir:/build" \
   -e BUILD_ROOT=/build \
+  -e OUTPUT_DIR=/repo/wheelhouse \
   -e JOBS="${JOBS:-$(nproc)}" \
   -w /repo \
   "$image" \

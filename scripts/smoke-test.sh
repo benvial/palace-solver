@@ -15,6 +15,10 @@ set -euo pipefail
 
 source "$(dirname "${BASH_SOURCE[0]}")/_wheel_venv.sh"
 
+# Resolved before the working directory moves: the checks below run from a
+# temporary directory, and wheelbuild is imported from the checkout rather than
+# from the wheel under test.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 wheel="$(realpath "${1:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
 config="$(realpath "${2:?usage: smoke-test.sh WHEEL PALACE_CONFIG}")"
 workdir="$(mktemp -d)"
@@ -43,15 +47,22 @@ binary="$("$venv/bin/python" -c 'import palace_solver; print(palace_solver.binar
 echo "==> packaged binary: $binary"
 
 echo "==> shared library resolution"
-if ldd "$binary" | grep -q "not found"; then
-  ldd "$binary" | grep "not found"
-  echo "ERROR: unresolved shared libraries" >&2
-  exit 1
-fi
-ldd "$binary" | grep -E "libmpi" || {
-  echo "ERROR: binary does not link libmpi" >&2
-  exit 1
-}
+# `ldd` is GNU and macOS ships none, so the question is asked through
+# wheelbuild.link_check, which knows what each platform's tool answers.
+#
+# Three arguments, because three things can be wrong. The solver, where
+# --require-mpi also insists it linked MPI at all; every other executable in the
+# payload, because the repair tool decides what counts as a library and a process
+# manager it treated as data keeps the install names it was linked with; and the
+# vendored libraries themselves, which have dependencies of their own and are the
+# half of the payload the repair tool actually rewrote. Where they live differs
+# per platform, so the installed package is asked rather than told -- which is
+# what palace_solver.lib_dir() is for, and a directory that is missing there is a
+# repair that put them somewhere else.
+libraries="$("$venv/bin/python" -c 'import palace_solver; print(palace_solver.lib_dir())')"
+PYTHONPATH="$repo_root" python3 -m wheelbuild.link_check --require-mpi "$binary"
+PYTHONPATH="$repo_root" python3 -m wheelbuild.link_check \
+  "$(dirname "$binary")" "$libraries"
 
 example_dir="$workdir/example"
 copy_example "$config" "$example_dir"

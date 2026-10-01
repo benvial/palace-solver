@@ -25,7 +25,7 @@ __all__ = [
 #: Single source of the version, mirroring the Palace release this wheel ships
 #: (with a ``.postN`` segment for packaging-only fixes). ``pyproject.toml``,
 #: the build scripts and CI all read it from here.
-__version__ = "0.18.1.post1"
+__version__ = "0.18.1.post2"
 
 #: Palace release shipped by this wheel: the package version without any
 #: ``.postN`` packaging segment, since ``0.17.0.post1`` still ships Palace
@@ -178,8 +178,14 @@ def launcher_conflict() -> str | None:
 def lib_dir() -> Path:
     """Return the directory holding the vendored shared libraries.
 
-    ``auditwheel`` puts them in a ``palace_solver.libs`` directory beside the
-    package, and the binary finds them through its RPATH; the path is exposed
-    for callers that want to set ``LD_LIBRARY_PATH`` themselves.
+    The repair tool decides where they live and the two disagree: ``auditwheel``
+    puts them in a ``palace_solver.libs`` directory *beside* the package, while
+    ``delocate`` puts them in a ``.dylibs`` directory *inside* it. The binary
+    finds them either way — through its RPATH on Linux, through ``@loader_path``
+    install names on macOS — so this is for callers that want to set
+    ``LD_LIBRARY_PATH`` or ``DYLD_LIBRARY_PATH`` themselves, and for them the
+    difference is the whole answer.
     """
+    if sys.platform == "darwin":
+        return _PACKAGE_DIR / ".dylibs"
     return _PACKAGE_DIR.parent / "palace_solver.libs"

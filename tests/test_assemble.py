@@ -2,9 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from wheelbuild import assemble
+from wheelbuild import assemble, platforms
 
 ELF_MAGIC = b"\x7fELF\x02\x01\x01\x00"
+MACH_O_MAGIC = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"
 
 
 def _install_tree(root: Path) -> Path:
@@ -22,6 +23,18 @@ def _install_tree(root: Path) -> Path:
     (root / "lib" / "libHYPRE.so").write_bytes(ELF_MAGIC + b"lib")
     (root / "lib" / "cmake").mkdir()
     (root / "lib" / "cmake" / "mfem-config.cmake").write_text("cmake noise")
+    return root
+
+
+def _darwin_install_tree(root: Path) -> Path:
+    """The same tree as a macOS superbuild leaves: Mach-O binaries, no ELF."""
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "palace").write_text('#!/bin/sh\nexec palace-arm64.bin "$@"\n')
+    (root / "bin" / "palace-arm64.bin").write_bytes(MACH_O_MAGIC + b"binary")
+    for launcher in ("mpiexec.hydra", "hydra_pmi_proxy"):
+        (root / "bin" / launcher).write_bytes(MACH_O_MAGIC + b"launcher")
+    (root / "bin" / "mpiexec").symlink_to("mpiexec.hydra")
+    (root / "bin" / "mpicc").write_text("#!/bin/sh\n# compiler wrapper\n")
     return root
 
 
@@ -54,6 +67,25 @@ def test_stage_fails_when_the_install_tree_has_no_palace_binary(tmp_path):
         assemble.stage(install_prefix=empty, package_dir=tmp_path / "pkg")
 
 
+def test_find_palace_binary_accepts_a_mach_o_install_tree(tmp_path):
+    """The macOS payload is Mach-O, so an ELF-only filter would find nothing."""
+    install_prefix = _darwin_install_tree(tmp_path / "install")
+
+    assert assemble.find_palace_binary(install_prefix).name == "palace-arm64.bin"
+
+
+def test_stage_ships_the_mach_o_process_manager_binaries(tmp_path):
+    install_prefix = _darwin_install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "palace_solver"
+
+    assemble.stage(install_prefix=install_prefix, package_dir=package_dir)
+
+    shipped = {path.name for path in (package_dir / "bin").iterdir()}
+    assert {"mpiexec", "mpiexec.hydra", "hydra_pmi_proxy"} <= shipped
+    # Build-time shell wrappers stay out whichever platform they came from.
+    assert "mpicc" not in shipped
+
+
 def test_repair_command_vendors_every_library_including_mpi(tmp_path):
     command = assemble.repair_command(
         wheel=tmp_path / "dist" / "palace_solver-0.17.0-py3-none-linux_x86_64.whl",
@@ -62,7 +94,7 @@ def test_repair_command_vendors_every_library_including_mpi(tmp_path):
 
     assert command[:2] == ["auditwheel", "repair"]
     assert "--exclude" not in command
-    assert command[command.index("--plat") + 1] == assemble.PLATFORM_TAG
+    assert command[command.index("--plat") + 1] == platforms.platform_tag()
 
 
 def test_retag_command_forces_the_python_agnostic_tag(tmp_path):
@@ -72,7 +104,7 @@ def test_retag_command_forces_the_python_agnostic_tag(tmp_path):
     assert command[:2] == ["wheel", "tags"]
     assert command[command.index("--python-tag") + 1] == "py3"
     assert command[command.index("--abi-tag") + 1] == "none"
-    assert command[command.index("--platform-tag") + 1] == assemble.PLATFORM_TAG
+    assert command[command.index("--platform-tag") + 1] == platforms.platform_tag()
     assert command[-1] == str(wheel)
 
 
@@ -184,3 +216,169 @@ def test_clean_build_tree_is_fine_with_a_clean_project(tmp_path):
     assemble.clean_build_tree(tmp_path)
 
     assert not (tmp_path / "build").exists()
+
+
+def test_repair_command_on_darwin_drives_delocate(tmp_path):
+    """auditwheel is Linux-only: it reads ELF headers and writes RPATHs."""
+    command = assemble.repair_command(
+        wheel=tmp_path / "dist" / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl",
+        output_dir=tmp_path / "wheelhouse",
+        system="Darwin",
+        machine="arm64",
+    )
+
+    assert command[0] == "delocate-wheel"
+    assert command[command.index("--wheel-dir") + 1] == str(tmp_path / "wheelhouse")
+    assert command[command.index("--require-archs") + 1] == "arm64"
+    assert command[-1].endswith(".whl")
+
+
+def test_repair_command_on_darwin_asks_for_no_platform_tag(tmp_path):
+    """delocate computes the tag from the payload's largest minos rather than
+    honouring one, so passing a tag would be a value it overrules anyway.
+    """
+    command = assemble.repair_command(
+        wheel=tmp_path / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl",
+        output_dir=tmp_path / "wheelhouse",
+        system="Darwin",
+        machine="arm64",
+    )
+
+    assert "--plat" not in command
+    assert not any("macosx" in argument for argument in command[:-1])
+
+
+def test_retag_command_on_darwin_keeps_the_tag_delocate_computed(tmp_path):
+    """The Python and ABI tags are ours to force; the platform tag is evidence."""
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-macosx_15_0_arm64.whl"
+    command = assemble.retag_command(wheel, system="Darwin")
+
+    assert command[:2] == ["wheel", "tags"]
+    assert command[command.index("--python-tag") + 1] == "py3"
+    assert command[command.index("--abi-tag") + 1] == "none"
+    assert "--platform-tag" not in command
+    assert command[-1] == str(wheel)
+
+
+def test_the_delocate_pin_is_the_version_that_refuses_a_payload_over_the_floor():
+    """0.13.0 raises on a library above MACOSX_DEPLOYMENT_TARGET; earlier
+    versions computed the tag but only warned, which publishes a wheel claiming
+    a macOS it cannot run on.
+    """
+    assert assemble.DELOCATE_REQUIREMENT == "delocate>=0.13.0"
+
+
+def test_wheel_platform_tags_reads_the_filename(tmp_path):
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_15_0_arm64.whl"
+
+    assert assemble.wheel_platform_tags(wheel) == ["macosx_15_0_arm64"]
+
+
+def test_wheel_platform_tags_splits_a_compressed_tag_set(tmp_path):
+    wheel = tmp_path / "x-1.0-py3-none-macosx_11_0_arm64.macosx_11_0_x86_64.whl"
+
+    assert assemble.wheel_platform_tags(wheel) == [
+        "macosx_11_0_arm64",
+        "macosx_11_0_x86_64",
+    ]
+
+
+def test_verify_platform_tag_accepts_the_tag_the_platform_claims(tmp_path):
+    wheel = tmp_path / f"palace_solver-0.17.0-py3-none-{platforms.platform_tag()}.whl"
+
+    assemble.verify_platform_tag(wheel)
+
+
+def test_verify_platform_tag_refuses_a_higher_macos_floor(tmp_path):
+    """delocate raises on a payload file above the target, so the route left open
+    is a newer SDK *major*, which it writes into the filename instead. A wheel
+    tagged higher than the metadata claims installs on fewer machines than
+    advertised, silently.
+    """
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_26_0_arm64.whl"
+
+    with pytest.raises(assemble.PlatformTagError, match="macosx_15_0_arm64"):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_verify_platform_tag_refuses_a_lower_macos_floor(tmp_path):
+    """Lower is not a bonus: the classifiers, the README and the TestPyPI dry
+    run all name one floor, and a wheel is not the place that decision changes.
+    """
+    wheel = tmp_path / "palace_solver-0.17.0-py3-none-macosx_11_0_arm64.whl"
+
+    with pytest.raises(assemble.PlatformTagError, match="macosx_11_0_arm64"):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_verify_platform_tag_refuses_a_wheel_claiming_several_platforms(tmp_path):
+    """A universal2 or fat tag set means the payload is not what was built."""
+    wheel = tmp_path / "x-1.0-py3-none-macosx_15_0_arm64.macosx_15_0_x86_64.whl"
+
+    with pytest.raises(assemble.PlatformTagError):
+        assemble.verify_platform_tag(wheel, expected="macosx_15_0_arm64")
+
+
+def test_build_environment_adds_nothing_on_linux():
+    """The raw wheel's tag is replaced by `auditwheel repair --plat` anyway."""
+    assert assemble.build_environment(system="Linux", machine="x86_64") == {}
+
+
+def test_build_environment_pins_the_host_platform_on_darwin(monkeypatch):
+    """A universal2 interpreter would otherwise tag an arm64-only payload fat.
+
+    GitHub's macOS runners install a universal2 CPython, so
+    ``sysconfig.get_platform()`` reports ``macosx-15.0-universal2`` and the raw
+    wheel claims both architectures. delocate then reads that tag as the
+    architectures the payload must have and fails on the missing x86_64 half.
+    """
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "15.0")
+
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    assert environment == {"_PYTHON_HOST_PLATFORM": "macosx-15.0-arm64"}
+
+
+def test_the_host_platform_names_the_same_platform_as_the_wheel_tag(monkeypatch):
+    """One derivation, two spellings: sysconfig dots what a wheel tag joins."""
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "15.0")
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    spelled = environment["_PYTHON_HOST_PLATFORM"].replace("-", "_").replace(".", "_")
+
+    assert spelled == platforms.platform_tag(system="Darwin", machine="arm64")
+
+
+def test_build_environment_follows_the_floor_the_build_exported(monkeypatch):
+    """The host platform is not read off the constant: it tracks the build.
+
+    A raw wheel tagged for a floor the build did not compile to is the same
+    mistake as guessing the tag, one step earlier.
+    """
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "16.0")
+
+    environment = assemble.build_environment(system="Darwin", machine="arm64")
+
+    assert environment == {"_PYTHON_HOST_PLATFORM": "macosx-16.0-arm64"}
+
+
+def test_verify_size_refuses_a_wheel_over_the_pypi_upload_limit(tmp_path):
+    wheel = tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl"
+    wheel.write_bytes(b"0" * (assemble.PYPI_SIZE_LIMIT_BYTES + 1))
+
+    with pytest.raises(assemble.WheelTooLargeError) as excinfo:
+        assemble.verify_size(wheel)
+
+    message = str(excinfo.value)
+    assert wheel.name in message
+    # The build stops here so a human can choose between shrinking the payload
+    # and asking PyPI to raise the limit; the message has to name the second
+    # option, because nothing else in the repository does.
+    assert "limit request" in message
+
+
+def test_verify_size_returns_the_report_for_a_wheel_under_the_limit(tmp_path):
+    wheel = tmp_path / "palace_solver-0.18.1-py3-none-macosx_15_0_arm64.whl"
+    wheel.write_bytes(b"0" * 1024)
+
+    assert assemble.verify_size(wheel).size_bytes == 1024

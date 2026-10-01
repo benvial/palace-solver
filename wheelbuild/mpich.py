@@ -21,16 +21,35 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from palace_solver import MPICH_VERSION
+from wheelbuild import platforms
 from wheelbuild._process import check_call
 
-#: Files an MPICH install must have for Palace to configure and run against it.
-REQUIRED_ARTEFACTS = (
-    Path("bin/mpiexec"),
-    Path("include/mpi.h"),
-    Path("include/mpif.h"),
-    Path("lib/libmpi.so.12"),
-    Path("lib/libmpifort.so.12"),
-)
+#: MPICH's shared-library ABI version, which is what the installed filenames
+#: carry: every MPICH 3.x and 4.x ships ``libmpi`` at 12. It is not the release
+#: version, and :mod:`wheelbuild.pin_check` is what guards the release.
+LIBRARY_ABI_VERSION = "12"
+
+
+def required_artefacts(*, system: str | None = None) -> tuple[Path, ...]:
+    """Files an MPICH install must have for Palace to configure and run against it.
+
+    Args:
+        system: ``platform.system()`` value; defaults to the running platform.
+            The Fortran libraries are ``lib/libmpifort.so.12`` on Linux and
+            ``lib/libmpifort.12.dylib`` on Darwin.
+
+    Returns:
+        Paths relative to the install prefix.
+    """
+    return (
+        Path("bin/mpiexec"),
+        Path("include/mpi.h"),
+        Path("include/mpif.h"),
+        platforms.library_path("libmpi", version=LIBRARY_ABI_VERSION, system=system),
+        platforms.library_path(
+            "libmpifort", version=LIBRARY_ABI_VERSION, system=system
+        ),
+    )
 
 
 def source_url(version: str = MPICH_VERSION) -> str:
@@ -64,11 +83,12 @@ def configure_arguments(*, source_dir: Path, prefix: Path) -> list[str]:
     ]
 
 
-def validate(prefix: Path) -> Path:
+def validate(prefix: Path, *, system: str | None = None) -> Path:
     """Check that an MPICH install carries the artefacts the build needs.
 
     Args:
         prefix: MPICH install prefix.
+        system: ``platform.system()`` value; defaults to the running platform.
 
     Returns:
         The validated prefix.
@@ -77,7 +97,9 @@ def validate(prefix: Path) -> Path:
         FileNotFoundError: If any required artefact is missing.
     """
     missing = [
-        relative for relative in REQUIRED_ARTEFACTS if not (prefix / relative).exists()
+        relative
+        for relative in required_artefacts(system=system)
+        if not (prefix / relative).exists()
     ]
     if missing:
         raise FileNotFoundError(
