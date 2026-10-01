@@ -6,6 +6,7 @@ that a second platform made possible to get wrong.
 """
 
 import re
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -522,3 +523,42 @@ def test_a_dispatched_run_cannot_be_cancelled_by_a_push_to_the_same_ref(workflow
     assert workflow["concurrency"]["cancel-in-progress"] is True
     assert "github.event_name" in group
     assert "github.ref" in group
+
+
+#: The linter's version is pinned rather than floating, and the pin is spelled
+#: in two places that install it -- the `checks` job and the ``dev`` extra a
+#: contributor installs from. ``==`` rather than a lower bound: the failure this
+#: prevents is a *new* release adding a rule, which a floor does not hold back.
+RUFF_REQUIREMENT = re.compile(r"ruff==(\d+\.\d+\.\d+)")
+
+
+def test_the_checks_job_pins_the_linter(workflow):
+    """An unpinned ruff turns a green branch red without a commit touching its
+    code, and makes a local run unable to predict CI. It has happened twice on
+    this repository: 0.16 began formatting Python inside Markdown, and 0.16.9
+    added ISC004. A pin moves both into a commit that says so.
+    """
+    install = next(
+        step["run"]
+        for step in workflow["jobs"]["checks"]["steps"]
+        if "pip install" in str(step.get("run", ""))
+    )
+
+    assert RUFF_REQUIREMENT.search(install), install
+
+
+def test_the_pinned_linter_is_the_one_a_contributor_installs(workflow):
+    """Two spellings of the version is how "it passed locally" and "it failed in
+    CI" come to be true at once. The dev extra is what a contributor installs,
+    so it has to name the version the gate runs.
+    """
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        extra = tomllib.load(handle)["project"]["optional-dependencies"]["dev"]
+    install = next(
+        step["run"]
+        for step in workflow["jobs"]["checks"]["steps"]
+        if "pip install" in str(step.get("run", ""))
+    )
+
+    declared = {requirement for requirement in extra if requirement.startswith("ruff")}
+    assert declared == {RUFF_REQUIREMENT.search(install).group(0)}

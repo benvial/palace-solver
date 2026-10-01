@@ -36,8 +36,22 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+      # ruff is pinned and everything else floats, because ruff is the only one
+      # of these whose *new* releases change the verdict on code nobody touched:
+      # it adds rules and changes formatting, and this gate runs both as hard
+      # checks. It has broken this repository twice from a release alone --
+      # 0.16 began formatting Python blocks inside Markdown, and 0.16.9 added
+      # ISC004 -- each time turning a branch red for a reason that had nothing
+      # to do with the branch, and each time invisible to the contributor who
+      # had just run ruff locally.
+      #
+      # The pin is exact rather than a ceiling: a ceiling still floats within
+      # itself, and a patch release is enough (0.16.9 was one). Bumping it is a
+      # commit that says so, with whatever that version newly objects to fixed
+      # in the same commit. tests/test_wheels_workflow.py ties it to the `dev`
+      # extra, which is where a contributor gets the same version from.
       - name: Install dev dependencies
-        run: python -m pip install --upgrade pip pytest ruff mypy packaging pyyaml
+        run: python -m pip install --upgrade pip pytest "ruff==0.16.9" mypy packaging pyyaml
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy palace_solver
