@@ -208,16 +208,22 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri $env:MSMPI_URL -OutFile D:\msmpisetup.exe
-          7z x D:\msmpisetup.exe -oD:\msmpi-raw -y | Out-Null
-          # Anything the bundle nests (a cab or an msi) is unpacked in place too.
-          Get-ChildItem -Recurse D:\msmpi-raw -Include *.cab, *.msi | ForEach-Object {
-            7z x $_.FullName "-o$($_.FullName)-x" -y | Out-Null
+          # The bundle holds two MSIs, x86 then x64; a plain `7z x` returns the
+          # first cabinet, which is x86 (run 36938984198: 0xc000007b). Take the
+          # MSI that carries msmpi64.dll, and give its two *64.dll files the
+          # names the installer gives them in System32.
+          7z x '-t#' D:\msmpisetup.exe -oD:\msmpi-parts -y | Out-Null
+          Get-ChildItem D:\msmpi-parts -Filter *.msi | ForEach-Object {
+            7z x $_.FullName "-oD:\msmpi-raw\$($_.BaseName)" -y | Out-Null
           }
+          $x64 = (Get-ChildItem -Recurse D:\msmpi-raw -Filter msmpi64.dll | Select-Object -First 1).DirectoryName
+          if (-not $x64) { throw "no x64 MSI in the MS-MPI bundle" }
           New-Item -ItemType Directory -Force D:\msmpi | Out-Null
-          foreach ($name in 'msmpi.dll', 'mpiexec.exe', 'smpd.exe', 'msmpires.dll',
+          Copy-Item "$x64\msmpi64.dll" D:\msmpi\msmpi.dll
+          Copy-Item "$x64\msmpires64.dll" D:\msmpi\msmpires.dll
+          foreach ($name in 'mpiexec.exe', 'smpd.exe',
                             'MicrosoftMPI_Redistributable_EULA.rtf', 'MPI_Redistributables_TPN.txt') {
-            $hit = Get-ChildItem -Recurse D:\msmpi-raw -Filter $name | Select-Object -First 1
-            if ($hit) { Copy-Item $hit.FullName D:\msmpi\ } else { Write-Output "MISSING $name" }
+            Copy-Item "$x64\$name" D:\msmpi\
           }
           Get-ChildItem -Recurse D:\msmpi-raw | Select-Object FullName, Length | Format-Table -AutoSize
           Get-ChildItem D:\msmpi | Format-Table Name, Length -AutoSize

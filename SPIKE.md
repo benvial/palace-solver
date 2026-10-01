@@ -223,3 +223,15 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   `install\lib` on `PATH`. The production build needs the same. Finding:
   Palace's configure executes test programs, so a Windows build machine
   needs the MPI runtime, not only the SDK.
+- **36938984198.** Palace's PETSc `try_run` program now starts and dies
+  with `0xc000007b` (STATUS_INVALID_IMAGE_FORMAT). The extracted
+  `msmpi.dll` is **x86**. `msmpisetup.exe` holds two MSIs, x86 then x64, and
+  a plain `7z x` returns the first cabinet. **Correction to ticket 01's
+  research:** the file sizes it lists as x64 (`msmpi.dll` 1,359,240 B,
+  `mpiexec.exe` 482,184 B, `smpd.exe` 367,536 B) are the x86 set. The x64
+  MSI ships `msmpi64.dll` (1,625,008 B), `msmpires64.dll`, and x64
+  `mpiexec.exe` (543,664 B) and `smpd.exe` (420,744 B). The installer
+  renames the `*64.dll` files to `msmpi.dll` and `msmpires.dll` in
+  System32. The workflow now extracts the x64 MSI and renames the same
+  way. Whether a renamed file still counts as redistributed "unmodified"
+  under the EULA is a question for the ADR.
