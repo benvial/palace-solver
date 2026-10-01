@@ -106,3 +106,18 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   run reports every failing object, and the source stage resets Palace's tree
   and re-patches each run. A cached dependency checkout is discarded
   whenever its diffs change.
+- **36924871897.** **Job one passed: libCEED (with LIBXSMM), GSLIB and
+  STRUMPACK with MPI all build under MinGW with MS-MPI.** It took four
+  patches, all patchable, all small:
+  1. Palace's `memoryreporting.cpp`: `getrusage` replaced with
+     `GetProcessMemoryInfo`.
+  2. LIBXSMM's RISC-V generator: a 64-bit mask stored in an
+     `unsigned long`.
+  3. libCEED: `posix_memalign`, and a `sed s:...:` that breaks on `D:`.
+  4. STRUMPACK: no `mpi_type<unsigned long long>`, and
+     `std::max(size_t, 1ul)`.
+
+  Three of the four are LLP64 (`long` is 32 bits on Windows) and one is the
+  drive-letter colon. None is structural. libCEED installs as
+  `build/libceed.so`, a PE DLL under a `.so` name, because Palace forces it
+  shared. Whether Palace links against it is job two's question.
