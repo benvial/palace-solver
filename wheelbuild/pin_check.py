@@ -16,10 +16,10 @@ foreign launch misbehaved.
 interop test runs against. It needs nothing but this repository, so CI runs it
 on every push.
 
-palais itself declares no MPI dependency — the PyPI ``mpich`` wheel is C-only
-and is not what this wheel builds or links against — so there is no pin on
-palais's side to compare with. The interoperability contract is this
-repository's own.
+There is no pin anywhere else to compare with: the PyPI ``mpich`` wheel is
+C-only and is not what this wheel builds or links against, and no consumer of
+this package declares an MPI dependency on its behalf. The interoperability
+contract is this repository's own.
 """
 
 from __future__ import annotations

@@ -1,8 +1,8 @@
 """Palace solver binary, packaged as a Python wheel.
 
 The wheel ships the ``palace`` executable and its vendored shared libraries
-inside this package. ``binary_path()`` is the resolution hook that palais's
-runner uses to find the packaged solver.
+inside this package. ``executable_path()`` and ``binary_path()`` are the
+resolution hooks a caller uses to find the packaged solver.
 """
 
 from __future__ import annotations
@@ -134,7 +134,7 @@ def console_script_path() -> Path | None:
 def executable_path() -> Path:
     """Return what a caller should launch to run the packaged solver.
 
-    This is the resolution hook for palais's runner. It prefers the ``palace``
+    This is the resolution hook a caller should use. It prefers the ``palace``
     console script, so that multi-rank launches go through the launcher guard,
     and falls back to the raw binary when the script cannot be located.
 
@@ -157,8 +157,8 @@ def launcher_conflict() -> str | None:
     A process manager that starts ranks without handing them an MPI rendezvous
     does not fail: each rank becomes its own ``MPI_COMM_WORLD``, solves the
     whole problem alone and exits 0. The ``palace`` console script makes this
-    check for itself; a caller that launches :func:`binary_path` directly —
-    which is how palais's runner resolves the solver — has to make it here.
+    check for itself; a caller that launches :func:`binary_path` directly has
+    to make it here.
 
     Note that this reports on the *calling* process's own launch environment,
     so it is worth calling from inside each rank rather than from a parent that

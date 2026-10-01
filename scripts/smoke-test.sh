@@ -75,8 +75,9 @@ echo "==> two ranks, under the vendored process manager"
 "$venv/bin/palace-mpiexec" -n 2 "$venv/bin/palace" --dry-run "$(basename "$config")"
 
 echo "==> two ranks through the wrapper's own --np"
-# palais drives the solver this way rather than by calling a launcher itself,
-# so the console script has to spawn the vendored process manager on its own.
+# A caller that asks the wrapper for ranks, rather than calling a launcher
+# itself, drives the solver this way, so the console script has to spawn the
+# vendored process manager on its own.
 # Rank 0 alone prints the dry-run line; twice would mean the ranks never found
 # each other.
 np_log="$workdir/np.log"

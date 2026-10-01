@@ -3,7 +3,8 @@ name: palace release check
 # Upstream Palace is not a package in any ecosystem Dependabot understands, so
 # nothing tells us a new release exists. This job asks GitHub once a week, and
 # when upstream is ahead it opens the bump as a pull request: step 1 of the
-# release process in README.md, done mechanically. Steps 2 and 3 stay human.
+# release process in docs/releasing.md, done mechanically. Steps 2 and 3 stay
+# human.
 on:
   schedule:
     # Mondays, 06:17 UTC. Off the hour: GitHub queues scheduled jobs and the
@@ -170,9 +171,8 @@ jobs:
 
           ## What a human still has to decide
 
-          - **palais's pin.** \`palais[solver]\` requires \`palace-solver~=0.17.0\`, which only \`0.17.x\` satisfies. If this bump changes the minor version, \`pip install palais[solver]\` becomes unsatisfiable until palais's pin moves too. The two releases have to be sequenced.
           - **\`MPICH_VERSION\`.** Independent of the Palace release and never bumped by this job. Moving it is a decision to re-run \`scripts/interop-test.sh\`, which is what \`wheelbuild.pin_check\` guards.
-          - **Step 2, the end-to-end test.** \`scripts/e2e-test.sh wheelhouse/*.whl <checkout>\` against a palais working tree. CI cannot reach palais; see \`.scratch/wheels/issues/07-e2e-with-palais.md\`.
+          - **Step 2, the dry run.** A minor bump spends three new filenames on TestPyPI; see \`docs/releasing.md\`.
           - **Step 3, the tag.** Deliberately not automated: pushing \`v$UPSTREAM\` publishes to PyPI through trusted publishing, and PyPI never lets a filename be reused.
 
           Read upstream's release notes before merging.
