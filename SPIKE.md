@@ -189,3 +189,9 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   the POSIX python reads as a relative path. The shim now rewrites drive
   paths on every call, not only for `configure`. Every caller it serves runs
   the POSIX python, so every caller needs POSIX paths.
+- **36935360566.** The shim fix could not help: SLEPc's build calls
+  `/usr/bin/python3.exe` directly (the interpreter its configure recorded)
+  with `$(PETSC_DIR)/share/.../gmakegen.py`, and Palace passes
+  `PETSC_DIR=D:/b/install` to make. **Patch 8 (`palace-slepc-msys-petsc-dir.patch`):**
+  under `MINGW`, Palace's SLEPc configure, build and install commands now
+  get `PETSC_DIR` in `/D/...` form.
