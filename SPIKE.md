@@ -140,3 +140,14 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     ./configure with cygwin-python"). The driver now installs MSYS2's
     `python` and puts a `python3` shim for `/usr/bin/python3` first on
     `PATH`. This is a provisioning deviation, documented by PETSc for MSYS2.
+- **36928018416.** Patches 5 and 6 work: hypre and MUMPS (parallel, with
+  ScaLAPACK and MS-MPI) build. Two configure failures remain, neither one
+  diagnosable from the job log alone:
+  - **PETSc**, now running under the POSIX python, rejects
+    `--with-cc=C:/msys64/ucrt64/bin/cc.exe` ("cannot be found or does not
+    work"). Suspected cause: the Windows-form path under a Cygwin-style
+    python. Not yet confirmed.
+  - **MFEM**'s `FindSTRUMPACK` test (`STRUMPACK_VERSION_OK`) fails to
+    compile or link against the static STRUMPACK.
+  The next run collects `configure.log` and each sub-project's
+  `CMakeConfigureLog.yaml`.
