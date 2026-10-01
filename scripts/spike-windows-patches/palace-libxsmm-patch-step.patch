@@ -1,0 +1,10 @@
+--- a/cmake/ExternalLIBXSMM.cmake
++++ b/cmake/ExternalLIBXSMM.cmake
+@@ -84,6 +84,7 @@
+   PREFIX            ${CMAKE_BINARY_DIR}/extern/libxsmm-cmake
+   BUILD_IN_SOURCE   TRUE
+   UPDATE_COMMAND    ""
++  PATCH_COMMAND     git apply "${CMAKE_SOURCE_DIR}/extern/patch/libxsmm/patch_llp64.diff"
+   CONFIGURE_COMMAND ""
+   BUILD_COMMAND     ${CMAKE_MAKE_PROGRAM} ${LIBXSMM_OPTIONS}
+   INSTALL_COMMAND

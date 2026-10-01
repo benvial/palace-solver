@@ -50,6 +50,13 @@ export PATH="$cmake_dir/bin:$PATH"
 
 mkdir -p "$build_root" "$CCACHE_DIR"
 
+# DEVIATION: METIS, ParMETIS, ScaLAPACK and others are configured by a bare
+# `${CMAKE_COMMAND} <SOURCE_DIR>` with no -G, so they take CMake's Windows
+# default (NMake) instead of the superbuild's generator. CMake reads this
+# variable whenever no -G is given (run 36917961846: "Running 'nmake' '-?'
+# failed").
+export CMAKE_GENERATOR="MSYS Makefiles"
+
 case "$stage" in
 env)
   echo "BUILD_ROOT=$build_root"
@@ -76,6 +83,11 @@ env)
   time (for _ in $(seq 50); do sh -c true; done)
   time (for _ in $(seq 50); do cmd //c "exit 0"; done)
   time (for _ in $(seq 50); do gcc -c -O2 "$probe/empty.c" -o "$probe/empty.o"; done)
+  # Run 36917961846: those three cost 26, 50 and 58 ms each, so process
+  # overhead is not the 1.3 s per object. OpenBLAS's common.h includes
+  # <windows.h> on Windows; time a translation unit that does only that.
+  printf '#include <windows.h>\n' >"$probe/windows.c"
+  time (for _ in $(seq 10); do gcc -c -O2 "$probe/windows.c" -o "$probe/windows.o"; done)
   powershell -NoProfile -Command \
     'Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled | Format-List' || true
   ;;
@@ -118,11 +130,25 @@ source)
       commit --quiet --no-verify --message "Palace v$palace_version release tarball"
     git -C "$source_dir" tag "v$palace_version"
   fi
-  # PATCH: Palace's own C++ — the one POSIX-only file ticket 02 found.
+  # PATCH: Palace's own sources. palace-memoryreporting is the one POSIX-only
+  # file ticket 02 found; palace-<dep>-patch-step wires a dependency patch
+  # (<dep>-*.diff, copied into extern/patch/<dep>/) into that dependency's
+  # ExternalProject, the way upstream already patches MFEM or MUMPS.
+  for diff in "$repo_root"/scripts/spike-windows-patches/libxsmm-*.diff; do
+    mkdir -p "$source_dir/extern/patch/libxsmm"
+    cp "$diff" "$source_dir/extern/patch/libxsmm/patch_${diff##*/libxsmm-}"
+  done
   for patch in "$repo_root"/scripts/spike-windows-patches/palace-*.patch; do
     if git -C "$source_dir" apply --check "$patch" 2>/dev/null; then
       git -C "$source_dir" apply "$patch"
       echo "applied $(basename "$patch")"
+      # A cached checkout of the dependency predates its new patch step.
+      dep="${patch##*/palace-}"
+      dep="${dep%-patch-step.patch}"
+      if [[ "$dep" != "${patch##*/palace-}" ]]; then
+        rm -rf "$superbuild_dir/extern/$dep" "$superbuild_dir/extern/$dep-cmake"
+        echo "discarded the cached $dep checkout"
+      fi
     else
       echo "already applied (or stale): $(basename "$patch")"
     fi

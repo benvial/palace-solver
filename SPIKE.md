@@ -39,3 +39,23 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   package is now in the install list. This is a provisioning gap, not a patch.
   The compile took about 75 min against about 15 min on Linux at the same
   `-j4`, so each object costs about 5-8x as much.
+- **36917961846.** The cache restored the OpenBLAS tree and the build resumed:
+  link and install only, 12 min. The probe ruled out process overhead: an
+  MSYS2 fork costs 26 ms, a native process start 50 ms, and gcc on an empty
+  file 58 ms, all far below the ~1.3 s each OpenBLAS object took.
+  Defender's real-time protection is off. Job one's three targets:
+  - **GSLIB: built.** It produced a static `libgs.a` under MinGW with
+    MS-MPI, with no patch. The only warnings are `-Wstringop-overflow` on
+    `MPI_STATUSES_IGNORE`.
+  - **libCEED: blocked by LIBXSMM.** LIBXSMM fails to compile under LLP64:
+    `generator_rv64_instructions.c` stores a 64-bit mask in an
+    `unsigned long`, which is 32 bits on Windows, and `-Werror=overflow`
+    turns the warning into an error. This is a real upstream bug, still
+    present on LIBXSMM `main`, though the code is RISC-V only and never runs
+    on x86. Patch 2 (`libxsmm-llp64.diff`) fixes it, wired in through a
+    `PATCH_COMMAND` like upstream's patches for MFEM and MUMPS. It is
+    patchable.
+  - **STRUMPACK: blocked by its prerequisites.** METIS, ZFP and ScaLAPACK
+    never configured: Palace configures them with a bare
+    `${CMAKE_COMMAND} <SOURCE_DIR>`, so CMake fell back to NMake. Fixed in
+    the driver by exporting `CMAKE_GENERATOR="MSYS Makefiles"`. Not a patch.
