@@ -1,0 +1,356 @@
+name: spike windows amd64
+
+# THROWAWAY workflow for wayfinder ticket 07 (windows-support). Lives only on
+# research/windows-spike and is never merged.
+#
+# Question: does Palace's full-feature superbuild build on a GitHub Windows
+# runner with MSYS2 UCRT64 gcc/gfortran and MS-MPI, and does the binary run —
+# on one rank, on two under the vendored MS-MPI mpiexec, and from a wheel?
+#
+# Three jobs, in ticket 06's order:
+#   targets     libCEED, GSLIB and STRUMPACK-with-MPI only: the three with no
+#               Windows evidence at all. A structural failure here is the
+#               no-go, so the rest does not run.
+#   superbuild  everything else, cold and timed; then the PE import closure,
+#               the wheels and delvewheel.
+#   verify      a clean runner with no MSYS2 on PATH and no MS-MPI installed:
+#               the wheel's checks, then a system MS-MPI install for interop.
+#
+# Cache: the build root is saved under a spike-only `spike-windows-` key with
+# `if: always()`, so a run cut off by the 6-hour limit resumes. Older spike
+# entries are deleted as soon as a newer one is saved, so the spike holds at
+# most one ~2 GiB entry beside the three real superbuild caches (6.6 GiB of 10).
+
+on:
+  push:
+    branches: [research/windows-spike]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # To delete superseded spike cache entries.
+  actions: write
+
+env:
+  # MSYS2 converts these for the native tools; actions/cache takes them as is.
+  BUILD_ROOT_WIN: D:\b
+  MSMPI_URL: https://download.microsoft.com/download/7/2/7/72731ebb-b63c-4170-ade7-836966263a8f/msmpisetup.exe
+
+jobs:
+  targets:
+    name: libCEED, GSLIB, STRUMPACK under MinGW
+    runs-on: windows-2025
+    timeout-minutes: 355
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: D drive
+        shell: pwsh
+        run: Get-PSDrive C, D | Format-Table -AutoSize
+
+      - name: MSYS2 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          install: >-
+            make git patch diffutils perl tar unzip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-msmpi
+
+      - name: Restore spike build root
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BUILD_ROOT_WIN }}
+          key: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-targets
+          restore-keys: spike-windows-
+
+      - name: Environment
+        run: scripts/spike-windows-build.sh env
+
+      - name: OpenBLAS (Linux recipe)
+        id: openblas
+        run: scripts/spike-windows-build.sh openblas
+
+      - name: Palace sources
+        id: source
+        run: scripts/spike-windows-build.sh source
+
+      - name: Configure superbuild
+        id: configure
+        run: scripts/spike-windows-build.sh configure
+
+      - name: libCEED (with LIBXSMM)
+        id: libceed
+        continue-on-error: true
+        run: scripts/spike-windows-build.sh target libCEED
+
+      - name: GSLIB
+        id: gslib
+        continue-on-error: true
+        run: scripts/spike-windows-build.sh target gslib
+
+      - name: STRUMPACK with MPI
+        id: strumpack
+        continue-on-error: true
+        run: scripts/spike-windows-build.sh target strumpack
+
+      - name: Collect logs
+        if: always()
+        run: |
+          set +e
+          out="$(cygpath -u "$RUNNER_TEMP")/spike-logs"
+          mkdir -p "$out"
+          cp /d/b/superbuild/CMakeCache.txt "$out/" 2>/dev/null
+          cp /d/b/superbuild/CMakeFiles/CMakeConfigureLog.yaml "$out/" 2>/dev/null
+          find /d/b/superbuild -name '*-err.log' -o -name '*-out.log' \
+            | while read -r log; do cp "$log" "$out/$(echo "${log#/d/b/superbuild/}" | tr / _)"; done
+          ls "$out" | wc -l
+          exit 0
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: spike-logs-targets
+          path: ${{ runner.temp }}/spike-logs
+          if-no-files-found: warn
+
+      - name: Save spike build root
+        if: always() && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUILD_ROOT_WIN }}
+          key: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-targets
+
+      - name: Drop superseded spike caches
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-targets
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key spike-windows- --json key -q '.[].key' \
+            | grep -vx "$KEEP" | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Verdict
+        if: always()
+        run: |
+          {
+            echo "## Windows spike — job one"
+            echo
+            echo "| stage | outcome |"
+            echo "| --- | --- |"
+            echo "| OpenBLAS | ${{ steps.openblas.outcome }} |"
+            echo "| Palace sources (+ patches) | ${{ steps.source.outcome }} |"
+            echo "| Configure | ${{ steps.configure.outcome }} |"
+            echo "| libCEED | ${{ steps.libceed.outcome }} |"
+            echo "| GSLIB | ${{ steps.gslib.outcome }} |"
+            echo "| STRUMPACK with MPI | ${{ steps.strumpack.outcome }} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          [[ "${{ steps.libceed.outcome }}${{ steps.gslib.outcome }}${{ steps.strumpack.outcome }}" == successsuccesssuccess ]]
+
+  superbuild:
+    name: full superbuild, closure, wheels
+    needs: targets
+    runs-on: windows-2025
+    timeout-minutes: 355
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: MSYS2 UCRT64 toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          install: >-
+            make git patch diffutils perl tar unzip
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-msmpi
+
+      - name: Restore spike build root
+        id: restore
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ env.BUILD_ROOT_WIN }}
+          key: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-superbuild
+          restore-keys: spike-windows-
+
+      - name: Environment
+        run: scripts/spike-windows-build.sh env
+
+      - name: Configure superbuild
+        run: |
+          scripts/spike-windows-build.sh source
+          scripts/spike-windows-build.sh configure
+
+      - name: Full superbuild
+        id: superbuild
+        continue-on-error: true
+        run: scripts/spike-windows-build.sh superbuild
+
+      - name: Inspect the binary
+        id: inspect
+        if: steps.superbuild.outcome == 'success'
+        run: scripts/spike-windows-build.sh inspect
+
+      - name: Collect logs
+        if: always()
+        run: |
+          set +e
+          out="$(cygpath -u "$RUNNER_TEMP")/spike-logs"
+          mkdir -p "$out"
+          cp /d/b/superbuild/CMakeCache.txt "$out/" 2>/dev/null
+          find /d/b/superbuild -name '*-err.log' -o -name '*-out.log' \
+            | while read -r log; do cp "$log" "$out/$(echo "${log#/d/b/superbuild/}" | tr / _)"; done
+          exit 0
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: spike-logs-superbuild
+          path: ${{ runner.temp }}/spike-logs
+          if-no-files-found: warn
+
+      - name: Save spike build root
+        if: always() && steps.restore.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.BUILD_ROOT_WIN }}
+          key: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-superbuild
+
+      - name: Drop superseded spike caches
+        if: always()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KEEP: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-superbuild
+        run: |
+          gh cache list --repo "$GITHUB_REPOSITORY" --key spike-windows- --json key -q '.[].key' \
+            | grep -vx "$KEEP" | xargs -r -n1 gh cache delete --repo "$GITHUB_REPOSITORY" || true
+
+      - name: Fail if the superbuild failed
+        if: steps.superbuild.outcome != 'success'
+        run: exit 1
+
+      - name: MS-MPI redistributable (extracted, not installed)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:MSMPI_URL -OutFile D:\msmpisetup.exe
+          7z x D:\msmpisetup.exe -oD:\msmpi-raw -y | Out-Null
+          # Anything the bundle nests (a cab or an msi) is unpacked in place too.
+          Get-ChildItem -Recurse D:\msmpi-raw -Include *.cab, *.msi | ForEach-Object {
+            7z x $_.FullName "-o$($_.FullName)-x" -y | Out-Null
+          }
+          New-Item -ItemType Directory -Force D:\msmpi | Out-Null
+          foreach ($name in 'msmpi.dll', 'mpiexec.exe', 'smpd.exe', 'msmpires.dll',
+                            'MicrosoftMPI_Redistributable_EULA.rtf', 'MPI_Redistributables_TPN.txt') {
+            $hit = Get-ChildItem -Recurse D:\msmpi-raw -Filter $name | Select-Object -First 1
+            if ($hit) { Copy-Item $hit.FullName D:\msmpi\ } else { Write-Output "MISSING $name" }
+          }
+          Get-ChildItem -Recurse D:\msmpi-raw | Select-Object FullName, Length | Format-Table -AutoSize
+          Get-ChildItem D:\msmpi | Format-Table Name, Length -AutoSize
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: PE closure, wheels and delvewheel
+        id: wheels
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pefile build wheel delvewheel
+          $binary = Get-ChildItem D:\b\install\bin -Filter 'palace-*.bin' | Select-Object -First 1
+          New-Item -ItemType Directory -Force D:\payload | Out-Null
+          Copy-Item $binary.FullName D:\payload\palace-real.exe
+          foreach ($name in 'mpiexec.exe', 'smpd.exe', 'msmpires.dll') { Copy-Item D:\msmpi\$name D:\payload\ }
+          python scripts/spike_windows.py closure D:\payload\palace-real.exe D:\payload `
+            D:\b\install\bin D:\msmpi C:\msys64\ucrt64\bin | Tee-Object D:\closure.txt
+          python scripts/spike_windows.py wheels D:\payload D:\wheels | Tee-Object D:\wheels.txt
+          Get-ChildItem D:\payload | Format-Table Name, Length -AutoSize
+          Select-String -Path D:\closure.txt, D:\wheels.txt -Pattern '^RESULT ' |
+            ForEach-Object { "- $($_.Line.Substring(7))" } | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: spike-wheels
+          path: D:\wheels
+          if-no-files-found: error
+
+  verify:
+    name: run the wheel on a clean runner
+    needs: superbuild
+    runs-on: windows-2025
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: spike-wheels
+          path: D:\wheels
+
+      - name: Palace example
+        shell: bash
+        run: |
+          version="$(python -c 'import re; print(re.search(r"__version__ = \"([^\"]+)\"", open("palace_solver/__init__.py").read()).group(1).split(".post")[0])')"
+          curl -fsSL "https://github.com/awslabs/palace/archive/refs/tags/v$version.tar.gz" \
+            | tar -xz -C /d "palace-$version/examples/spheres"
+          mv "/d/palace-$version/examples/spheres" /d/spheres
+
+      - name: Firewall rules before
+        run: (Get-NetFirewallRule | Measure-Object).Count
+
+      - name: Checks without any system MS-MPI
+        id: clean
+        continue-on-error: true
+        run: |
+          python -m pip install --quiet pefile
+          $wheel = Get-ChildItem D:\wheels\flat -Filter *.whl | Select-Object -First 1
+          python scripts/spike_windows.py verify $wheel.FullName D:\spheres | Tee-Object D:\verify.txt
+          Select-String -Path D:\verify.txt -Pattern '^RESULT ' |
+            ForEach-Object { "- $($_.Line.Substring(7))" } | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+
+      - name: Firewall rules after
+        run: |
+          (Get-NetFirewallRule | Measure-Object).Count
+          Get-NetFirewallRule | Where-Object { $_.DisplayName -match 'mpi|smpd|palace' } | Format-Table DisplayName, Direction, Action
+
+      - name: Install system MS-MPI 10.1.3
+        run: |
+          Invoke-WebRequest -Uri $env:MSMPI_URL -OutFile D:\msmpisetup.exe
+          Start-Process -Wait D:\msmpisetup.exe -ArgumentList '-unattend', '-force'
+          & "C:\Program Files\Microsoft MPI\Bin\mpiexec.exe" -help 2>&1 | Select-Object -First 3
+
+      - name: Interop under the system mpiexec
+        continue-on-error: true
+        run: |
+          $wheel = Get-ChildItem D:\wheels\flat -Filter *.whl | Select-Object -First 1
+          python scripts/spike_windows.py verify $wheel.FullName D:\spheres `
+            --system-mpiexec "C:\Program Files\Microsoft MPI\Bin\mpiexec.exe" | Tee-Object D:\interop.txt
+          "### with a system MS-MPI installed" | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
+          Select-String -Path D:\interop.txt -Pattern '^RESULT ' |
+            ForEach-Object { "- $($_.Line.Substring(7))" } | Out-File -Append -Encoding utf8 $env:GITHUB_STEP_SUMMARY
