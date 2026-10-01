@@ -63,8 +63,28 @@ export CMAKE_GENERATOR="MSYS Makefiles"
 # MSYS2's own /usr/bin/python3 is the Cygwin-style one it wants; a shim ahead
 # of ucrt64/bin on PATH hands it to every `env python3`. `python` (used by the
 # wheelbuild helper above) stays MinGW's.
+# That python takes only POSIX paths: given `--with-cc=C:/msys64/...` it
+# searched PATH for a program literally named that (run 36929717229,
+# configure.log). So for a */configure script the shim also rewrites every
+# drive-letter path in the arguments, and in PETSC_DIR and SLEPC_DIR, to its
+# /x/... form.
 mkdir -p "$build_root/posix-python"
-printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' >"$build_root/posix-python/python3"
+cat >"$build_root/posix-python/python3" <<'SHIM'
+#!/usr/bin/bash
+posix() { sed -E 's#(^|[=,;[:space:]]|\[)([A-Za-z]):/#\1/\L\2/#g' <<<"$1"; }
+case "${1:-}" in
+  configure|*/configure)
+    args=()
+    for arg in "$@"; do args+=("$(posix "$arg")"); done
+    for var in PETSC_DIR SLEPC_DIR; do
+      [[ -n "${!var:-}" ]] && export "$var=$(posix "${!var}")"
+    done
+    echo "posix-python: ${args[*]}" >&2
+    exec /usr/bin/python3 "${args[@]}"
+    ;;
+esac
+exec /usr/bin/python3 "$@"
+SHIM
 chmod +x "$build_root/posix-python/python3"
 export PATH="$build_root/posix-python:$PATH"
 

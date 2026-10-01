@@ -151,3 +151,21 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     compile or link against the static STRUMPACK.
   The next run collects `configure.log` and each sub-project's
   `CMakeConfigureLog.yaml`.
+- **36929717229.** The new logs explain both failures:
+  - **PETSc:** `configure.log` shows the POSIX python searching `PATH` for
+    a program literally named `C:/msys64/ucrt64/bin/cc.exe`. To it, a drive
+    letter is a relative path. The `python3` shim now rewrites every `X:/`
+    path in a `*/configure` script's arguments, and in `PETSC_DIR` and
+    `SLEPC_DIR`, to `/x/`. Still a provisioning deviation. Open risk: PETSc
+    will then record `/d/b/...` paths in `petscvariables`, which native
+    tools (MFEM's and Palace's CMake, gcc) cannot resolve.
+  - **MFEM: patch 7 (`palace-mfem-static-scalapack.patch`).** The
+    `FindSTRUMPACK` test link fails with 562 undefined references, all from
+    `libscalapack.a`: MPI calls (`MPI_Op_create`, `MPI_Type_match_size`,
+    ...) and BLAS/LAPACK routines (`lsame_`, `dsymm_`, ...). MFEM places the
+    REQUIRED_LIBRARIES (ScaLAPACK) after the REQUIRED_PACKAGES (MPI, BLAS).
+    A static archive then finds nothing after it to resolve against; on
+    Linux the shared `libscalapack.so` hid the problem. The patch appends
+    BLAS/LAPACK and MPI after ScaLAPACK when `NOT BUILD_SHARED_LIBS`, for
+    both STRUMPACK and MUMPS. This is a static-linking bug in Palace, not
+    specific to Windows, and could go upstream.
