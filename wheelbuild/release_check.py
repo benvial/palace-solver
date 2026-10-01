@@ -80,9 +80,11 @@ def problems(directory: Path, *, version: str | None = None) -> list[str]:
     expected = set(expected_wheel_names(version=version))
     if not directory.is_dir():
         return [
-            f"{directory} is not a directory, so no wheel was collected; "
-            f"this release needs all {len(expected)} of "
-            f"{', '.join(sorted(expected))}"
+            (
+                f"{directory} is not a directory, so no wheel was collected; "
+                f"this release needs all {len(expected)} of "
+                f"{', '.join(sorted(expected))}"
+            )
         ]
 
     present = {entry.name: entry for entry in directory.iterdir()}
