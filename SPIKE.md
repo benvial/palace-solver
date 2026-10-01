@@ -252,3 +252,11 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   - `std::max(0L, memory)`: `std::distance` returns `long long` on LLP64.
     Fix: `std::max<decltype(memory)>`.
   All three are portable: identical behaviour on Linux and macOS.
+- **36941538545.** **Palace's C++ compiles**: patch 9 holds, and
+  `libpalace.a` is built. The `palace-x86_64.bin` link then stops at
+  `cannot find -lzfp`. This is the same bare `-lzfp` that macOS hit, and
+  `wheelbuild.superbuild` already handles it on Darwin with
+  `-L<prefix>/lib` in the linker flags. The driver now passes the same
+  flags. In production this is one more platform in an existing branch,
+  not a new deviation. Cost: every sub-project's configure command changes
+  once, so this run reconfigures and relinks the stack.

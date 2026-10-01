@@ -215,6 +215,10 @@ print("\n".join(FEATURE_FLAGS))')
       done || true  # grep finding nothing is the normal case
   # DEVIATION: the generator. Palace runs `${CMAKE_MAKE_PROGRAM} VAR=value
   # install` for libCEED, GSLIB and LIBXSMM, which needs GNU make and sh.
+  # DEVIATION (the Darwin one, not a new one): Palace links STRUMPACK's
+  # companions by bare name (`-lzfp`), which no default search path reaches;
+  # wheelbuild.superbuild already adds -L<prefix>/lib on Darwin for exactly
+  # this (run 36941538545: "cannot find -lzfp" at the palace.exe link).
   # No MPI_HOME: MS-MPI comes from MSYS2's mingw-w64-msmpi (headers, import
   # library, mpicc wrappers) and FindMPI is left to find it — what it picks is
   # in the configure log.
@@ -222,6 +226,8 @@ print("\n".join(FEATURE_FLAGS))')
     -DCMAKE_INSTALL_PREFIX="$(win "$install_prefix")" \
     -DCMAKE_PREFIX_PATH="$(win "$install_prefix")" \
     "${features[@]}" \
+    -DCMAKE_EXE_LINKER_FLAGS="-L$(win "$install_prefix")/lib" \
+    -DCMAKE_SHARED_LINKER_FLAGS="-L$(win "$install_prefix")/lib" \
     -DCMAKE_C_COMPILER_LAUNCHER=ccache \
     -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
     -DCMAKE_Fortran_COMPILER_LAUNCHER=ccache \
