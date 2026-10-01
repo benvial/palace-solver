@@ -67,11 +67,12 @@ export CMAKE_GENERATOR="MSYS Makefiles"
 # searched PATH for a program literally named that (run 36929717229,
 # configure.log). So for a */configure script the shim also rewrites every
 # drive-letter path in the arguments, and in PETSC_DIR and SLEPC_DIR, to its
-# /x/... form.
+# /X/... form, keeping the letter's case: make reports the working directory
+# as /D/b/..., and SLEPc compares SLEPC_DIR against it case-sensitively.
 mkdir -p "$build_root/posix-python"
 cat >"$build_root/posix-python/python3" <<'SHIM'
 #!/usr/bin/bash
-posix() { sed -E 's#(^|[=,;[:space:]]|\[)([A-Za-z]):/#\1/\L\2/#g' <<<"$1"; }
+posix() { sed -E 's#(^|[=,;[:space:]]|\[)([A-Za-z]):/#\1/\2/#g' <<<"$1"; }
 case "${1:-}" in
   configure|*/configure)
     args=()

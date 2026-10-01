@@ -169,3 +169,16 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     BLAS/LAPACK and MPI after ScaLAPACK when `NOT BUILD_SHARED_LIBS`, for
     both STRUMPACK and MUMPS. This is a static-linking bug in Palace, not
     specific to Windows, and could go upstream.
+- **36931006599.** **PETSc configured, built and installed** (static,
+  complex, MS-MPI, OpenBLAS) once its `configure` saw POSIX paths. Two
+  failures:
+  - **SLEPc:** "SLEPC_DIR is not the current directory". The shim
+    lower-cased the drive (`/d/b/...`), while make's working directory is
+    `/D/b/...`, and SLEPc compares the two case-sensitively. The shim now
+    keeps the letter's case.
+  - **MFEM:** patch 7 reached MFEM, and the order was right, but
+    `mfem_find_package` runs `list(REMOVE_DUPLICATES)` on the full list. That
+    keeps the first, too-early copy of `libmsmpi.dll.a` and
+    `libopenblas.dll.a` and drops the copies after ScaLAPACK. Patch 7 now
+    spells the trailing ones `-Wl,<path>`: the same file to `ld`, a
+    different string to CMake.

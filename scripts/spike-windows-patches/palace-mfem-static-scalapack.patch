@@ -1,18 +1,26 @@
 --- a/cmake/ExternalMFEM.cmake
 +++ b/cmake/ExternalMFEM.cmake
-@@ -304,10 +304,21 @@
+@@ -304,10 +304,29 @@
      endif()
    endif()
  
-+  # A static ScaLAPACK carries no record of what it needs, so its MPI and
-+  # BLAS/LAPACK references must follow it on the link line; MFEM puts the
-+  # REQUIRED_LIBRARIES after the REQUIRED_PACKAGES, and a shared build never
-+  # noticed.
++  # A static ScaLAPACK carries no record of what it needs, so its BLAS/LAPACK
++  # and MPI references must follow it on the link line. MFEM puts the
++  # REQUIRED_LIBRARIES after the REQUIRED_PACKAGES and then REMOVE_DUPLICATES
++  # the whole list, keeping the first (too early) copy of each, so the
++  # trailing ones are spelled -Wl,<path>: the same file to the linker, a
++  # different string to CMake. A shared build never noticed.
 +  set(SCALAPACK_LINK_LIBRARIES ${SCALAPACK_LIBRARIES})
 +  if(NOT BUILD_SHARED_LIBS)
-+    list(APPEND SCALAPACK_LINK_LIBRARIES
-+      ${BLAS_LAPACK_LIBRARIES} ${MPI_Fortran_LIBRARIES} ${MPI_C_LIBRARIES}
-+    )
++    string(REPLACE "$<SEMICOLON>" ";" _SCALAPACK_DEPENDENCIES "${BLAS_LAPACK_LIBRARIES}")
++    list(APPEND _SCALAPACK_DEPENDENCIES ${MPI_Fortran_LIBRARIES} ${MPI_C_LIBRARIES})
++    foreach(_LIB IN LISTS _SCALAPACK_DEPENDENCIES)
++      if(IS_ABSOLUTE "${_LIB}")
++        list(APPEND SCALAPACK_LINK_LIBRARIES "-Wl,${_LIB}")
++      else()
++        list(APPEND SCALAPACK_LINK_LIBRARIES "${_LIB}")
++      endif()
++    endforeach()
 +  endif()
 +
    # Configure STRUMPACK
@@ -23,7 +31,7 @@
      if(NOT "${STRUMPACK_EXTRA_LIBRARIES}" STREQUAL "")
        list(PREPEND STRUMPACK_REQUIRED_LIBRARIES ${STRUMPACK_EXTRA_LIBRARIES})
      endif()
-@@ -332,6 +343,7 @@
+@@ -332,6 +351,7 @@
    endif()
  
    # Configure MUMPS
@@ -31,7 +39,7 @@
    if(PALACE_WITH_MUMPS)
      set(MUMPS_REQUIRED_PACKAGES "ParMETIS" "METIS" "LAPACK" "BLAS" "MPI" "MPI_Fortran" "Threads")
      if(PALACE_WITH_OPENMP)
-@@ -341,7 +353,7 @@
+@@ -341,7 +361,7 @@
      list(APPEND MFEM_OPTIONS
        "-DMUMPS_DIR=${CMAKE_INSTALL_PREFIX}"
        "-DMUMPS_REQUIRED_PACKAGES=${MUMPS_REQUIRED_PACKAGES}"
