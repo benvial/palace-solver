@@ -74,3 +74,19 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   - METIS, ZFP and ScaLAPACK still reported NMake: their build trees had
     cached NMake from the failed configure. The configure stage now discards
     any sub-project cache that recorded NMake.
+- **36921314814.** The patches applied, and LIBXSMM, METIS, ZFP and
+  ScaLAPACK all built: patch 2 works and the generator fix holds. Two new
+  failures, both small source fixes:
+  - **libCEED: patch 3 (`libCEED-posix-memalign.diff`).** `ceed.c` calls
+    `posix_memalign`, which Windows lacks, and it is the only POSIX-only call
+    in libCEED's interface and CPU backends. Still unfixed on libCEED `main`.
+    The patch uses `malloc` on `_WIN32`. `_aligned_malloc` is ruled out
+    because `CeedReallocArray` and `CeedFree` call `realloc()` and `free()`
+    on the result. Giving up 64-byte alignment is safe: `backend.h` already
+    says `CeedCalloc` returns only calloc alignment.
+  - **STRUMPACK: patch 4 (`STRUMPACK-llp64.diff`).** `MPIWrapper.hpp`
+    specializes `mpi_type<>` for `unsigned long` but not
+    `unsigned long long`, which is `std::size_t` on Windows. The patch adds
+    that specialization (`MPI_UNSIGNED_LONG_LONG`, which MS-MPI's `mpi.h`
+    defines). It is harmless on LP64, where the two types are distinct.
+  Patch count: 4, all patchable. The spike has found nothing structural so far.

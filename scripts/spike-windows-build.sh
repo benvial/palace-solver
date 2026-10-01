@@ -134,9 +134,13 @@ source)
   # file ticket 02 found; palace-<dep>-patch-step wires a dependency patch
   # (<dep>-*.diff, copied into extern/patch/<dep>/) into that dependency's
   # ExternalProject, the way upstream already patches MFEM or MUMPS.
-  for diff in "$repo_root"/scripts/spike-windows-patches/libxsmm-*.diff; do
-    mkdir -p "$source_dir/extern/patch/libxsmm"
-    cp "$diff" "$source_dir/extern/patch/libxsmm/patch_${diff##*/libxsmm-}"
+  # <Dep>-<name>.diff lands as extern/patch/<Dep>/patch_<name>.diff; <Dep> is
+  # the dependency's directory name under the superbuild's extern/.
+  for diff in "$repo_root"/scripts/spike-windows-patches/*.diff; do
+    base="${diff##*/}"
+    dep="${base%%-*}"
+    mkdir -p "$source_dir/extern/patch/$dep"
+    cp "$diff" "$source_dir/extern/patch/$dep/patch_${base#*-}"
   done
   for patch in "$repo_root"/scripts/spike-windows-patches/palace-*.patch; do
     if git -C "$source_dir" apply --reverse --check "$patch" 2>/dev/null; then

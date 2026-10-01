@@ -1,0 +1,18 @@
+--- a/interface/ceed.c
++++ b/interface/ceed.c
+@@ -281,8 +281,15 @@
+   @sa CeedFree()
+ **/
+ int CeedMallocArray(size_t n, size_t unit, void *p) {
++#if defined(_WIN32)
++  // Windows has no posix_memalign, and _aligned_malloc memory cannot be passed to the realloc() and free() that
++  // CeedReallocArray and CeedFree use. CeedCalloc already returns calloc alignment, so nothing may rely on CEED_ALIGN.
++  *(void **)p = malloc(n * unit);
++  CeedCheck(!n || !unit || *(void **)p, NULL, CEED_ERROR_MAJOR, "malloc failed to allocate %zd members of size %zd\n", n, unit);
++#else
+   int ierr = posix_memalign((void **)p, CEED_ALIGN, n * unit);
+   CeedCheck(ierr == 0, NULL, CEED_ERROR_MAJOR, "posix_memalign failed to allocate %zd members of size %zd\n", n, unit);
++#endif
+   return CEED_ERROR_SUCCESS;
+ }
+ 

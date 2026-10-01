@@ -1,0 +1,10 @@
+--- a/cmake/ExternalSTRUMPACK.cmake
++++ b/cmake/ExternalSTRUMPACK.cmake
+@@ -263,6 +263,7 @@
+ set(STRUMPACK_PATCH_FILES
+   "${CMAKE_SOURCE_DIR}/extern/patch/STRUMPACK/patch_build.diff"
+   "${CMAKE_SOURCE_DIR}/extern/patch/STRUMPACK/patch_gpu_init.diff"
++  "${CMAKE_SOURCE_DIR}/extern/patch/STRUMPACK/patch_llp64.diff"
+ )
+ 
+ include(ExternalProject)

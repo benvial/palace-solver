@@ -1,0 +1,11 @@
+--- a/src/misc/MPIWrapper.hpp
++++ b/src/misc/MPIWrapper.hpp
+@@ -71,6 +71,8 @@
+   template<> inline MPI_Datatype mpi_type<unsigned long>() { return MPI_UNSIGNED_LONG; }
+   /** return MPI datatype for C++ long long int */
+   template<> inline MPI_Datatype mpi_type<long long int>() { return MPI_LONG_LONG_INT; }
++  // std::size_t is unsigned long long on LLP64 (Windows).
++  template<> inline MPI_Datatype mpi_type<unsigned long long>() { return MPI_UNSIGNED_LONG_LONG; }
+   /** return MPI datatype for C++ float */
+   template<> inline MPI_Datatype mpi_type<float>() { return MPI_FLOAT; }
+   /** return MPI datatype for C++ double */
