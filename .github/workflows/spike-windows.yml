@@ -221,6 +221,11 @@ jobs:
           cp /d/b/superbuild/CMakeCache.txt "$out/" 2>/dev/null
           find /d/b/superbuild -name '*-err.log' -o -name '*-out.log' \
             | while read -r log; do cp "$log" "$out/$(echo "${log#/d/b/superbuild/}" | tr / _)"; done
+          # PETSc's own log, and every sub-project's CMake configure log, which
+          # is where a failed try_compile or check_*_source_compiles says why.
+          cp /d/b/superbuild/extern/petsc/configure.log "$out/petsc-configure.log" 2>/dev/null
+          find /d/b/superbuild/extern -name CMakeConfigureLog.yaml -path '*-build/*' \
+            | while read -r log; do cp "$log" "$out/$(echo "${log#/d/b/superbuild/extern/}" | tr / _)"; done
           exit 0
 
       - uses: actions/upload-artifact@v5
