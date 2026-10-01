@@ -7,10 +7,12 @@ MPI. MPICH is therefore compiled from source here, linked into Palace, and
 vendored into the wheel together with the Hydra process manager, so
 ``mpiexec -n 4 palace config.json`` works with nothing else installed.
 
-The version is pinned to the one palais depends on, so a Palace launched by
-either process manager speaks the same PMI wire protocol. The pin itself lives
-in ``palace_solver`` because the wheel needs it at run time too, for the
-launcher guard; ``wheelbuild.pin_check`` checks it against palais's.
+The version is pinned inside one MPICH major series, so a Palace launched by
+the vendored process manager or by an ``mpiexec`` from the PyPI ``mpich`` wheel
+speaks the same PMI wire protocol either way. The pin itself lives in
+``palace_solver`` because the wheel needs it at run time too, for the launcher
+guard; ``wheelbuild.pin_check`` checks it against the series the
+interoperability test proves.
 """
 
 from __future__ import annotations

@@ -478,8 +478,10 @@ def test_the_metadata_is_validated_on_every_row_before_any_upload(named_step):
 
 
 @pytest.fixture(scope="module")
-def readme():
-    return (ROOT / "README.md").read_text(encoding="utf-8")
+def releasing():
+    """The release procedure, which moved out of the README in favour of a
+    document an operator reads start to finish."""
+    return (ROOT / "docs" / "releasing.md").read_text(encoding="utf-8")
 
 
 @pytest.fixture(scope="module")
@@ -488,8 +490,8 @@ def dispatch_inputs(workflow):
     return workflow[True]["workflow_dispatch"]["inputs"]
 
 
-def test_the_readme_names_the_input_a_release_operator_has_to_tick(
-    readme, dispatch_inputs
+def test_the_procedure_names_the_input_a_release_operator_has_to_tick(
+    releasing, dispatch_inputs
 ):
     """The release procedure tells an operator to run the workflow with one
     named input, by its label in the Actions UI and by its name on the command
@@ -499,17 +501,17 @@ def test_the_readme_names_the_input_a_release_operator_has_to_tick(
     assert len(dispatch_inputs) == 1, "a second input would need its own check here"
     (name,) = dispatch_inputs
 
-    assert f"-f {name}=true" in readme
-    assert dispatch_inputs[name]["description"] in readme
+    assert f"-f {name}=true" in releasing
+    assert dispatch_inputs[name]["description"] in releasing
 
 
-def test_the_readme_names_both_publishing_environments(readme, dry_run, publish):
+def test_the_procedure_names_both_publishing_environments(releasing, dry_run, publish):
     """Each environment is half of a trusted publisher registered outside this
-    repository against that exact string, so the README's prerequisite list is
-    the only place the names can be checked against the jobs that use them.
+    repository against that exact string, so the procedure's prerequisite list
+    is the only place the names can be checked against the jobs that use them.
     """
     for environment in (dry_run["environment"], publish["environment"]):
-        assert f"`{environment}`" in readme
+        assert f"`{environment}`" in releasing
 
 
 def test_a_dispatched_run_cannot_be_cancelled_by_a_push_to_the_same_ref(workflow):

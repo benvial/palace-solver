@@ -3,8 +3,8 @@
 Upstream Palace ships ``palace`` as a bash wrapper that parses ``--np`` and
 friends and re-invokes ``mpirun -n N palace-<arch>.bin``. This module is that
 wrapper's replacement, and keeps its command line so that callers written
-against upstream — palais's runner among them, which passes ``--np`` — work
-against the packaged solver unchanged.
+against upstream — anything passing ``--np`` among them — work against the
+packaged solver unchanged.
 
 Two roles share one entry point. Asked for ranks, the script is the *driver*:
 it execs a process manager, which starts the ranks by invoking this same
