@@ -182,3 +182,10 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     `libopenblas.dll.a` and drops the copies after ScaLAPACK. Patch 7 now
     spells the trailing ones `-Wl,<path>`: the same file to `ld`, a
     different string to CMake.
+- **36933160715.** **MFEM built**: the revised patch 7 survives
+  `REMOVE_DUPLICATES`. SLEPc configured and then failed in its build:
+  Palace's build command passes `PETSC_DIR=D:/b/install` to make, so make
+  runs `python3 D:/b/install/share/petsc/examples/config/gmakegen.py`, which
+  the POSIX python reads as a relative path. The shim now rewrites drive
+  paths on every call, not only for `configure`. Every caller it serves runs
+  the POSIX python, so every caller needs POSIX paths.
