@@ -6,9 +6,25 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      # The release dry run. Deliberately an input on a manual event rather
+      # than anything a push can reach: it uploads the version in
+      # palace_solver.__version__ to TestPyPI, which consumes those three
+      # filenames there for good, so it has to be something a human asks for
+      # once per release rather than something main does on every merge.
+      testpypi:
+        description: "Upload the three wheels to TestPyPI as a release dry run"
+        type: boolean
+        default: false
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # The event is part of the group because the release dry run is dispatched
+  # against main, which puts it in the same group as every push to main: one
+  # merge during the three 40-minute builds would cancel the rehearsal, or the
+  # rehearsal would cancel the merge's run. Nothing else changes — a push and a
+  # pull request already differ by ref — and two dispatches against one ref
+  # still supersede each other, which is what cancel-in-progress is for.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -276,6 +292,29 @@ jobs:
           path: ${{ matrix.build_root }}
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
+      # The half of the TestPyPI dry run that needs no index. PyPI validates a
+      # wheel's metadata, and renders its description, more strictly than the
+      # `wheel` module that wrote the metadata does -- and at upload time that
+      # verdict arrives after the tag exists, under a version number no re-run
+      # can reuse. `twine check` is the same validation the upload step runs
+      # first, so running it here moves one class of release failure onto every
+      # pull request.
+      #
+      # --strict because the thing being checked is a warning by default: a
+      # description PyPI cannot render is served as raw markup on the project
+      # page, which is cosmetic and therefore exactly the kind of problem that
+      # ships.
+      #
+      # >=6.1 is not decoration. setuptools>=77 writes the license as an SPDX
+      # expression, which is Metadata-Version 2.4, and twine 6.0 reads a 2.4
+      # wheel as "metadata is missing required fields". A floor low enough to
+      # resolve to that version would fail every build for a reason that is not
+      # about this wheel.
+      - name: Check the wheel's metadata the way PyPI will
+        run: |
+          python3 -m pip install --upgrade "twine>=6.1"
+          python3 -m twine check --strict wheelhouse/*.whl
+
       # Run on the runner rather than back inside the build image, for the same
       # reason a user's machine is not a manylinux container: it proves the
       # wheel is self-contained outside the environment that produced it. It is
@@ -359,6 +398,64 @@ jobs:
           # would make every live entry look stale.
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
           scripts/prune-build-caches.sh "$version" "$INPUTS_HASH"
+
+  # The rehearsal. Everything a release does except which index it lands on,
+  # run before the tag exists so that the problems which only appear at upload
+  # time appear while they are still fixable: a platform tag the index refuses,
+  # a file over its size limit, and metadata validated more strictly than the
+  # `wheel` module validated it.
+  #
+  # The verdict is the index's acceptance of the three files, and nothing is
+  # installed back out of TestPyPI -- a wheel can only be installed on a
+  # machine of its own platform, and each platform already installs its own and
+  # solves an example on the row that built it. The trusted publisher it proves
+  # is its own: this job authenticates to TestPyPI through the `testpypi`
+  # environment, so a green dry run is evidence about the procedure and not
+  # about the credentials `publish` will use.
+  #
+  # Manual, and gated on an input rather than on a ref, because the upload is
+  # not free: TestPyPI reuses a filename no more than PyPI does, so each dry
+  # run spends the three filenames of the version it carries. It costs nothing
+  # against the PyPI quota, whose storage is separate.
+  #
+  # Everything that could differ from `publish` and does not is the point:
+  # `needs`, the artifact collection and the wheel-set check are the same, and
+  # tests/test_wheels_workflow.py ties each of them to the real job, because a
+  # rehearsal that assembles a different directory rehearses a different
+  # upload.
+  publish-testpypi:
+    name: dry-run publish to TestPyPI
+    needs: [checks, wheel]
+    if: github.event_name == 'workflow_dispatch' && inputs.testpypi
+    runs-on: ubuntu-24.04
+    # Its own environment, not `release`: these are two separate trusted
+    # publishers, and a required reviewer on the release gate should not also
+    # stand in front of a rehearsal.
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: palace-solver-*
+          merge-multiple: true
+          path: dist
+
+      - name: Check dist holds exactly one wheel per supported platform
+        run: python3 -m wheelbuild.release_check dist
+
+      # No skip-existing. It would make the rehearsal repeatable where the
+      # event it rehearses is not, and a green run over a version TestPyPI
+      # already holds says nothing about the wheels in this directory. When a
+      # dry run has to be repeated -- including after one that uploaded some of
+      # the three and then failed -- the remedy is a .postN bump, which is free
+      # before a tag exists and is the same move a half-published release on
+      # PyPI would force.
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
 
   # One release carrying every platform's wheel, uploaded once. Charting
   # decision 1 of .scratch/platform-expansion/map.md: nothing publishes until

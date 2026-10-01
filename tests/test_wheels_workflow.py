@@ -17,7 +17,36 @@ from wheelbuild.platforms import (
     supported_platform_tags,
 )
 
-WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "wheels.yml"
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github" / "workflows" / "wheels.yml"
+
+
+def _step_index(job, needle):
+    """Where a step naming ``needle`` sits in ``job``'s step list.
+
+    Both publishing jobs are checked for the order of the same two steps, and
+    the thing that identifies a step is either what it runs or what it uses, so
+    the two are searched together.
+
+    Args:
+        job: A parsed workflow job.
+        needle: Substring of the step's ``run`` or ``uses``.
+
+    Returns:
+        The index of the first matching step.
+    """
+    return next(
+        index
+        for index, step in enumerate(job["steps"])
+        if needle in str(step.get("run", "")) + str(step.get("uses", ""))
+    )
+
+
+def _publish_step(job):
+    """The step in ``job`` that uploads to an index."""
+    return next(
+        step for step in job["steps"] if "pypi-publish" in str(step.get("uses", ""))
+    )
 
 
 @pytest.fixture(scope="module")
@@ -353,11 +382,143 @@ def test_publish_checks_the_wheel_set_before_uploading(publish):
     upload step publishes whatever the directory holds, so nothing between them
     would notice a missing platform.
     """
-    names = [
-        str(step.get("run", "")) + str(step.get("uses", ""))
-        for step in publish["steps"]
-    ]
-    check = next(i for i, text in enumerate(names) if "release_check" in text)
-    upload = next(i for i, text in enumerate(names) if "pypi-publish" in text)
+    assert _step_index(publish, "release_check") < _step_index(publish, "pypi-publish")
 
-    assert check < upload
+
+@pytest.fixture(scope="module")
+def dry_run(workflow):
+    return workflow["jobs"]["publish-testpypi"]
+
+
+def test_the_dry_run_is_never_triggered_by_a_tag(workflow, dry_run):
+    """The dry run exists to happen *before* the tag. A condition that also
+    matched `refs/tags/v*` would upload the same three wheels to two indexes
+    from one event, which is the opposite of a rehearsal: the thing it is meant
+    to de-risk would already have happened by the time it reported.
+    """
+    assert "refs/tags" not in dry_run["if"]
+    assert dry_run["if"] == (
+        "github.event_name == 'workflow_dispatch' && inputs.testpypi"
+    )
+    assert workflow[True]["workflow_dispatch"]["inputs"]["testpypi"]["default"] is False
+
+
+def test_the_dry_run_waits_for_every_platform_as_the_real_publish_does(
+    dry_run, publish
+):
+    """It proves nothing about a three-wheel release if it can run on a subset,
+    and the whole question it answers -- does this *set* of filenames upload --
+    needs the set to be complete.
+    """
+    assert set(dry_run["needs"]) == set(publish["needs"])
+
+
+def test_the_dry_run_collects_the_wheels_the_way_the_real_publish_does(
+    dry_run, download
+):
+    """A rehearsal that assembles its directory differently rehearses a
+    different upload.
+    """
+    collect = next(
+        step
+        for step in dry_run["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact")
+    )
+
+    assert collect["with"] == download["with"]
+
+
+def test_the_dry_run_checks_the_wheel_set_before_uploading(dry_run):
+    """Same gate, same order as `publish`: an incomplete directory would upload
+    a subset to TestPyPI and report that a three-wheel release is proven.
+    """
+    assert _step_index(dry_run, "release_check") < _step_index(dry_run, "pypi-publish")
+
+
+def test_the_dry_run_uploads_to_testpypi_and_the_real_publish_does_not(
+    dry_run, publish
+):
+    """One mistyped repository-url and the dry run is the release."""
+    rehearsal = _publish_step(dry_run)
+
+    assert rehearsal["with"]["repository-url"] == "https://test.pypi.org/legacy/"
+    assert "repository-url" not in _publish_step(publish).get("with", {})
+
+
+def test_the_dry_run_does_not_skip_a_file_already_on_testpypi(dry_run):
+    """skip-existing would make the rehearsal repeatable where the event it
+    rehearses is not: a green run over a version TestPyPI already holds proves
+    nothing about the wheels in the directory. The remedy for a collision is a
+    .postN bump, which costs nothing before a tag exists.
+    """
+    assert "skip-existing" not in _publish_step(dry_run).get("with", {})
+
+
+def test_the_dry_run_uses_its_own_environment_and_no_token(dry_run, publish):
+    """Trusted publishing on both sides -- a TestPyPI API token on the
+    workstation is the thing this project has avoided from the start. The
+    environments are separate because they are separate publishers and a
+    required reviewer on the release gate should not also gate a rehearsal.
+    """
+    assert dry_run["permissions"] == {"id-token": "write"}
+    assert dry_run["environment"] != publish["environment"]
+
+
+def test_the_metadata_is_validated_on_every_row_before_any_upload(named_step):
+    """`twine check` is the half of the TestPyPI dry run that needs no index:
+    PyPI validates a wheel's metadata and its rendered description more
+    strictly than `wheel` does, and finding that out at upload time is finding
+    it out after the tag exists.
+    """
+    check = named_step("Check the wheel's metadata the way PyPI will")
+
+    assert "if" not in check
+    assert "twine check --strict" in check["run"]
+
+
+@pytest.fixture(scope="module")
+def readme():
+    return (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+@pytest.fixture(scope="module")
+def dispatch_inputs(workflow):
+    # PyYAML reads the `on:` key as the boolean True.
+    return workflow[True]["workflow_dispatch"]["inputs"]
+
+
+def test_the_readme_names_the_input_a_release_operator_has_to_tick(
+    readme, dispatch_inputs
+):
+    """The release procedure tells an operator to run the workflow with one
+    named input, by its label in the Actions UI and by its name on the command
+    line. A renamed input leaves that instruction describing a flag the
+    workflow does not have, and the operator finds that out mid-release.
+    """
+    assert len(dispatch_inputs) == 1, "a second input would need its own check here"
+    (name,) = dispatch_inputs
+
+    assert f"-f {name}=true" in readme
+    assert dispatch_inputs[name]["description"] in readme
+
+
+def test_the_readme_names_both_publishing_environments(readme, dry_run, publish):
+    """Each environment is half of a trusted publisher registered outside this
+    repository against that exact string, so the README's prerequisite list is
+    the only place the names can be checked against the jobs that use them.
+    """
+    for environment in (dry_run["environment"], publish["environment"]):
+        assert f"`{environment}`" in readme
+
+
+def test_a_dispatched_run_cannot_be_cancelled_by_a_push_to_the_same_ref(workflow):
+    """The dry run is dispatched against main, so without the event in the
+    concurrency group it shares one with every push to main and
+    cancel-in-progress throws away whichever started first -- three
+    40-minute builds, or the rehearsal a release is waiting on.
+    """
+    group = workflow["concurrency"]["group"]
+
+    assert workflow["concurrency"]["cancel-in-progress"] is True
+    assert "github.event_name" in group
+    assert "github.ref" in group
