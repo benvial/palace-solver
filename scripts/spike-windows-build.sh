@@ -84,6 +84,12 @@ SHIM
 chmod +x "$build_root/posix-python/python3"
 export PATH="$build_root/posix-python:$PATH"
 
+# Palace's configure try_run()s test programs, so the DLLs they import must
+# be findable at build time: the vendored OpenBLAS and libCEED/LIBXSMM from the
+# install prefix, and the MS-MPI runtime the workflow extracts to D:\msmpi
+# (the runner has no MS-MPI installed; MSYS2's msmpi package is link-time only).
+export PATH="$install_prefix/bin:$install_prefix/lib:/d/msmpi:$PATH"
+
 case "$stage" in
 env)
   echo "BUILD_ROOT=$build_root"

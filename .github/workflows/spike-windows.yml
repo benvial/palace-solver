@@ -202,6 +202,26 @@ jobs:
           scripts/spike-windows-build.sh source
           scripts/spike-windows-build.sh configure
 
+      # Before the superbuild: Palace configure try_run()s a PETSc test
+      # program, which needs msmpi.dll to start (run 36937907703).
+      - name: MS-MPI redistributable (extracted, not installed)
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri $env:MSMPI_URL -OutFile D:\msmpisetup.exe
+          7z x D:\msmpisetup.exe -oD:\msmpi-raw -y | Out-Null
+          # Anything the bundle nests (a cab or an msi) is unpacked in place too.
+          Get-ChildItem -Recurse D:\msmpi-raw -Include *.cab, *.msi | ForEach-Object {
+            7z x $_.FullName "-o$($_.FullName)-x" -y | Out-Null
+          }
+          New-Item -ItemType Directory -Force D:\msmpi | Out-Null
+          foreach ($name in 'msmpi.dll', 'mpiexec.exe', 'smpd.exe', 'msmpires.dll',
+                            'MicrosoftMPI_Redistributable_EULA.rtf', 'MPI_Redistributables_TPN.txt') {
+            $hit = Get-ChildItem -Recurse D:\msmpi-raw -Filter $name | Select-Object -First 1
+            if ($hit) { Copy-Item $hit.FullName D:\msmpi\ } else { Write-Output "MISSING $name" }
+          }
+          Get-ChildItem -Recurse D:\msmpi-raw | Select-Object FullName, Length | Format-Table -AutoSize
+          Get-ChildItem D:\msmpi | Format-Table Name, Length -AutoSize
+
       - name: Full superbuild
         id: superbuild
         continue-on-error: true
@@ -255,24 +275,6 @@ jobs:
       - name: Fail if the superbuild failed
         if: steps.superbuild.outcome != 'success'
         run: exit 1
-
-      - name: MS-MPI redistributable (extracted, not installed)
-        shell: pwsh
-        run: |
-          Invoke-WebRequest -Uri $env:MSMPI_URL -OutFile D:\msmpisetup.exe
-          7z x D:\msmpisetup.exe -oD:\msmpi-raw -y | Out-Null
-          # Anything the bundle nests (a cab or an msi) is unpacked in place too.
-          Get-ChildItem -Recurse D:\msmpi-raw -Include *.cab, *.msi | ForEach-Object {
-            7z x $_.FullName "-o$($_.FullName)-x" -y | Out-Null
-          }
-          New-Item -ItemType Directory -Force D:\msmpi | Out-Null
-          foreach ($name in 'msmpi.dll', 'mpiexec.exe', 'smpd.exe', 'msmpires.dll',
-                            'MicrosoftMPI_Redistributable_EULA.rtf', 'MPI_Redistributables_TPN.txt') {
-            $hit = Get-ChildItem -Recurse D:\msmpi-raw -Filter $name | Select-Object -First 1
-            if ($hit) { Copy-Item $hit.FullName D:\msmpi\ } else { Write-Output "MISSING $name" }
-          }
-          Get-ChildItem -Recurse D:\msmpi-raw | Select-Object FullName, Length | Format-Table -AutoSize
-          Get-ChildItem D:\msmpi | Format-Table Name, Length -AutoSize
 
       - uses: actions/setup-python@v6
         with:

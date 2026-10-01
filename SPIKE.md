@@ -209,3 +209,17 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   resolves when the DLL is linked from objects, which is safer on PE than a
   static archive. The PE closure now also searches `install\lib`, where
   `libceed.dll` and `libxsmm.dll` live.
+- **36937907703.** **libCEED is found**: Palace's libCEED test program
+  links against the new `libceed.dll.a`. Palace's PETSc check then failed
+  twice:
+  - The default pkg-config link omits `Libs.private`. Static `libpetsc.a`
+    then lacks OpenBLAS (`zgemv`, `openblas_set_num_threads`, ...).
+  - The `--static` retry links, but "CMake could not execute it". This
+    check is a `try_run`, and the program cannot start on the build runner:
+    `msmpi.dll` is absent, because MSYS2's msmpi package is link-time only
+    and MS-MPI is not installed, and `libopenblas.dll` is not on `PATH`.
+  Spike fix, not a patch: the workflow extracts the MS-MPI redistributable
+  before the superbuild, and the driver puts it, `install\bin` and
+  `install\lib` on `PATH`. The production build needs the same. Finding:
+  Palace's configure executes test programs, so a Windows build machine
+  needs the MPI runtime, not only the SDK.
