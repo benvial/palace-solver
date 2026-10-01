@@ -32,3 +32,10 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
 ## Runs
 
 <!-- one entry per run: id, what changed, what it settled -->
+
+- **36907972682.** OpenBLAS compiled with the Linux recipe and failed to link:
+  `ld: cannot find -lgomp`. MSYS2 ships libgomp as a separate package,
+  `mingw-w64-ucrt-x86_64-libgomp`, which `gcc` does not depend on. That
+  package is now in the install list. This is a provisioning gap, not a patch.
+  The compile took about 75 min against about 15 min on Linux at the same
+  `-j4`, so each object costs about 5-8x as much.
