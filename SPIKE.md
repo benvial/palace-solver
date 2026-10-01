@@ -235,3 +235,20 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   System32. The workflow now extracts the x64 MSI and renames the same
   way. Whether a renamed file still counts as redistributed "unmodified"
   under the EULA is a question for the ADR.
+- **36940113794.** **Palace configures.** With the x64 MS-MPI, the PETSc
+  test passes with static linkage, and the SLEPc test passes too. Palace's
+  own C++ then failed in 19 objects, about 70 errors from three causes.
+  **Patch 9 (`palace-windows-cxx.patch`, 5 files, +22/-7):**
+  - `M_PI` is undeclared: MinGW's `<math.h>` defines it under
+    `-std=c++17` only with `_USE_MATH_DEFINES`. Fix: one
+    `target_compile_definitions` under `if(MINGW)`.
+  - `std::filesystem::path` does not convert implicitly to `std::string`,
+    because on Windows its `value_type` is `wchar_t`. This hits
+    `TableWithCSVFile(...)` (about 30 call sites), `basesolver.cpp`'s
+    metadata paths, `CeedParaViewDataCollection` and `Mesh::Save`. Fix: a
+    `TableWithCSVFile` constructor constrained to `path` (string literals
+    stay unambiguous; checked with `g++ -fsyntax-only` locally), plus
+    `.string()` at five sites.
+  - `std::max(0L, memory)`: `std::distance` returns `long long` on LLP64.
+    Fix: `std::max<decltype(memory)>`.
+  All three are portable: identical behaviour on Linux and macOS.
