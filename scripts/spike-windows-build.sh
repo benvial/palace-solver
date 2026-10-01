@@ -57,6 +57,17 @@ mkdir -p "$build_root" "$CCACHE_DIR"
 # failed").
 export CMAKE_GENERATOR="MSYS Makefiles"
 
+# DEVIATION: PETSc's ./configure is `#!/usr/bin/env python3` and refuses a
+# Windows python ("Windows python detected. Please rerun ./configure with
+# cygwin-python", run 36924871897), which is what MinGW's ucrt64 python is.
+# MSYS2's own /usr/bin/python3 is the Cygwin-style one it wants; a shim ahead
+# of ucrt64/bin on PATH hands it to every `env python3`. `python` (used by the
+# wheelbuild helper above) stays MinGW's.
+mkdir -p "$build_root/posix-python"
+printf '#!/bin/sh\nexec /usr/bin/python3 "$@"\n' >"$build_root/posix-python/python3"
+chmod +x "$build_root/posix-python/python3"
+export PATH="$build_root/posix-python:$PATH"
+
 case "$stage" in
 env)
   echo "BUILD_ROOT=$build_root"
@@ -156,7 +167,8 @@ source)
     digest="$(cat "$step" "$repo_root"/scripts/spike-windows-patches/"$dep"-*.diff | sha256sum | cut -c1-16)"
     stamp="$superbuild_dir/extern/.spike-patches-$dep"
     if [[ "$(cat "$stamp" 2>/dev/null)" != "$digest" ]]; then
-      rm -rf "$superbuild_dir/extern/$dep" "$superbuild_dir/extern/$dep-cmake"
+      rm -rf "$superbuild_dir/extern/$dep" "$superbuild_dir/extern/$dep-cmake" \
+        "$superbuild_dir/extern/$dep-build"
       echo "$digest" >"$stamp"
       echo "patches for $dep changed: discarded its cached checkout"
     fi

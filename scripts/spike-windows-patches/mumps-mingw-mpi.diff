@@ -1,0 +1,268 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index e4aca6f..7d6186c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -110,6 +110,10 @@ set(FETCHCONTENT_QUIET no)
+ 
+ FetchContent_Populate(${PROJECT_NAME} URL ${url})
+ 
++if(MUMPS_parallel AND WIN32 AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
++  include(cmake/mumps_mingw_mpi.cmake)
++endif()
++
+ # --- MUMPS build
+ 
+ # --- mpiseq (No MPI)
+diff --git a/cmake/mumps_mingw_mpi.cmake b/cmake/mumps_mingw_mpi.cmake
+new file mode 100644
+index 0000000..fb75efd
+--- /dev/null
++++ b/cmake/mumps_mingw_mpi.cmake
+@@ -0,0 +1,25 @@
++# Backport of scivision/mumps 09a718d177 (2026-10-01): gfortran cannot compile
++# MUMPS's *ana_aux_par.F against MS-MPI's mpif.h, whose !GCC$ DLLIMPORT
++# attributes clash with module-level declarations; the patch switches those
++# four files to "USE MPI". Based on MSYS2's mingw-w64-mumps 0004-mpi-module.patch.
++# Adapted to this pin: the fetched source is <lowercase project>_SOURCE_DIR.
++
++find_package(Git REQUIRED)
++set(_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/mumps_mingw_mpi.patch")
++string(TOLOWER "${PROJECT_NAME}" _mumps_name)
++set(_mumps_source "${${_mumps_name}_SOURCE_DIR}")
++
++execute_process(
++  COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check -p1 "${_patch}"
++  WORKING_DIRECTORY "${_mumps_source}"
++  RESULT_VARIABLE _already_applied
++  OUTPUT_QUIET ERROR_QUIET
++)
++if(NOT _already_applied EQUAL 0)
++  execute_process(
++    COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace -p1 "${_patch}"
++    WORKING_DIRECTORY "${_mumps_source}"
++    COMMAND_ECHO STDOUT
++    COMMAND_ERROR_IS_FATAL ANY
++  )
++endif()
+diff --git a/cmake/mumps_mingw_mpi.patch b/cmake/mumps_mingw_mpi.patch
+new file mode 100644
+index 0000000..b3296f5
+--- /dev/null
++++ b/cmake/mumps_mingw_mpi.patch
+@@ -0,0 +1,216 @@
++diff --git a/src/cana_aux_par.F b/src/cana_aux_par.F
++--- a/src/cana_aux_par.F
+++++ b/src/cana_aux_par.F
++@@ -16,7 +16,7 @@
++       USE MUMPS_MEMORY_MOD
++       USE MUMPS_ANA_ORD_WRAPPERS
++       USE MUMPS_ANA_BLK_M, ONLY : LMATRIX_T, COMPACT_GRAPH_T
+++      USE MPI
++-      INCLUDE 'mpif.h'
++       PUBLIC CMUMPS_ANA_F_PAR
++       INTERFACE CMUMPS_ANA_F_PAR
++       MODULE PROCEDURE CMUMPS_ANA_F_PAR
++@@ -656,7 +656,7 @@
++       END IF
++       CALL MPI_ALLGATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, ord%COMM, IERR )
+++     &     RCVCNTS, FIRST, MPI_INTEGER, ord%COMM, IERR )
++       DO I=1, N
++          ord%PERITAB(ord%PERMTAB(I)) = I
++       END DO
++@@ -822,4 +822,4 @@
++         CALL MPI_GATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, MASTER,
+++     &     RCVCNTS, FIRST, MPI_INTEGER, MASTER,
++      &     ord%COMM_PARAORD, IERR )
++@@ -2333,7 +2333,7 @@
++      &     MPI_INTEGER8, ord%COMM, IERR)
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       TLEN = 0_8
++@@ -2552,7 +2552,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(real(NROWS_LOC+1)*1.20E0)
++@@ -2857,7 +2857,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(real(NROWS_LOC+1)*1.20E0)
++diff --git a/src/dana_aux_par.F b/src/dana_aux_par.F
++--- a/src/dana_aux_par.F
+++++ b/src/dana_aux_par.F
++@@ -16,7 +16,7 @@
++       USE MUMPS_MEMORY_MOD
++       USE MUMPS_ANA_ORD_WRAPPERS
++       USE MUMPS_ANA_BLK_M, ONLY : LMATRIX_T, COMPACT_GRAPH_T
+++      USE MPI
++-      INCLUDE 'mpif.h'
++       PUBLIC DMUMPS_ANA_F_PAR
++       INTERFACE DMUMPS_ANA_F_PAR
++       MODULE PROCEDURE DMUMPS_ANA_F_PAR
++@@ -656,7 +656,7 @@
++       END IF
++       CALL MPI_ALLGATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, ord%COMM, IERR )
+++     &     RCVCNTS, FIRST, MPI_INTEGER, ord%COMM, IERR )
++       DO I=1, N
++          ord%PERITAB(ord%PERMTAB(I)) = I
++       END DO
++@@ -822,4 +822,4 @@
++         CALL MPI_GATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, MASTER,
+++     &     RCVCNTS, FIRST, MPI_INTEGER, MASTER,
++      &     ord%COMM_PARAORD, IERR )
++@@ -2333,7 +2333,7 @@
++      &     MPI_INTEGER8, ord%COMM, IERR)
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       TLEN = 0_8
++@@ -2552,7 +2552,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(dble(NROWS_LOC+1)*1.20D0)
++@@ -2857,7 +2857,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(dble(NROWS_LOC+1)*1.20D0)
++diff --git a/src/sana_aux_par.F b/src/sana_aux_par.F
++--- a/src/sana_aux_par.F
+++++ b/src/sana_aux_par.F
++@@ -16,7 +16,7 @@
++       USE MUMPS_MEMORY_MOD
++       USE MUMPS_ANA_ORD_WRAPPERS
++       USE MUMPS_ANA_BLK_M, ONLY : LMATRIX_T, COMPACT_GRAPH_T
+++      USE MPI
++-      INCLUDE 'mpif.h'
++       PUBLIC SMUMPS_ANA_F_PAR
++       INTERFACE SMUMPS_ANA_F_PAR
++       MODULE PROCEDURE SMUMPS_ANA_F_PAR
++@@ -656,7 +656,7 @@
++       END IF
++       CALL MPI_ALLGATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, ord%COMM, IERR )
+++     &     RCVCNTS, FIRST, MPI_INTEGER, ord%COMM, IERR )
++       DO I=1, N
++          ord%PERITAB(ord%PERMTAB(I)) = I
++       END DO
++@@ -822,4 +822,4 @@
++         CALL MPI_GATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, MASTER,
+++     &     RCVCNTS, FIRST, MPI_INTEGER, MASTER,
++      &     ord%COMM_PARAORD, IERR )
++@@ -2333,7 +2333,7 @@
++      &     MPI_INTEGER8, ord%COMM, IERR)
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       TLEN = 0_8
++@@ -2552,7 +2552,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(real(NROWS_LOC+1)*1.20E0)
++@@ -2857,7 +2857,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(real(NROWS_LOC+1)*1.20E0)
++diff --git a/src/zana_aux_par.F b/src/zana_aux_par.F
++--- a/src/zana_aux_par.F
+++++ b/src/zana_aux_par.F
++@@ -16,7 +16,7 @@
++       USE MUMPS_MEMORY_MOD
++       USE MUMPS_ANA_ORD_WRAPPERS
++       USE MUMPS_ANA_BLK_M, ONLY : LMATRIX_T, COMPACT_GRAPH_T
+++      USE MPI
++-      INCLUDE 'mpif.h'
++       PUBLIC ZMUMPS_ANA_F_PAR
++       INTERFACE ZMUMPS_ANA_F_PAR
++       MODULE PROCEDURE ZMUMPS_ANA_F_PAR
++@@ -656,7 +656,7 @@
++       END IF
++       CALL MPI_ALLGATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, ord%COMM, IERR )
+++     &     RCVCNTS, FIRST, MPI_INTEGER, ord%COMM, IERR )
++       DO I=1, N
++          ord%PERITAB(ord%PERMTAB(I)) = I
++       END DO
++@@ -822,4 +822,4 @@
++         CALL MPI_GATHERV ( ORDER(1), VERTLOCNBR, MPI_INTEGER,
++      &     ord%PERMTAB(1),
++-     &     RCVCNTS(1), FIRST(1), MPI_INTEGER, MASTER,
+++     &     RCVCNTS, FIRST, MPI_INTEGER, MASTER,
++      &     ord%COMM_PARAORD, IERR )
++@@ -2333,7 +2333,7 @@
++      &     MPI_INTEGER8, ord%COMM, IERR)
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       TLEN = 0_8
++@@ -2552,7 +2552,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(dble(NROWS_LOC+1)*1.20D0)
++@@ -2857,7 +2857,7 @@
++       IF(MEMCNT .GT. MAXMEM) MAXMEM=MEMCNT
++       CALL MUMPS_I8DEALLOC(SNDCNT, MEMCNT=MEMCNT)
++       RDISPL(:) = MAXS
++-      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL(1), 
+++      CALL MPI_REDUCE_SCATTER ( SIPES(1,1), LENG(1), RDISPL,
++      &     MPI_INTEGER, MPI_SUM, ord%COMM, IERR )
++       DEALLOCATE(SIPES)
++       I = ceiling(dble(NROWS_LOC+1)*1.20D0)

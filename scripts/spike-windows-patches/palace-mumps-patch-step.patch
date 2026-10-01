@@ -1,0 +1,10 @@
+--- a/cmake/ExternalMUMPS.cmake
++++ b/cmake/ExternalMUMPS.cmake
+@@ -47,6 +47,7 @@
+ # Fix FindLAPACK and FindScaLAPACK in configuration
+ set(MUMPS_PATCH_FILES
+   "${CMAKE_SOURCE_DIR}/extern/patch/mumps/patch_build.diff"
++  "${CMAKE_SOURCE_DIR}/extern/patch/mumps/patch_mingw-mpi.diff"
+ )
+ 
+ include(ExternalProject)

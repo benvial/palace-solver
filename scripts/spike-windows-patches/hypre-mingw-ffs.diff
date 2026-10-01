@@ -1,0 +1,22 @@
+--- a/src/utilities/_hypre_utilities.h
++++ b/src/utilities/_hypre_utilities.h
+@@ -2681,6 +2681,8 @@
+          x >>= 1;
+       }
+    }
++#elif defined(__MINGW32__)
++   pos = __builtin_ffs((hypre_int) x);
+ #else
+    pos = ffs((hypre_int) x);
+ #endif
+--- a/src/utilities/hopscotch_hash.h
++++ b/src/utilities/hopscotch_hash.h
+@@ -145,6 +145,8 @@
+          x >>= 1;
+       }
+    }
++#elif defined(__MINGW32__)
++   pos = __builtin_ffs((hypre_int) x);
+ #else
+    pos = ffs((hypre_int) x);
+ #endif

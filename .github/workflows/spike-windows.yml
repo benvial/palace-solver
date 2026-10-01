@@ -58,7 +58,7 @@ jobs:
           release: false
           update: false
           install: >-
-            make git patch diffutils perl tar unzip
+            make git patch diffutils perl tar unzip python
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-libgomp
@@ -177,7 +177,7 @@ jobs:
           release: false
           update: false
           install: >-
-            make git patch diffutils perl tar unzip
+            make git patch diffutils perl tar unzip python
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-libgomp

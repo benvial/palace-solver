@@ -121,3 +121,22 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   drive-letter colon. None is structural. libCEED installs as
   `build/libceed.so`, a PE DLL under a `.so` name, because Palace forces it
   shared. Whether Palace links against it is job two's question.
+- **36924871897, job two (full superbuild, 7 min with `-k`).** SUNDIALS,
+  SuperLU_DIST, scn, PARPACK and the rest built. Three failures, each with
+  an upstream fix that postdates Palace's pin:
+  - **hypre: patch 5 (`hypre-mingw-ffs.diff`).** MinGW has no `ffs()`.
+    hypre `master` already has the fix (`#elif defined(__MINGW32__)` to
+    `__builtin_ffs`); this backports it to `_hypre_utilities.h` and
+    `hopscotch_hash.h`. Predicted by ticket 02.
+  - **MUMPS: patch 6 (`mumps-mingw-mpi.diff`).** gfortran rejects MS-MPI's
+    `mpif.h` in `*ana_aux_par.F` ("'dllimport' implies default visibility,
+    but 'mpi_bottom' has already been declared with a different
+    visibility"). scivision/mumps fixed this today, 2026-10-01, in
+    `09a718d177`, from MSYS2's `0004-mpi-module.patch`: the four files switch
+    to `USE MPI`. The backport applies the same `.patch` to the MUMPS 5.7.3
+    this pin downloads; it applies with offsets only. Predicted by ticket 02.
+  - **PETSc: not a patch.** `./configure` (`#!/usr/bin/env python3`) found
+    MinGW's python and refused it ("Windows python detected. Please rerun
+    ./configure with cygwin-python"). The driver now installs MSYS2's
+    `python` and puts a `python3` shim for `/usr/bin/python3` first on
+    `PATH`. This is a provisioning deviation, documented by PETSc for MSYS2.
