@@ -68,6 +68,16 @@ env)
   gfortran --version | head -1
   cmake --version | head -1
   pacman -Q
+  # Run 36907972682 compiled OpenBLAS about 5x slower than Linux at the same
+  # -j4, which is per-object rather than per-file-size. Split the cost: an
+  # MSYS2 fork, a native process start, and gcc compiling an empty file.
+  probe="$(mktemp -d)"
+  : >"$probe/empty.c"
+  time (for _ in $(seq 50); do sh -c true; done)
+  time (for _ in $(seq 50); do cmd //c "exit 0"; done)
+  time (for _ in $(seq 50); do gcc -c -O2 "$probe/empty.c" -o "$probe/empty.o"; done)
+  powershell -NoProfile -Command \
+    'Get-MpComputerStatus | Select-Object RealTimeProtectionEnabled, AntivirusEnabled | Format-List' || true
   ;;
 
 openblas)
