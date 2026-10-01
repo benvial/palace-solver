@@ -18,7 +18,43 @@
  
 --- a/Makefile
 +++ b/Makefile
-@@ -892,9 +892,9 @@
+@@ -33,6 +33,8 @@
+ 
+ 
+ DARWIN := $(filter Darwin,$(shell uname -s))
++# Windows (MinGW): a DLL with an import library, which is what ld searches.
++WINDOWS := $(filter Windows_NT,$(OS))
+ 
+ 
+ # ------------------------------------------------------------
+@@ -252,7 +254,7 @@
+ PYTHON ?= python3
+ PROVE ?= prove
+ PROVE_OPTS ?= -j $(NPROCS)
+-SO_EXT := $(if $(DARWIN),dylib,so)
++SO_EXT := $(if $(DARWIN),dylib,$(if $(WINDOWS),dll,so))
+ 
+ ceed.pc := $(LIBDIR)/pkgconfig/ceed.pc
+ libceed.so := $(LIBDIR)/libceed.$(SO_EXT)
+@@ -303,6 +305,8 @@
+ par:;@$(MAKE) $(MFLAGS) V=$(V) lib
+ 
+ $(libceed.so) : CEED_LDFLAGS += $(if $(DARWIN), -install_name @rpath/$(notdir $(libceed.so)))
++CEED_IMPLIB_FLAG := -Wl,--out-implib,$(LIBDIR)/libceed.dll.a
++$(libceed.so) : CEED_LDFLAGS += $(if $(WINDOWS),$(CEED_IMPLIB_FLAG))
+ 
+ # ------------------------------------------------------------
+ # Source files
+@@ -540,7 +544,7 @@
+ # libXSMM Backends
+ XSMM_BACKENDS = /cpu/self/xsmm/serial /cpu/self/xsmm/blocked
+ ifneq ($(wildcard $(XSMM_DIR)/lib/libxsmm.*),)
+-  PKG_LIBS += -L$(abspath $(XSMM_DIR))/lib -lxsmm
++  PKG_LIBS += -L$(if $(WINDOWS),$(XSMM_DIR),$(abspath $(XSMM_DIR)))/lib -lxsmm
+   MKL ?=
+   ifeq (,$(MKL)$(MKLROOT))
+     BLAS_LIB ?= -lblas -ldl
+@@ -892,9 +896,9 @@
  .INTERMEDIATE : $(OBJDIR)/ceed.pc
  %/ceed.pc : ceed.pc.template | $$(@D)/.DIR
  	@$(SED) \
@@ -31,3 +67,11 @@
  
  GIT_DESCRIBE = $(shell git -c safe.directory=$PWD describe --always --dirty 2>/dev/null || printf "unknown\n")
  
+@@ -926,6 +930,7 @@
+ 	$(INSTALL_DATA) include/ceed/cuda.h "$(DESTDIR)$(includedir)/ceed/"
+ 	$(INSTALL_DATA) include/ceed/hip.h "$(DESTDIR)$(includedir)/ceed/"
+ 	$(INSTALL_DATA) $(libceed) "$(DESTDIR)$(libdir)/"
++	$(if $(and $(WINDOWS),$(filter $(libceed.so),$(libceed))),$(INSTALL_DATA) $(LIBDIR)/libceed.dll.a "$(DESTDIR)$(libdir)/")
+ 	$(INSTALL_DATA) $(OBJDIR)/ceed.pc "$(DESTDIR)$(pkgconfigdir)/"
+ 	$(INSTALL_DATA) include/ceed.h "$(DESTDIR)$(includedir)/"
+ 	$(INSTALL_DATA) include/ceedf.h "$(DESTDIR)$(includedir)/"

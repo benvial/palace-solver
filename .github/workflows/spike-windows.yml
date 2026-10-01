@@ -288,7 +288,7 @@ jobs:
           Copy-Item $binary.FullName D:\payload\palace-real.exe
           foreach ($name in 'mpiexec.exe', 'smpd.exe', 'msmpires.dll') { Copy-Item D:\msmpi\$name D:\payload\ }
           python scripts/spike_windows.py closure D:\payload\palace-real.exe D:\payload `
-            D:\b\install\bin D:\msmpi C:\msys64\ucrt64\bin | Tee-Object D:\closure.txt
+            D:\b\install\bin D:\b\install\lib D:\msmpi C:\msys64\ucrt64\bin | Tee-Object D:\closure.txt
           python scripts/spike_windows.py wheels D:\payload D:\wheels | Tee-Object D:\wheels.txt
           Get-ChildItem D:\payload | Format-Table Name, Length -AutoSize
           Select-String -Path D:\closure.txt, D:\wheels.txt -Pattern '^RESULT ' |

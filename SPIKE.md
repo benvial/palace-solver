@@ -195,3 +195,17 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   `PETSC_DIR=D:/b/install` to make. **Patch 8 (`palace-slepc-msys-petsc-dir.patch`):**
   under `MINGW`, Palace's SLEPc configure, build and install commands now
   get `PETSC_DIR` in `/D/...` form.
+- **36936490824.** **SLEPc built** with patch 8, so every dependency in the
+  superbuild now builds. Palace's own configure then failed to find libCEED.
+  Its pkg-config test link reported `cannot find -lceed`, because MinGW `ld`
+  does not search `*.so` and Palace builds libCEED shared even under
+  `BUILD_SHARED_LIBS=OFF`. The `--static` retry reported
+  `cannot find -lxsmm`, because `ceed.pc`'s `-L$(abspath $(XSMM_DIR))/lib`
+  is mangled: MSYS2 make treats `D:/...` as relative. **Patch 3 grows:** on
+  Windows, libCEED's Makefile names the library `libceed.dll`, writes and
+  installs a `libceed.dll.a` import library, and drops `abspath` for
+  `XSMM_DIR`. A dry run on Linux shows the Linux link unchanged. The library
+  stays shared, as Palace intends: the backends' weak-symbol registration
+  resolves when the DLL is linked from objects, which is safer on PE than a
+  static archive. The PE closure now also searches `install\lib`, where
+  `libceed.dll` and `libxsmm.dll` live.
