@@ -17,6 +17,10 @@ the caller, decides the rank count — takes the direct path.
 The default launcher is the ``mpiexec`` vendored in this wheel, not upstream's
 ``mpirun`` from ``PATH``: the wheel carries its own MPICH, and a ``mpirun``
 found on ``PATH`` belongs to some other MPI install.
+
+Windows has no ``exec``. There both console scripts run their child, wait for
+it and exit with its status, which is the ``cmake`` and ``ninja`` wheels'
+pattern; see :func:`_replace_process`.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ from __future__ import annotations
 import os
 import shlex
 import shutil
+import signal
+import subprocess
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
@@ -49,6 +55,19 @@ Options:
   -launcher-args,
     --launcher-args ARGS           Extra arguments for the MPI launcher (quoted)
 """
+
+#: Oldest Windows the wheel runs on, as ``sys.getwindowsversion()`` reports its
+#: major version. MSYS2's UCRT64 toolchain targets Windows 10 and Server 2016,
+#: which share it.
+WINDOWS_FLOOR_MAJOR = 10
+
+#: The floor as a user reads it.
+WINDOWS_FLOOR_NAME = "Windows 10 or Windows Server 2016"
+
+#: Set to ``1`` so MS-MPI keeps a single-node run off the network, and with it
+#: off the Windows Firewall's prompt. MS-MPI's own ``mpiexec`` sets it for the
+#: ranks it starts locally; a singleton has no ``mpiexec`` to set it.
+MSMPI_LOCAL_ONLY_ENV = "MSMPI_LOCAL_ONLY"
 
 
 @dataclass(frozen=True)
@@ -146,20 +165,30 @@ def _positive_integer(option: str, value: str | None) -> int | None:
     return int(value)
 
 
-def mpiexec(argv: Sequence[str] | None = None) -> None:
-    """Replace this process with the MPICH launcher vendored in the wheel.
+def mpiexec(argv: Sequence[str] | None = None, *, system: str | None = None) -> None:
+    """Hand control to the MPI launcher vendored in the wheel.
+
+    On Windows that launcher is MS-MPI's ``mpiexec``, which has no local-only
+    option to pass: it runs locally by default, starting its own ``smpd``
+    manager rather than reaching for a service, unless ``-host``, ``-hosts``,
+    ``-machinefile`` or an HPC Pack ``CCP_NODES`` names other machines.
+    ``MSMPI_LOCAL_ONLY`` is the knob it has, set as for ``palace``.
 
     Args:
         argv: Arguments to forward to ``mpiexec``. Defaults to the arguments
             this console script was invoked with.
+        system: ``sys.platform`` value; defaults to the running platform.
 
     Raises:
-        SystemExit: If the wheel carries no process manager.
+        SystemExit: If the wheel carries no process manager, or Windows is
+            older than the wheel's floor. On Windows, always: with the
+            launcher's exit status.
     """
-    _exec_payload(mpiexec_path, argv, name="palace-mpiexec")
+    _prepare_platform(system)
+    _exec_payload(mpiexec_path, argv, name="palace-mpiexec", system=system)
 
 
-def main(argv: Sequence[str] | None = None) -> None:
+def main(argv: Sequence[str] | None = None, *, system: str | None = None) -> None:
     """Run the packaged Palace binary, under a process manager when asked.
 
     With ``--np`` this process becomes the launcher, which starts each rank by
@@ -171,21 +200,69 @@ def main(argv: Sequence[str] | None = None) -> None:
     Args:
         argv: Arguments to forward to Palace. Defaults to the arguments this
             console script was invoked with.
+        system: ``sys.platform`` value; defaults to the running platform.
 
     Raises:
         SystemExit: If the wheel carries no Palace binary, this rank was
-            launched without a rendezvous, or the requested launcher is not
-            an executable.
+            launched without a rendezvous, the requested launcher is not
+            an executable, or Windows is older than the wheel's floor. On
+            Windows, always: with the child's exit status.
     """
     invocation = parse_arguments(list(sys.argv[1:] if argv is None else argv))
     if invocation.help_requested:
         print(USAGE, end="")
         raise SystemExit(0)
+    _prepare_platform(system)
     _apply_thread_count(invocation.num_threads)
     if invocation.serial or invocation.num_procs is None or invocation.num_procs == 1:
-        _run_rank(invocation.palace_args)
+        _run_rank(invocation.palace_args, system=system)
     else:
-        _run_under_launcher(invocation)
+        _run_under_launcher(invocation, system=system)
+
+
+def _is_windows(system: str | None) -> bool:
+    """Whether ``system``, a ``sys.platform`` value, names Windows."""
+    return (system or sys.platform) == "win32"
+
+
+if sys.platform == "win32":
+
+    def _windows_version() -> tuple[int, int, int]:
+        """Return the running Windows as ``(major, minor, build)``."""
+        version = sys.getwindowsversion()
+        return version.major, version.minor, version.build
+
+else:
+
+    def _windows_version() -> tuple[int, int, int]:
+        """Refuse: there is no Windows to ask."""
+        message = "not running on Windows"
+        raise OSError(message)
+
+
+def _prepare_platform(system: str | None) -> None:
+    """Hold Windows to the wheel's floor and keep MS-MPI off the network.
+
+    Nothing at all happens elsewhere.
+
+    Args:
+        system: ``sys.platform`` value; defaults to the running platform.
+
+    Raises:
+        SystemExit: If Windows is older than :data:`WINDOWS_FLOOR_NAME`.
+    """
+    if not _is_windows(system):
+        return
+    major, minor, build = _windows_version()
+    if major < WINDOWS_FLOOR_MAJOR:
+        print(
+            f"palace: this wheel needs {WINDOWS_FLOOR_NAME} or later; this is "
+            f"Windows {major}.{minor} (build {build})",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    # Never overwritten: a user who wants MS-MPI on the network can say so.
+    os.environ.setdefault(MSMPI_LOCAL_ONLY_ENV, "1")
 
 
 def _apply_thread_count(num_threads: int | None) -> None:
@@ -205,24 +282,25 @@ def _apply_thread_count(num_threads: int | None) -> None:
         os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 
-def _run_rank(palace_args: list[str]) -> None:
+def _run_rank(palace_args: list[str], *, system: str | None = None) -> None:
     """Check the launcher guard, then become the Palace binary.
 
     Args:
         palace_args: Arguments for the binary, config file included.
+        system: ``sys.platform`` value; defaults to the running platform.
     """
-    parent_exe = _launcher.parent_executable()
-    note = _launcher.version_note(parent_exe)
+    parent_exe = _launcher.parent_executable(system=system)
+    note = _launcher.version_note(parent_exe, system=system)
     if note is not None:
         print(f"palace: {note}", file=sys.stderr)
-    reason = _launcher.refusal_reason(os.environ, parent_exe)
+    reason = _launcher.refusal_reason(os.environ, parent_exe, system=system)
     if reason is not None:
         print(f"palace: {reason}", file=sys.stderr)
         raise SystemExit(1)
-    _exec_payload(binary_path, palace_args, name="palace")
+    _exec_payload(binary_path, palace_args, name="palace", system=system)
 
 
-def _run_under_launcher(invocation: Invocation) -> None:
+def _run_under_launcher(invocation: Invocation, *, system: str | None = None) -> None:
     """Become the process manager that starts the ranks.
 
     The ranks are started as this console script rather than as the raw
@@ -232,6 +310,7 @@ def _run_under_launcher(invocation: Invocation) -> None:
 
     Args:
         invocation: The parsed command line, with a rank count.
+        system: ``sys.platform`` value; defaults to the running platform.
 
     Raises:
         SystemExit: If the named launcher cannot be found, or the wheel
@@ -251,7 +330,7 @@ def _run_under_launcher(invocation: Invocation) -> None:
         str(target),
         *invocation.palace_args,
     ]
-    os.execv(str(launcher), command)
+    _replace_process(command, system=system)
 
 
 def _resolve_launcher(requested: str | None) -> Path:
@@ -286,7 +365,11 @@ def _resolve_launcher(requested: str | None) -> Path:
 
 
 def _exec_payload(
-    resolve: Callable[[], Path], argv: Sequence[str] | None, *, name: str
+    resolve: Callable[[], Path],
+    argv: Sequence[str] | None,
+    *,
+    name: str,
+    system: str | None = None,
 ) -> None:
     arguments = list(sys.argv[1:] if argv is None else argv)
     try:
@@ -294,4 +377,60 @@ def _exec_payload(
     except FileNotFoundError as error:
         print(f"{name}: {error}", file=sys.stderr)
         raise SystemExit(1) from error
-    os.execv(str(executable), [str(executable), *arguments])
+    _replace_process([str(executable), *arguments], system=system)
+
+
+def _replace_process(command: list[str], *, system: str | None = None) -> None:
+    """Hand control to ``command``, which names its executable first.
+
+    On POSIX this process becomes the child with ``os.execv``, so the launcher
+    guard's parent read sees whatever started the console script. On Windows,
+    which has no ``exec``, this process runs the child and waits for it.
+    Ctrl-C reaches the child from the console directly, so the wait ignores it
+    and leaves the child to end as it chooses; taken as ``KeyboardInterrupt``
+    it would make :func:`subprocess.run` kill the child and lose its status.
+    Ctrl-Break still ends this process, with status ``0xC000013A``, before any
+    handler of Python's runs.
+
+    Args:
+        command: Executable and arguments.
+        system: ``sys.platform`` value; defaults to the running platform.
+
+    Raises:
+        SystemExit: On Windows, always: with the child's exit status.
+    """
+    if _is_windows(system):
+        _run_and_exit(command)
+    else:
+        os.execv(command[0], command)
+
+
+def _run_and_exit(command: list[str]) -> None:
+    """Run ``command`` to completion, then exit with its status.
+
+    Args:
+        command: Executable and arguments.
+
+    Raises:
+        SystemExit: Always, with the child's exit status.
+    """
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        completed = subprocess.run(command, check=False)
+    finally:
+        signal.signal(signal.SIGINT, previous)
+    raise SystemExit(_exit_status(completed.returncode))
+
+
+def _exit_status(returncode: int) -> int:
+    """Return ``returncode`` in the form ``sys.exit`` passes on unchanged.
+
+    Windows reports an exit status as an unsigned 32-bit value, so a crash or a
+    Ctrl-Break reads back as ``0xC000013A`` and the like. Pythons without the
+    fix for CPython issue 125842 convert the argument of ``sys.exit`` to a C
+    ``long``, 32 bits on Windows, and turn any status from ``0x80000000`` up
+    into ``-1``. The signed form of the same 32 bits survives that conversion.
+    """
+    if returncode >= 1 << 31:
+        return returncode - (1 << 32)
+    return returncode
