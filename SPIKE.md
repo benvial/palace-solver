@@ -270,3 +270,28 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   already follows it (`${MPI_Fortran_LIBRARIES}`). Patch 7 is now one
   finding with two halves, MFEM's and Palace's: Palace's CMake assumes a
   shared ScaLAPACK. Not specific to Windows; worth sending upstream.
+- **36945251835.** **`palace-x86_64.bin` links. The full-feature
+  superbuild completes on `windows-2025` with MinGW and MS-MPI.** Results:
+  - **Binary:** 98,058,993 B (93.5 MiB). Static stack. It imports only the
+    UCRT `api-ms-win-crt-*` set, KERNEL32, ADVAPI32, GDI32 and USER32, plus
+    `libceed.dll`, `libopenblas.dll`, `msmpi.dll`, `libmsmpifec.dll`,
+    `zlib1.dll`, and the GCC runtimes `libgcc_s_seh-1`, `libstdc++-6`,
+    `libgfortran-5`, `libgomp-1` and `libwinpthread-1`.
+  - **Closure:** 12 vendored DLLs. The direct imports above plus
+    `libquadmath-0` (through libgfortran) and `libxsmm.dll` (through
+    libCEED). **New:** `zlib1.dll` comes from MSYS2, because Palace's
+    `find_package(ZLIB)` found MSYS2's zlib. It needs a notice, or a static
+    zlib.
+  - **Wheels:** the flat wheel, every DLL beside the executables, is
+    `py3-none-win_amd64`: 47.1 MiB compressed, 150.2 MiB unpacked, under
+    PyPI's 100 MiB per-file limit. Its largest member is `palace-real.exe`
+    at 93.5 MiB, so a 6.5 MiB margin on the executable alone.
+  - **delvewheel:** with no `--analyze-existing-exes` it reports and copies
+    nothing; the wheel is unchanged. With it, all 12 DLLs move into
+    `palace_solver.libs/` under mangled names, and `msmpi.dll` is left
+    unmangled as asked. An `.exe` has no RPATH, so nothing points
+    `palace-real.exe` at `.libs`. This confirms ticket 02's prediction: for
+    an executable payload, delvewheel's layout is the wrong one.
+  - **Verify job:** it imported the checkout's `palace_solver` (the job runs
+    from the repository root), found only `.gitkeep`, and stopped. A spike
+    bug, fixed: the package lookup now runs from the temporary directory.

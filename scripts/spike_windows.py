@@ -204,7 +204,8 @@ def verify(wheel: Path, example: Path, system_mpiexec: Path | None) -> None:
     subprocess.run([str(python), "-m", "pip", "install", "--quiet", str(wheel)], check=True)
     package = Path(subprocess.run(
         [str(python), "-c", "import palace_solver, pathlib; print(pathlib.Path(palace_solver.__file__).parent)"],
-        capture_output=True, text=True, check=True,
+        # Not from the checkout: its palace_solver/ would shadow the installed one.
+        cwd=work, capture_output=True, text=True, check=True,
     ).stdout.strip())
     bin_dir = package / "bin"
     palace = bin_dir / "palace-real.exe"
