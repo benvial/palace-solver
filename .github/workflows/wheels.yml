@@ -67,6 +67,14 @@ jobs:
       # Fails when the vendored MPICH leaves the major series the interop
       # test proves the wheel against. See wheelbuild/pin_check.py.
       - run: python -m wheelbuild.pin_check
+      # The Windows wheel's MS-MPI, downloaded from Microsoft, carved out of its
+      # installer with the runner's 7z and checked file by file against the
+      # hashes in wheelbuild/msmpi.py. Nothing in it needs Windows, so a moved
+      # or altered download fails here in seconds rather than on the Windows
+      # row. The installer is fetched on every run and never cached, which is
+      # why wheelbuild/msmpi.py is not part of the build cache key.
+      - name: Fetch and verify the MS-MPI redistributable
+        run: python -m wheelbuild.msmpi "$RUNNER_TEMP/msmpi"
       # A tag that does not name palace_solver.__version__ would publish a
       # release under a number nobody chose, and PyPI never lets a filename be
       # reused. Checked here rather than in the wheel job so it fails in
