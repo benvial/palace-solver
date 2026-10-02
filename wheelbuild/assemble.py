@@ -25,8 +25,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from palace_solver import BINARY_NAME, LAUNCHER_NAME
+from wheelbuild import msmpi, platforms
 from wheelbuild import notices as notices_module
-from wheelbuild import platforms
 from wheelbuild._process import check_call
 
 #: PyPI's default per-file upload limit, ``MAX_FILESIZE`` in
@@ -167,7 +167,11 @@ def find_palace_binary(install_prefix: Path) -> Path:
 
 
 def stage(
-    *, install_prefix: Path, package_dir: Path, notices: Path | None = None
+    *,
+    install_prefix: Path,
+    package_dir: Path,
+    notices: Path | None = None,
+    msmpi_dir: Path | None = None,
 ) -> Path:
     """Copy the superbuild payload into the package directory.
 
@@ -175,6 +179,10 @@ def stage(
         install_prefix: Superbuild install prefix.
         package_dir: The ``palace_solver`` package directory to fill.
         notices: Optional THIRD-PARTY-NOTICES file to ship alongside.
+        msmpi_dir: On Windows, where ``wheelbuild.msmpi`` wrote the verified
+            MS-MPI redistributable; its ``mpiexec.exe`` and ``smpd.exe`` are
+            staged beside the solver. ``msmpi.dll`` is not copied here: the
+            repair reaches it as an import of the solver.
 
     Returns:
         Path of the staged binary.
@@ -194,6 +202,11 @@ def stage(
         # Wheels cannot carry symlinks, and MPICH installs mpiexec as one.
         shutil.copy2(launcher.resolve(), destination)
         destination.chmod(destination.stat().st_mode | 0o111)
+
+    if msmpi_dir is not None:
+        for entry in msmpi.REDISTRIBUTABLE_FILES:
+            if entry.name.endswith(".exe"):
+                shutil.copy2(msmpi_dir / entry.name, binary_dir / entry.name)
 
     if notices is not None:
         shutil.copy2(notices, package_dir / "THIRD-PARTY-NOTICES")
@@ -226,6 +239,34 @@ def _process_manager_binaries(install_prefix: Path) -> list[Path]:
         and platforms.is_native_binary(path)
         and (path.name == LAUNCHER_NAME or path.name.startswith(("mpiexec", "hydra_")))
     )
+
+
+def check_msmpi_dir(msmpi_dir: Path | None, *, system: str | None = None) -> None:
+    """Require the fetched MS-MPI on Windows, and refuse it anywhere else.
+
+    The Windows wheel's MPI is not in the install prefix: the redistributable
+    is fetched on every run into a directory outside the cached build root, so
+    assembly has to be told where. Elsewhere the vendored MPICH is in the
+    prefix, and an MS-MPI directory can only be a mistake.
+
+    Args:
+        msmpi_dir: Where ``wheelbuild.msmpi`` wrote the redistributable.
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Raises:
+        ValueError: If it is missing on Windows or given anywhere else.
+    """
+    resolved = system or platform.system()
+    if resolved == "Windows" and msmpi_dir is None:
+        raise ValueError(
+            "--msmpi-dir is required on Windows: the wheel's MPI is the MS-MPI "
+            "redistributable that wheelbuild.msmpi fetched, not the install prefix"
+        )
+    if resolved != "Windows" and msmpi_dir is not None:
+        raise ValueError(
+            f"--msmpi-dir is for the Windows wheel only; on {resolved} the "
+            "vendored MPICH is in the install prefix"
+        )
 
 
 def repair_command(
@@ -447,6 +488,7 @@ def build(
     install_prefix: Path,
     output_dir: Path,
     notices: Path | None = None,
+    msmpi_dir: Path | None = None,
 ) -> Path:
     """Run the full assemble → repair → retag pipeline.
 
@@ -455,6 +497,8 @@ def build(
         install_prefix: Superbuild install prefix.
         output_dir: Where the repaired wheel is written.
         notices: Optional THIRD-PARTY-NOTICES file to ship.
+        msmpi_dir: On Windows, the verified MS-MPI redistributable; see
+            :func:`check_msmpi_dir`.
 
     Returns:
         Path of the final wheel.
@@ -464,9 +508,16 @@ def build(
             license notice in it accounts for.
         PlatformTagError: If the finished wheel is tagged for another platform.
         WheelTooLargeError: If the finished wheel is over PyPI's upload limit.
+        wheelbuild.msmpi.ChecksumMismatchError: If the wheel's MS-MPI files are
+            not the bytes that were fetched and verified.
     """
     package_dir = project_dir / "palace_solver"
-    stage(install_prefix=install_prefix, package_dir=package_dir, notices=notices)
+    stage(
+        install_prefix=install_prefix,
+        package_dir=package_dir,
+        notices=notices,
+        msmpi_dir=msmpi_dir,
+    )
 
     clean_build_tree(project_dir)
     raw_dir = output_dir / "raw"
@@ -508,6 +559,10 @@ def build(
     # platform has: a payload built against a newer SDK major, which delocate
     # writes into the filename.
     verify_platform_tag(final)
+    if msmpi_dir is not None:
+        # Verified when fetched; checked again in the wheel because the repair
+        # copies msmpi.dll from wherever its search path finds it first.
+        msmpi.verify_wheel(final)
     # The repair step is what pulls the compiler runtime in, after the notices
     # were harvested from source checkouts it has none of, so what the wheel
     # ended up carrying is only knowable here.
@@ -569,13 +624,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--install-prefix", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--notices", type=Path, default=None)
+    parser.add_argument(
+        "--msmpi-dir",
+        type=Path,
+        default=None,
+        help="Windows only: where wheelbuild.msmpi wrote the MS-MPI redistributable",
+    )
     args = parser.parse_args(argv)
+    try:
+        check_msmpi_dir(args.msmpi_dir)
+    except ValueError as error:
+        parser.error(str(error))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     build(
         project_dir=args.project_dir,
         install_prefix=args.install_prefix,
         output_dir=args.output_dir,
         notices=args.notices,
+        msmpi_dir=args.msmpi_dir,
     )
     return 0
 

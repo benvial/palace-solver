@@ -425,3 +425,56 @@ def test_verify_size_returns_the_report_for_a_wheel_under_the_limit(tmp_path):
     wheel.write_bytes(b"0" * 1024)
 
     assert assemble.verify_size(wheel).size_bytes == 1024
+
+
+def _msmpi_dir(root: Path) -> Path:
+    root.mkdir(parents=True)
+    for name in ("msmpi.dll", "mpiexec.exe", "smpd.exe"):
+        (root / name).write_bytes(b"MZ" + name.encode())
+    return root
+
+
+def test_stage_ships_ms_mpis_launchers_but_leaves_its_dll_to_the_repair(tmp_path):
+    install_prefix = _install_tree(tmp_path / "install")
+    package_dir = tmp_path / "pkg" / "palace_solver"
+
+    assemble.stage(
+        install_prefix=install_prefix,
+        package_dir=package_dir,
+        msmpi_dir=_msmpi_dir(tmp_path / "msmpi"),
+    )
+
+    staged = {path.name for path in (package_dir / "bin").iterdir()}
+    assert {"mpiexec.exe", "smpd.exe"} <= staged
+    assert "msmpi.dll" not in staged
+    assert (package_dir / "bin" / "smpd.exe").read_bytes() == b"MZsmpd.exe"
+
+
+def test_check_msmpi_dir_requires_the_fetched_mpi_on_windows():
+    with pytest.raises(ValueError, match="required on Windows"):
+        assemble.check_msmpi_dir(None, system="Windows")
+    assemble.check_msmpi_dir(Path("D:/b-msmpi"), system="Windows")
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_check_msmpi_dir_refuses_it_where_mpich_is_vendored(system):
+    with pytest.raises(ValueError, match="Windows wheel only"):
+        assemble.check_msmpi_dir(Path("msmpi"), system=system)
+    assemble.check_msmpi_dir(None, system=system)
+
+
+def test_main_refuses_to_assemble_on_windows_without_the_fetched_mpi(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(assemble.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        assemble, "build", lambda **_: pytest.fail("assembled without MS-MPI")
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        assemble.main(
+            ["--install-prefix", str(tmp_path), "--output-dir", str(tmp_path / "out")]
+        )
+
+    assert exited.value.code == 2
+    assert "--msmpi-dir is required on Windows" in capsys.readouterr().err
