@@ -6,14 +6,15 @@ The Windows twin of scripts/smoke-test.sh; why it is a twin rather than a
 branch of that script is in scripts/_windows_wheel.py. Run it on a machine with
 no MS-MPI installed: what it proves is that the wheel needs nothing else.
 
-Checks: the wheel vendors MS-MPI; it installs into a venv with nothing else in
-it; palace_solver finds its payload, its DLL directory and its own console
-script (Scripts\palace.exe -- a None there would send `palace --np` to the
-unguarded binary); every PE file in the payload imports only what sits beside
-it or ships with Windows; and, with a PATH holding nothing but the venv and
-Windows, Palace reports its version and runs PALACE_CONFIG as a dry run and a
-real solve on one rank, then as a dry run on two ranks under the vendored
-palace-mpiexec and through the wrapper's own --np.
+Checks: the machine has no MS-MPI installed; the wheel vendors it; it
+installs into a venv with nothing else in it; palace_solver finds its payload,
+its DLL directory and its own console script (Scripts\palace.exe -- a None
+there would send `palace --np` to the unguarded binary); every PE file in the
+payload imports only what sits beside it or ships with Windows; and, with a
+PATH holding nothing but the venv and Windows, Palace reports its version and
+runs PALACE_CONFIG as a dry run and a real solve on one rank, then as a dry
+run on two ranks under the vendored palace-mpiexec and through the wrapper's
+own --np.
 
 scripts/interop-test-windows.py carries this further, into real two-rank solves
 under a launcher that did not ship with the wheel.
@@ -73,6 +74,13 @@ def install(wheel: Path, workdir: Path) -> tuple[Path, dict]:
     Returns:
         The venv's ``Scripts`` directory, and the package's answers.
     """
+    step("no MS-MPI is installed on this machine")
+    # Where msmpisetup.exe puts the runtime. With it there, a DLL the wheel
+    # forgot could still be found, and the test would prove nothing.
+    system_msmpi = Path(os.environ["SYSTEMROOT"]) / "System32" / "msmpi.dll"
+    if system_msmpi.exists():
+        fail(f"{system_msmpi} exists: run this where MS-MPI is not installed")
+
     step("the wheel vendors MS-MPI")
     names = set(zipfile.ZipFile(wheel).namelist())
     for member in REQUIRED_MEMBERS:
