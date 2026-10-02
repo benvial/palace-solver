@@ -1,0 +1,98 @@
+# The wheel job's matrix: one row per supported platform, read by
+# `python3 -m wheelbuild.matrix` in the workflow's `plan` job and handed to the
+# `wheel` job as its `include` list.
+#
+# The rows live here rather than inline in .github/workflows/wheels.yml so a
+# dispatch can narrow them: GitHub cannot filter a static `include` list by an
+# input (`exclude` never removes an `include` row, and a job-level `if` cannot
+# see `matrix`), while a matrix computed by an earlier job can be anything. The
+# `windows_only` input uses that to iterate on the Windows row without sending
+# the other three cold. tests/test_wheels_workflow.py reads this file, and ties
+# its tags to wheelbuild.platforms.
+#
+# Everything that names a platform comes from the row rather than from the step
+# that uses it, so a further platform is one entry here and as few other edits
+# as its kind needs -- which is how the aarch64 row was added. See
+# docs/adr/0006-parameterised-raw-jobs-not-cibuildwheel.md.
+#
+# Pinned runner labels rather than *-latest: the ubuntu-latest label moves to
+# Ubuntu 26 on 2026-10-19, and a 40-minute superbuild is not where a runner
+# image should change underneath us. On macOS a moving label would also change
+# the published filename.
+
+[[row]]
+name = "manylinux_2_28 x86_64"
+runner = "ubuntu-24.04"
+image = "quay.io/pypa/manylinux_2_28_x86_64"
+tag = "manylinux_2_28_x86_64"
+build_root = "/build"
+
+# Every platform builds natively, so the arm image needs an arm runner:
+# ubuntu-24.04-arm is free and unlimited on a public repository and carries the
+# same 4 vCPU / 16 GB as the x86_64 one. The spike in
+# .scratch/cibuildwheel/issues/05-aarch64-superbuild-spike.md built this row
+# cold in 36 minutes with the smoke test and all four interop stages passing,
+# against scripts/build-wheel.sh unchanged -- which is why this is a row and not
+# a job.
+#
+# Upstream Palace pins its own arm superbuild to ubuntu-22.04-arm over "flaky
+# arm builds with ubuntu 24", with no detail and no linked issue. That comment
+# did not reproduce here and the configurations differ, but it is the first
+# lead if this row starts failing intermittently.
+#
+# This row's first run on any branch is necessarily a cold build: a cache entry
+# is fingerprinted by the machine that wrote it, so there is nothing for it to
+# restore until it has saved once.
+[[row]]
+name = "manylinux_2_28 aarch64"
+runner = "ubuntu-24.04-arm"
+image = "quay.io/pypa/manylinux_2_28_aarch64"
+tag = "manylinux_2_28_aarch64"
+build_root = "/build"
+
+# Apple Silicon. The label is pinned harder than the Linux ones: on macOS the
+# runner image decides the published filename and the set of machines that can
+# install the wheel, not just the build inputs, so macos-latest -- which
+# repointed to macOS 26 in mid-2026 -- must never appear here. macos-14, which
+# the spike ran on, is fully unsupported from 2026-11-02. macos-15 has no
+# retirement announcement and is the newest label whose Homebrew runtimes carry
+# a minos this wheel can claim; see
+# .scratch/platform-expansion/issues/06-macos-runner-image-and-floor.md.
+#
+# One row value is absent rather than empty: no `image`, because the build runs
+# on the runner itself. macOS has no container, so the three steps that exist
+# only to serve one are skipped and the build step is the driver rather than
+# `docker run`. Every other step is shared, including the wheel's: this row
+# assembles and repairs with delocate in place of auditwheel and clears the
+# same bar as the other two.
+#
+# The build root is an absolute path under the runner's home rather than
+# /build: macOS 11 and later seal the root volume, so no new top-level
+# directory can be created at all. It is pinned because Mach-O records absolute
+# install names -- a build root that moves between the save and the restore is
+# a tree that no longer resolves, which is a way of wasting a cache the Linux
+# platforms cannot.
+[[row]]
+name = "macosx_15_0 arm64"
+runner = "macos-15"
+tag = "macosx_15_0_arm64"
+build_root = "/Users/runner/palace-build"
+
+# Windows x86-64, built with MSYS2's UCRT64 gcc and gfortran against Palace's
+# superbuild and vendoring MS-MPI (docs/adr/0007-ship-a-windows-wheel.md).
+# Pinned to windows-2025, never windows-latest, for the macOS reason as much as
+# the Linux one: the image decides the MSYS2 that is preinstalled.
+#
+# No `image`, like macOS: the build runs on the runner, under MSYS2 rather than
+# in a container. What sets it apart from macOS is the runner's operating
+# system, which the steps read as runner.os, so the row shape stays one shape.
+#
+# The build root is short and on D:. Tools without a long-path manifest still
+# stop at MAX_PATH, and the runner's C: is 40-50% slower
+# (.scratch/windows-support/research-windows-runner.md). A cold build is about
+# 2 h 20 min, OpenBLAS 79 minutes of it; it fits one 6-hour job.
+[[row]]
+name = "win_amd64"
+runner = "windows-2025"
+tag = "win_amd64"
+build_root = 'D:\b'

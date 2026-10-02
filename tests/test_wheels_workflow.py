@@ -5,6 +5,7 @@ expensive way to find out. These are the properties that hold for every row and
 that a second platform made possible to get wrong.
 """
 
+import json
 import re
 import tomllib
 from pathlib import Path
@@ -12,6 +13,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from wheelbuild import matrix
 from wheelbuild.link_check import PEFILE_REQUIREMENT
 from wheelbuild.platforms import (
     MACOS_DEPLOYMENT_TARGET,
@@ -57,8 +59,9 @@ def workflow():
 
 
 @pytest.fixture(scope="module")
-def rows(workflow):
-    return workflow["jobs"]["wheel"]["strategy"]["matrix"]["include"]
+def rows():
+    """The matrix rows, which live in .github/wheel-matrix.toml."""
+    return matrix.rows()
 
 
 @pytest.fixture(scope="module")
@@ -230,9 +233,174 @@ def test_the_container_only_steps_run_only_for_a_row_with_an_image(named_step, n
 def test_a_row_without_an_image_builds_on_the_runner(named_step):
     build = named_step("Build wheel on the runner")
 
-    assert build["if"] == "${{ !matrix.image }}"
+    assert build["if"] == "${{ !matrix.image && runner.os != 'Windows' }}"
     assert "scripts/build-macos.sh" in build["run"]
     assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_the_windows_row_builds_under_msys2(named_step):
+    """MSYS2's bash, not the job's Git for Windows bash: the driver needs its
+    toolchain, make and POSIX python on PATH, and MSYSTEM set."""
+    build = named_step("Build Palace under MSYS2")
+
+    assert build["if"] == "runner.os == 'Windows'"
+    assert build["shell"] == "msys2 {0}"
+    assert "scripts/build-windows.sh" in build["run"]
+    assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_msys2_is_provisioned_as_adr_0007_fixes_it(named_step):
+    """The image's MSYS2, nothing newer, and no package cache of its own
+    against the shared 10 GB budget."""
+    setup = named_step("Provision MSYS2 UCRT64")
+
+    assert setup["if"] == "runner.os == 'Windows'"
+    assert setup["uses"].startswith("msys2/setup-msys2@")
+    assert setup["with"]["msystem"] == "UCRT64"
+    for key in ("release", "update", "cache"):
+        assert setup["with"][key] is False
+    packages = setup["with"]["install"].split()
+    for package in ("gcc", "gcc-fortran", "libgomp", "ccache", "pkgconf", "msmpi"):
+        assert f"mingw-w64-ucrt-x86_64-{package}" in packages
+    for package in ("make", "git", "patch", "python"):
+        assert package in packages
+
+
+def test_the_steps_that_run_on_windows_do_not_call_python3(named_step):
+    """The Windows toolcache has no python3, and the job's bash would find the
+    Store alias or nothing."""
+    for name in (
+        "Resolve Palace version and platform tag",
+        "Check the build tree is readable before saving it",
+    ):
+        assert "python3" not in named_step(name)["run"]
+
+
+def test_the_wheel_job_runs_its_steps_in_bash(workflow):
+    """Windows would otherwise run every shared step in PowerShell."""
+    assert workflow["jobs"]["wheel"]["defaults"]["run"]["shell"] == "bash"
+
+
+def test_the_windows_row_claims_the_tag_the_build_would_derive(rows):
+    expected = platform_tag(system="Windows", machine="AMD64")
+    row = next(row for row in rows if row["runner"].startswith("windows"))
+
+    assert row["tag"] == expected == "win_amd64"
+
+
+def test_the_windows_build_root_is_short_and_on_d(rows):
+    """Tools without a long-path manifest stop at MAX_PATH, and C: is slower."""
+    row = next(row for row in rows if row["tag"] == "win_amd64")
+
+    assert row["build_root"] == "D:\\b"
+
+
+def test_the_cache_key_covers_the_windows_build_driver(build_cache):
+    assert "scripts/build-windows.sh" in build_cache["with"]["key"]
+
+
+def test_the_carried_patches_stay_out_of_the_cache_key(build_cache):
+    """An edited patch resets only its own tree (wheelbuild/patches.py); keying
+    the directory would send the whole Windows row cold instead."""
+    key = build_cache["with"]["key"]
+
+    assert "patches" not in key
+
+
+# -- the matrix is computed, so a dispatch can narrow it ---------------------
+
+
+def test_the_wheel_matrix_is_the_plan_jobs_rows(workflow):
+    wheel = workflow["jobs"]["wheel"]
+
+    assert wheel["needs"] == ["plan"]
+    assert wheel["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.plan.outputs.rows) }}"
+    }
+
+
+def test_the_plan_job_reads_the_rows_with_wheelbuild_matrix(workflow):
+    plan = workflow["jobs"]["plan"]
+    select = next(step for step in plan["steps"] if step.get("id") == "rows")
+
+    assert plan["outputs"]["rows"] == "${{ steps.rows.outputs.rows }}"
+    assert "python3 -m wheelbuild.matrix" in select["run"]
+    assert "windows_only" in select["env"]["ONLY"]
+    assert "win_amd64" in select["env"]["ONLY"]
+
+
+def test_only_a_dispatch_can_narrow_the_matrix(workflow):
+    """Pull requests and pushes always build every row: narrowing on anything
+    else would be the path-filter gating ADR-0007 rules out."""
+    plan = workflow["jobs"]["plan"]
+    select = next(step for step in plan["steps"] if step.get("id") == "rows")
+
+    assert select["env"]["ONLY"].startswith(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.windows_only"
+    )
+
+
+def test_a_windows_only_dry_run_is_refused_before_anything_builds(workflow):
+    plan = workflow["jobs"]["plan"]
+    refuse = next(step for step in plan["steps"] if "Refuse" in step.get("name", ""))
+
+    assert "inputs.windows_only && inputs.testpypi" in refuse["if"]
+    assert "exit 1" in refuse["run"]
+
+
+def test_matrix_select_keeps_every_row_without_a_narrowing(rows):
+    assert matrix.select(rows, None) == rows
+    assert [row["tag"] for row in matrix.select(rows, "win_amd64")] == ["win_amd64"]
+
+
+def test_matrix_select_refuses_a_tag_no_row_has(rows):
+    """A narrowing that selects nothing would be a run that builds nothing and
+    reports success."""
+    with pytest.raises(matrix.MatrixError, match="win_arm64"):
+        matrix.select(rows, "win_arm64")
+
+
+def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, rows):
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    assert matrix.main(["--only", "win_amd64"]) == 0
+
+    name, value = output.read_text().strip().split("=", 1)
+    assert name == "rows"
+    assert value == json.dumps(matrix.select(rows, "win_amd64"))
+
+
+@pytest.fixture(scope="module")
+def iteration_cleanup(workflow):
+    return workflow["jobs"]["iteration-cache-cleanup"]
+
+
+def test_the_iteration_cleanup_hashes_exactly_what_the_cache_key_hashes(
+    iteration_cleanup, build_cache
+):
+    """Same reason as main's cleanup: a divergent list makes the entry the run
+    just saved look stale."""
+    pruned = _hashed_files(
+        next(
+            step["env"]["INPUTS_HASH"]
+            for step in iteration_cleanup["steps"]
+            if "env" in step
+        )
+    )
+
+    assert pruned == _hashed_files(build_cache["with"]["key"])
+
+
+def test_the_iteration_cleanup_never_touches_main_or_another_platform(
+    iteration_cleanup,
+):
+    script = "".join(step.get("run", "") for step in iteration_cleanup["steps"])
+
+    assert "github.ref != 'refs/heads/main'" in iteration_cleanup["if"]
+    assert "inputs.windows_only" in iteration_cleanup["if"]
+    assert '--ref "$GITHUB_REF"' in script
+    assert "--key-prefix superbuild-win_amd64-" in script
 
 
 def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
@@ -357,15 +525,6 @@ def download(publish):
     )
 
 
-# feat/windows-wheel only: the platform table names win_amd64 one commit before
-# the matrix row that builds it exists. Strict, so the row landing turns this
-# into an XPASS failure and the marker has to come off with it; the branch does
-# not merge to main while it is here.
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason="win_amd64 is supported before its matrix row exists; remove with the row",
-)
 def test_the_supported_platform_set_is_exactly_the_matrix_rows(rows):
     """`wheelbuild.platforms` is what the release check counts wheels against,
     and the matrix is what builds them. A platform added to one and not the
@@ -524,11 +683,24 @@ def test_the_procedure_names_the_input_a_release_operator_has_to_tick(
     line. A renamed input leaves that instruction describing a flag the
     workflow does not have, and the operator finds that out mid-release.
     """
-    assert len(dispatch_inputs) == 1, "a second input would need its own check here"
-    (name,) = dispatch_inputs
+    assert set(dispatch_inputs) == {"testpypi", "windows_only"}, (
+        "a further input would need its own check here"
+    )
 
-    assert f"-f {name}=true" in releasing
-    assert dispatch_inputs[name]["description"] in releasing
+    assert "-f testpypi=true" in releasing
+    assert dispatch_inputs["testpypi"]["description"] in releasing
+
+
+def test_the_iteration_input_is_off_by_default_and_says_it_is_no_release(
+    dispatch_inputs, releasing
+):
+    """windows_only is a developer's input, so the release procedure must not
+    name it, and its label must say why."""
+    windows_only = dispatch_inputs["windows_only"]
+
+    assert windows_only["default"] is False
+    assert "never a release" in windows_only["description"]
+    assert "windows_only" not in releasing
 
 
 def test_the_procedure_names_both_publishing_environments(releasing, dry_run, publish):
