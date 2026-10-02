@@ -1,0 +1,11 @@
+--- a/cmake/ExternalMFEM.cmake
++++ b/cmake/ExternalMFEM.cmake
+@@ -500,6 +500,8 @@
+   52ccf3332f87aaf7ebc84674448226201c04343a3e298006bea5fd8be8e92533
+ )
+ 
++list(APPEND MFEM_PATCH_FILES "${CMAKE_SOURCE_DIR}/extern/patch/mfem/patch_binary-ifgzstream.diff")
++
+ include(ExternalProject)
+ ExternalProject_Add(mfem
+   DEPENDS           ${MFEM_DEPENDENCIES}

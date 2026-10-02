@@ -1,0 +1,15 @@
+--- a/general/zstr.hpp
++++ b/general/zstr.hpp
+@@ -777,9 +777,11 @@
+      public std::istream
+ {
+ public:
++   // Binary, like ofstream above: on Windows a text-mode stream rewrites \r\n inside
++   // binary meshes (Gmsh "2.2 1 8", VTK binary). Text readers already filter_dos().
+    explicit ifgzstream(const std::string &filename)
+       : zstr::detail::strict_fstream_holder<strict_fstream::ifstream>(filename,
+-                                                                      std::ios_base::in),
++                                                                      std::ios_base::in | std::ios_base::binary),
+         std::istream(nullptr)
+    {
+ #ifdef MFEM_USE_ZLIB

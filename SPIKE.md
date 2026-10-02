@@ -295,3 +295,45 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   - **Verify job:** it imported the checkout's `palace_solver` (the job runs
     from the repository root), found only `.gitkeep`, and stopped. A spike
     bug, fixed: the package lookup now runs from the temporary directory.
+- **36946886548: the wheel on a clean runner** (no MSYS2, no MS-MPI
+  installed). What works:
+  - `palace-real.exe --version` prints `Palace version: v0.18.1-dirty`. The
+    `-dirty` is the spike's patches in the tree.
+  - The singleton `-dry-run` returns 0 with no launcher (MS-MPI singleton
+    init).
+  - **Two ranks under the vendored `mpiexec` form one `MPI_COMM_WORLD`**:
+    one `Dry-run:` line, `smpd.exe` beside it, no service.
+  - **The same holds with `msmpires.dll` removed**, and `mpiexec`'s error
+    text ("Unknown option: -nonexistent-option") is identical with or
+    without it. The wheel does not need `msmpires.dll`, at least on these
+    paths.
+  - **`PMI_RANK` without `PMI_KVS` runs as a silent singleton**: rc 0, one
+    `Dry-run:` line. This reproduces the regression the Windows launcher
+    guard must key on (ticket 05).
+  - The exit code propagates through a `subprocess.run` wrapper (rc 1 for a
+    missing config).
+  - **Interop: two ranks under a system MS-MPI 10.1.3 `mpiexec`** (from
+    `msmpisetup.exe -unattend`) launching the wheel's binary form one
+    `MPI_COMM_WORLD`.
+  - Firewall rules: 348 before and 348 after, none matching
+    mpi/smpd/palace. Nothing was added; a headless runner cannot show
+    whether a prompt would have appeared.
+
+  What fails: **every real solve**, singleton and two-rank, with
+  `MFEM abort: Gmsh file : vertices indices are not unique`. The dry runs
+  pass because they never read the mesh. `spheres.msh` is binary Gmsh 2.2
+  (`2.2 1 8`), and MFEM's `ifgzstream` opens meshes with
+  `std::ios_base::in`, text mode, so Windows rewrites `\r\n` inside the
+  binary payload. MFEM's own `ofstream` already adds
+  `std::ios_base::binary`; only the reader lacks it, and upstream `master`
+  still does. **Patch 10 (`mfem-binary-ifgzstream.diff`):** open in binary
+  mode. On Linux the flag does nothing. CRLF text meshes are unaffected,
+  because MFEM's text readers already `filter_dos()`. It joins Palace's
+  existing MFEM patch list. The Ctrl-Break test measured nothing (no
+  process was alive after 8 s, because the solve had already died); it
+  reruns once solves work.
+
+  Parity note: `zlib1.dll` is in the closure because MFEM finds a zlib and
+  sets `MFEM_USE_ZLIB=YES`. The Linux build does the same against
+  `/usr/lib64/libz.so`, which auditwheel vendors, so zlib is parity, not a
+  new dependency.
