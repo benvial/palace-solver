@@ -1,4 +1,6 @@
+import fnmatch
 import hashlib
+import ntpath
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -99,6 +101,38 @@ def test_harvest_lists_each_license_once_across_source_and_build_directories(tmp
     ).read_text()
 
     assert text.count("mumps license text") == 1
+
+
+def test_harvest_skips_a_symlink_checked_out_as_a_file_naming_its_target(tmp_path):
+    """Git on Windows writes a symlink as a plain file holding the link's target."""
+    source_root = _full_tree(tmp_path / "build")
+    arkode = source_root / "extern" / "sundials" / "src" / "arkode"
+    arkode.mkdir(parents=True)
+    (arkode / "LICENSE").write_text("../../LICENSE")
+
+    text = notices.harvest(
+        source_roots=[source_root], output=tmp_path / "NOTICES"
+    ).read_text()
+
+    assert "../../LICENSE" not in text
+    assert "sundials license text" in text
+
+
+def test_harvest_matches_license_names_case_sensitively_on_every_host(
+    tmp_path, monkeypatch
+):
+    """A case-folding host must harvest what Linux harvests, no more."""
+    monkeypatch.setattr(fnmatch.os.path, "normcase", ntpath.normcase)
+    source_root = _full_tree(tmp_path / "build")
+    docs = source_root / "extern" / "hypre" / "src" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "copyright.txt").write_text("hypre docs copyright")
+
+    text = notices.harvest(
+        source_roots=[source_root], output=tmp_path / "NOTICES"
+    ).read_text()
+
+    assert "hypre docs copyright" not in text
 
 
 def test_mumps_note_identifies_the_redistributed_source_checkout(tmp_path):
