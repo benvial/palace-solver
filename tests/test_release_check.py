@@ -34,7 +34,7 @@ def test_a_complete_set_of_wheels_has_no_problems(tmp_path):
 
 
 def test_a_missing_platform_is_a_problem(tmp_path):
-    """The case the ticket exists for: a tag that ships two of three wheels."""
+    """The case the ticket exists for: a tag that ships three of four wheels."""
     tags = supported_platform_tags()
     dist = _write(tmp_path / "dist", *(_name(tag) for tag in tags[:-1]))
 
@@ -166,6 +166,32 @@ def test_main_defaults_to_the_packaged_version(tmp_path):
     assert release_check.main([str(dist)]) == 0
 
 
-@pytest.mark.parametrize("tag", ["manylinux_2_28_x86_64", "macosx_15_0_arm64"])
+@pytest.mark.parametrize(
+    "tag",
+    [
+        "manylinux_2_28_x86_64",
+        "manylinux_2_28_aarch64",
+        "macosx_15_0_arm64",
+        "win_amd64",
+    ],
+)
 def test_every_supported_platform_is_one_the_tag_derivation_produces(tag):
     assert tag in supported_platform_tags()
+
+
+def test_a_release_carries_four_wheels():
+    """Three platforms from ADR-0006 and Windows from ADR-0007."""
+    names = release_check.expected_wheel_names(version=VERSION)
+
+    assert len(names) == 4
+    assert _name("win_amd64") in names
+
+
+def test_a_release_missing_only_the_windows_wheel_is_a_problem(tmp_path):
+    tags = [tag for tag in supported_platform_tags() if tag != "win_amd64"]
+    dist = _write(tmp_path / "dist", *(_name(tag) for tag in tags))
+
+    found = release_check.problems(dist, version=VERSION)
+
+    assert len(found) == 1
+    assert "win_amd64" in found[0]

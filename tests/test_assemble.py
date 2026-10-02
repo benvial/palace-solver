@@ -260,6 +260,49 @@ def test_retag_command_on_darwin_keeps_the_tag_delocate_computed(tmp_path):
     assert command[-1] == str(wheel)
 
 
+def test_retag_command_on_linux_forces_the_manylinux_tag(tmp_path):
+    """auditwheel already applied it; the retag must not undo that."""
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-manylinux_2_28_x86_64.whl"
+    command = assemble.retag_command(wheel, system="Linux", machine="x86_64")
+
+    assert command[command.index("--platform-tag") + 1] == "manylinux_2_28_x86_64"
+
+
+def test_retag_command_on_windows_forces_win_amd64(tmp_path):
+    """No Windows repair tool computes the tag from the payload as delocate
+    does, so, as on Linux, this step is what puts the platform tag on the wheel.
+    """
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-win_amd64.whl"
+    command = assemble.retag_command(wheel, system="Windows", machine="AMD64")
+
+    assert command == [
+        "wheel",
+        "tags",
+        "--python-tag",
+        "py3",
+        "--abi-tag",
+        "none",
+        "--platform-tag",
+        "win_amd64",
+        "--remove",
+        str(wheel),
+    ]
+
+
+def test_retag_command_rejects_windows_arm64(tmp_path):
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-win_arm64.whl"
+
+    with pytest.raises(platforms.UnsupportedPlatformError, match="arm64"):
+        assemble.retag_command(wheel, system="Windows", machine="ARM64")
+
+
+def test_retag_command_rejects_a_platform_with_no_wheel(tmp_path):
+    wheel = tmp_path / "palace_solver-0.17.0-cp313-cp313-any.whl"
+
+    with pytest.raises(platforms.UnsupportedPlatformError, match="FreeBSD"):
+        assemble.retag_command(wheel, system="FreeBSD")
+
+
 def test_the_delocate_pin_is_the_version_that_refuses_a_payload_over_the_floor():
     """0.13.0 raises on a library above MACOSX_DEPLOYMENT_TARGET; earlier
     versions computed the tag but only warned, which publishes a wheel claiming

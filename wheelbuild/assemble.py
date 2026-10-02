@@ -306,8 +306,8 @@ def retag_command(
     """Return the ``wheel tags`` invocation that forces the ``py3-none`` tag.
 
     The payload is a binary with no Python ABI, so the Python and ABI tags are
-    wrong on every platform and are forced here. The platform tag is only
-    forced on Linux, where this step is what applies it at all; on Darwin the
+    wrong on every platform and are forced here. The platform tag is forced on
+    Linux and Windows, where this step is what applies it at all; on Darwin the
     repair already renamed the wheel from the payload, and overwriting that
     with the floor the build asked for would replace the evidence with the
     assumption.
@@ -325,11 +325,11 @@ def retag_command(
             here.
     """
     resolved = system or platform.system()
-    if resolved not in {"Linux", "Darwin"}:
+    if resolved not in {"Linux", "Darwin", "Windows"}:
         raise platforms.UnsupportedPlatformError(f"no wheel is retagged for {resolved}")
     tag_arguments = (
         ["--platform-tag", platforms.platform_tag(system=resolved, machine=machine)]
-        if resolved == "Linux"
+        if resolved != "Darwin"
         else []
     )
     return [

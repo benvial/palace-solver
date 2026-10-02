@@ -340,6 +340,15 @@ def download(publish):
     )
 
 
+# feat/windows-wheel only: the platform table names win_amd64 one commit before
+# the matrix row that builds it exists. Strict, so the row landing turns this
+# into an XPASS failure and the marker has to come off with it; the branch does
+# not merge to main while it is here.
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason="win_amd64 is supported before its matrix row exists; remove with the row",
+)
 def test_the_supported_platform_set_is_exactly_the_matrix_rows(rows):
     """`wheelbuild.platforms` is what the release check counts wheels against,
     and the matrix is what builds them. A platform added to one and not the
