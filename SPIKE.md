@@ -337,3 +337,21 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   sets `MFEM_USE_ZLIB=YES`. The Linux build does the same against
   `/usr/lib64/libz.so`, which auditwheel vendors, so zlib is parity, not a
   new dependency.
+- **36948842589. Every check passes on a clean runner.**
+  - Singleton solve: rc 0. Two-rank solve under the vendored `mpiexec`:
+    rc 0.
+  - The `spheres` example runs end to end on Windows from the wheel.
+  - Ctrl-Break to the wrapper's process group mid-solve: 4 processes alive
+    during (`mpiexec`, `smpd`, two `palace-real`), **0 after, so nothing is
+    orphaned**. The rc is `0xC000013A` (STATUS_CONTROL_C_EXIT), not the
+    wrapper's 130: CTRL_BREAK ends the python wrapper before its
+    `KeyboardInterrupt` handler runs.
+  - The system MS-MPI 10.1.3 `mpiexec` still forms one `MPI_COMM_WORLD`
+    with the wheel's binary.
+  - Cache: the build root is 2.29 GiB as one zstd entry, against Linux's
+    2.23 GiB. **New:** `msys2/setup-msys2` caches its own package downloads
+    by default, 150-180 MiB per install-list change. The two superseded
+    entries are deleted; a production job should set `cache: false` or
+    budget for one.
+  Every run so far was incremental. The next run is a `cold` dispatch, to
+  answer the ticket's cold-time question.

@@ -25,6 +25,11 @@ on:
   push:
     branches: [research/windows-spike]
   workflow_dispatch:
+    inputs:
+      cold:
+        description: "Ignore earlier spike caches: time a cold build (ticket 07's question)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -69,6 +74,7 @@ jobs:
 
       - name: Restore spike build root
         id: restore
+        if: ${{ !inputs.cold }}
         uses: actions/cache/restore@v4
         with:
           path: ${{ env.BUILD_ROOT_WIN }}
@@ -192,7 +198,7 @@ jobs:
         with:
           path: ${{ env.BUILD_ROOT_WIN }}
           key: spike-windows-${{ github.run_id }}-${{ github.run_attempt }}-superbuild
-          restore-keys: spike-windows-
+          restore-keys: ${{ inputs.cold && format('spike-windows-{0}-', github.run_id) || 'spike-windows-' }}
 
       - name: Environment
         run: scripts/spike-windows-build.sh env
