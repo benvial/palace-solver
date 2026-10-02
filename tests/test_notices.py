@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from wheelbuild import notices
+from wheelbuild import msmpi, notices
 
 
 @pytest.fixture(autouse=True)
@@ -775,19 +775,19 @@ def test_each_windows_runtime_library_is_pinned_to_its_own_license():
 
 
 def test_ms_mpi_third_party_notices_are_microsofts_file_unchanged():
-    """The SHA-256 of MPI_Redistributables_TPN.txt in msmpisetup.exe 10.1.12498.52.
+    """MPI_Redistributables_TPN.txt is the file the MS-MPI fetch checks in the MSI.
 
-    The same value as ``wheelbuild.msmpi.MICROSOFT_TEXTS`` records for the file the
-    MS-MPI fetch checks inside the x64 MSI; this should read it from there once
-    both are on ``main``. The license terms are committed converted from their
-    RTF, so their source hash is recorded beside the path in ``notices`` rather
-    than tested here.
+    Compared against ``wheelbuild.msmpi.MICROSOFT_TEXTS``, the hash the fetch
+    verifies inside the x64 MSI, so the shipped copy and the fetched one cannot
+    drift apart. The license terms are committed converted from their RTF, so
+    their source hash is recorded beside the path in ``notices`` rather than
+    tested here.
     """
     shipped = Path(notices.__file__).parent / "data" / "MPI_Redistributables_TPN.txt"
 
     assert (
         hashlib.sha256(shipped.read_bytes()).hexdigest()
-        == "e202e6c77b4ecb7be69e39d647be54bb5d076d90522e533d11dbaaacd618d7f8"
+        == msmpi.MICROSOFT_TEXTS["MPI_Redistributables_TPN.txt"]
     )
 
 
