@@ -79,10 +79,21 @@ EXIT_TIMEOUT = 120
 #: A console script that reports the guard's parent read and nothing else.
 PROBE_NAME = "palace-parent-probe"
 PROBE_SOURCE = """\
+import os
+import sys
+
 from palace_solver import _launcher
 
 
 def main():
+    chain, pid = [], os.getpid()
+    for _ in range(5):
+        chain.append(f"{pid}={_launcher._windows_executable(pid)}")
+        pid = _launcher._windows_parent_pid(pid)
+        if pid is None:
+            break
+    print(f"argv0: {sys.argv[0]!r} executable: {sys.executable!r}", flush=True)
+    print("chain: " + " <- ".join(chain), flush=True)
     print(f"parent: {_launcher.parent_executable()}", flush=True)
 """
 
