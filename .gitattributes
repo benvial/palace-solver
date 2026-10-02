@@ -1,0 +1,4 @@
+# Microsoft's MS-MPI third-party notices, byte for byte as the installer ships
+# them (CRLF line endings), so their SHA-256 can be checked against the file
+# extracted from msmpisetup.exe.
+wheelbuild/data/MPI_Redistributables_TPN.txt -text
