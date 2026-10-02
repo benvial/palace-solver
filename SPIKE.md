@@ -355,3 +355,16 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
     budget for one.
   Every run so far was incremental. The next run is a `cold` dispatch, to
   answer the ticket's cold-time question.
+- **36951830085 (cold dispatch).** No cache was restored for job one, and
+  job two restored only this run's job-one entry. **Cold build: about
+  2 h 15 min**:
+  - job one 94 min: OpenBLAS 79, libCEED with LIBXSMM 3.6, GSLIB 0.2,
+    STRUMPACK and its prerequisites 8;
+  - job two 40 min: the rest of the superbuild 35;
+  - plus about 2 min of MSYS2 provisioning per job.
+  It fits one 6-hour job with more than 3 h to spare. Every check passed
+  again.
+
+**Spike ended 2026-10-02.** The `spike-windows-` and `msys2-pkgs-` cache
+entries are deleted. This branch stays as the record and is never merged.
+The answer is in ticket 07 of the windows-support map.
