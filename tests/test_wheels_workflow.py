@@ -148,6 +148,22 @@ def test_the_cache_key_covers_the_openblas_build_module(build_cache):
     assert "wheelbuild/openblas.py" in build_cache["with"]["key"]
 
 
+def test_the_msmpi_fetch_stays_out_of_the_cache_key(build_cache):
+    """The MS-MPI installer is fetched on every run, its bytes pinned by hash,
+    and the build tree links against MSYS2's import library rather than these
+    files. Keying the module would send every row cold for an edit that cannot
+    change what was built.
+    """
+    assert "wheelbuild/msmpi.py" not in build_cache["with"]["key"]
+
+
+def test_the_checks_job_fetches_and_verifies_msmpi(workflow):
+    """The real download is what proves the recorded hashes are Microsoft's."""
+    runs = [step.get("run", "") for step in workflow["jobs"]["checks"]["steps"]]
+
+    assert any("python -m wheelbuild.msmpi" in run for run in runs)
+
+
 def test_the_cleanup_job_hashes_exactly_what_the_cache_key_hashes(
     workflow, build_cache
 ):
