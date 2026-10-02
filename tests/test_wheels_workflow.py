@@ -7,6 +7,7 @@ that a second platform made possible to get wrong.
 
 import json
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
@@ -293,6 +294,22 @@ def test_the_windows_build_root_is_short_and_on_d(rows):
     row = next(row for row in rows if row["tag"] == "win_amd64")
 
     assert row["build_root"] == "D:\\b"
+
+
+def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(build_cache):
+    """hashFiles hashes the checkout's bytes. A CRLF checkout on Windows gave
+    that row's key a different hash from the one the Linux pruner computes, so
+    main's cleanup would have deleted the live Windows entry on every push."""
+    keyed = re.findall(r"'([^']+)'", _hashed_files(build_cache["with"]["key"]))
+    result = subprocess.run(
+        ["git", "check-attr", "eol", "--", *keyed],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == [f"{path}: eol: lf" for path in keyed]
 
 
 def test_the_cache_key_covers_the_windows_build_driver(build_cache):
