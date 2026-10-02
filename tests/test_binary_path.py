@@ -149,6 +149,17 @@ def test_lib_dir_points_at_the_delocate_vendor_directory_on_macos(
     assert palace_solver.lib_dir() == package_dir / ".dylibs"
 
 
+def test_lib_dir_points_at_the_executables_directory_on_windows(tmp_path, monkeypatch):
+    """An .exe has no RPATH: the repair puts its DLLs where the loader looks
+    first, beside it."""
+    package_dir = tmp_path / "palace_solver"
+    package_dir.mkdir()
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", package_dir)
+    monkeypatch.setattr(sys, "platform", "win32")
+
+    assert palace_solver.lib_dir() == package_dir / "bin"
+
+
 def _console_script(directory, body):
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / "palace"

@@ -459,20 +459,6 @@ def inspect_pe(binary: Path) -> LinkReport:
     return LinkReport(binary=binary, dependencies=dependencies, unsatisfied=unsatisfied)
 
 
-def _is_pe(path: Path) -> bool:
-    """Whether ``path`` is a PE file: a DOS stub pointing at a PE signature.
-
-    Both halves, because ``MZ`` alone is two printable letters a text file can
-    begin with.
-    """
-    with path.open("rb") as handle:
-        stub = handle.read(0x40)
-        if len(stub) < 0x40 or not stub.startswith(b"MZ"):
-            return False
-        handle.seek(int.from_bytes(stub[0x3C:0x40], "little"))
-        return handle.read(4) == b"PE\0\0"
-
-
 def inspect_binary(binary: Path, *, system: str | None = None) -> LinkReport:
     """Read ``binary``'s dependencies and which of them the wheel satisfies.
 
@@ -491,7 +477,7 @@ def inspect_binary(binary: Path, *, system: str | None = None) -> LinkReport:
         platforms_module.UnsupportedPlatformError: For a platform with no tool
             here.
     """
-    if _is_pe(binary):
+    if platforms_module.is_pe(binary):
         return inspect_pe(binary)
     identity = None
     id_command = identity_tool(system=system)
@@ -575,10 +561,6 @@ def _expand(paths: Sequence[Path]) -> list[Path]:
     shell glob that matches nothing would otherwise be passed through as a
     literal pattern and reported as a binary with no dependencies at all.
 
-    A PE file is recognised here rather than by ``is_native_binary``, whose
-    other callers pick the solver out of an ELF or Mach-O install prefix and
-    have no PE to ask about.
-
     Raises:
         FileNotFoundError: If a named path is neither a file nor a directory.
     """
@@ -589,8 +571,7 @@ def _expand(paths: Sequence[Path]) -> list[Path]:
                 sorted(
                     child
                     for child in path.iterdir()
-                    if child.is_file()
-                    and (platforms_module.is_native_binary(child) or _is_pe(child))
+                    if child.is_file() and platforms_module.is_native_binary(child)
                 )
             )
         elif path.is_file():

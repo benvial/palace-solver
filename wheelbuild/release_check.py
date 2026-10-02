@@ -1,7 +1,7 @@
 """Refuse to publish a release that is missing a platform's wheel.
 
-A release is a single unrecoverable event across three filenames. PyPI never
-lets a filename be reused, so a tag that uploaded two of the three wheels
+A release is a single unrecoverable event across four filenames. PyPI never
+lets a filename be reused, so a tag that uploaded three of the four wheels
 cannot be repaired by re-running the job: the fix is another version number,
 and until it exists every user on the missing platform installs nothing. That
 makes the arithmetic between the matrix and ``dist/`` worth checking on its

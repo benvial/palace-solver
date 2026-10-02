@@ -1,0 +1,117 @@
+Carried patch, Windows only: Palace's C++ under MinGW.
+
+Three causes, five files: M_PI needs _USE_MATH_DEFINES under -std=c++17
+(one target_compile_definitions under if(MINGW)); std::filesystem::path does
+not convert to std::string where its value_type is wchar_t (a
+TableWithCSVFile constructor taking a path, and .string() at five sites);
+std::max(0L, memory) where std::distance returns long long on LLP64. All
+portable: identical behaviour on Linux and macOS.
+
+diff --git a/palace/CMakeLists.txt b/palace/CMakeLists.txt
+index 4816f3a..3370210 100644
+--- a/palace/CMakeLists.txt
++++ b/palace/CMakeLists.txt
+@@ -299,6 +299,10 @@ endif()
+ set(LIB_TARGET_NAME libpalace)
+ add_library(${LIB_TARGET_NAME} "")
+ target_include_directories(${LIB_TARGET_NAME} PUBLIC ${CMAKE_SOURCE_DIR})
++# MinGW's <math.h> defines M_PI only with _USE_MATH_DEFINES under strict -std=c++17.
++if(MINGW)
++  target_compile_definitions(${LIB_TARGET_NAME} PUBLIC _USE_MATH_DEFINES)
++endif()
+ target_include_directories(${LIB_TARGET_NAME} PUBLIC ${CMAKE_BINARY_DIR}/generated)
+ 
+ # Add source files
+diff --git a/palace/drivers/basesolver.cpp b/palace/drivers/basesolver.cpp
+index 0a20d9c..e80cf91 100644
+--- a/palace/drivers/basesolver.cpp
++++ b/palace/drivers/basesolver.cpp
+@@ -115,7 +115,7 @@ namespace
+ 
+ json LoadMetadata(const fs::path &post_dir)
+ {
+-  std::string path = post_dir / "palace.json";
++  std::string path = (post_dir / "palace.json").string();
+   std::ifstream fi(path);
+   if (!fi.is_open())
+   {
+@@ -128,8 +128,8 @@ void WriteMetadata(const fs::path &post_dir, const json &meta)
+ {
+   // Write to a temporary file and atomically rename it into place so a concurrent reader
+   // (e.g. an external monitor polling palace.json mid-run) never observes a partial file.
+-  std::string path = post_dir / "palace.json";
+-  std::string tmp_path = post_dir / "palace.json.tmp";
++  std::string path = (post_dir / "palace.json").string();
++  std::string tmp_path = (post_dir / "palace.json.tmp").string();
+   {
+     std::ofstream fo(tmp_path);
+     if (!fo.is_open())
+diff --git a/palace/drivers/drivensolver.cpp b/palace/drivers/drivensolver.cpp
+index 6b89630..efa59e6 100644
+--- a/palace/drivers/drivensolver.cpp
++++ b/palace/drivers/drivensolver.cpp
+@@ -391,7 +391,7 @@ ErrorIndicator DrivenSolver::SweepAdaptive(SpaceOperator &space_op) const
+     auto memory = std::distance(max_errors.rbegin(),
+                                 std::find_if(max_errors.rbegin(), max_errors.rend(),
+                                              [=](auto x) { return x > offline_tol; }));
+-    memory = std::max(0L, memory);  // Ensure memory >= 0 as it should be.
++    memory = std::max<decltype(memory)>(0, memory);  // Ensure memory >= 0 as it should be.
+ 
+     // Greedy procedure for basis construction (offline phase). Basis is initialized with
+     // solutions at frequency sweep endpoints and explicit sample frequencies.
+diff --git a/palace/models/postoperator.cpp b/palace/models/postoperator.cpp
+index 43d6f5e..d7ecce2 100644
+--- a/palace/models/postoperator.cpp
++++ b/palace/models/postoperator.cpp
+@@ -719,8 +719,8 @@ void PostOperator<solver_t>::InitializeParaviewDataCollection(
+     paraview_dir_b /= sub_folder_name;
+   }
+   // Set up postprocessing for output to disk.
+-  paraview = {paraview_dir_v, &fem_op->GetNDSpace().GetParMesh()};
+-  paraview_bdr = {paraview_dir_b, &fem_op->GetNDSpace().GetParMesh()};
++  paraview = {paraview_dir_v.string(), &fem_op->GetNDSpace().GetParMesh()};
++  paraview_bdr = {paraview_dir_b.string(), &fem_op->GetNDSpace().GetParMesh()};
+ 
+   const mfem::VTKFormat format = mfem::VTKFormat::BINARY32;
+   const bool use_ho = true;
+@@ -1512,7 +1512,7 @@ void PostOperator<solver_t>::WriteMFEMGridFunctionsFinal(const ErrorIndicator *i
+ 
+   // Save ParMesh files; necessary to visualize grid functions.
+   fs::path mesh_filename = fs::path(gridfunction_output_dir) / "mesh";
+-  mesh.Save(mesh_filename);
++  mesh.Save(mesh_filename.string());
+ 
+   mesh::NondimensionalizeMesh(mesh, mesh_Lc0);
+   Mpi::Barrier(fem_op->GetComm());
+diff --git a/palace/utils/tablecsv.hpp b/palace/utils/tablecsv.hpp
+index e6364a6..b79919e 100644
+--- a/palace/utils/tablecsv.hpp
++++ b/palace/utils/tablecsv.hpp
+@@ -5,9 +5,11 @@
+ #define PALACE_UTILS_TABLECSV_HPP
+ 
+ #include <cstddef>
++#include <filesystem>
+ #include <optional>
+ #include <string>
+ #include <string_view>
++#include <type_traits>
+ #include <unordered_map>
+ #include <vector>
+ 
+@@ -157,6 +159,15 @@ public:
+ 
+   TableWithCSVFile() = default;
+   explicit TableWithCSVFile(std::string csv_file_fullpath, bool load_existing_file = false);
++  // std::filesystem::path converts to std::string implicitly only where its value_type is
++  // char; on Windows it is wchar_t. Constrained to path itself so that string literals
++  // still pick the std::string constructor unambiguously.
++  template <typename P,
++            typename = std::enable_if_t<std::is_same_v<std::decay_t<P>, std::filesystem::path>>>
++  explicit TableWithCSVFile(const P &csv_file_fullpath, bool load_existing_file = false)
++    : TableWithCSVFile(csv_file_fullpath.string(), load_existing_file)
++  {
++  }
+ 
+   std::string_view get_csv_filepath() const { return {csv_file_fullpath_}; }
+ 

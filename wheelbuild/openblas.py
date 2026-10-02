@@ -192,11 +192,19 @@ def required_artefacts(*, system: str | None = None) -> tuple[Path, ...]:
     Args:
         system: ``platform.system()`` value; defaults to the running platform.
             OpenBLAS installs an unversioned ``lib/libopenblas.so`` on Linux and
-            ``lib/libopenblas.dylib`` on Darwin.
+            ``lib/libopenblas.dylib`` on Darwin. On Windows the DLL goes to
+            ``bin`` and what Palace links against is the import library beside
+            it in ``lib``, so both are required.
 
     Returns:
         Paths relative to the install prefix.
     """
+    if (system or platform.system()) == "Windows":
+        return (
+            Path("include/cblas.h"),
+            Path("bin/libopenblas.dll"),
+            Path("lib/libopenblas.dll.a"),
+        )
     return (
         Path("include/cblas.h"),
         platforms.library_path("libopenblas", system=system),
@@ -252,8 +260,13 @@ def build_arguments(
 
 
 def install_arguments(*, prefix: Path) -> list[str]:
-    """Return the ``make install`` command for an OpenBLAS build."""
-    return ["make", "install", f"PREFIX={prefix}", "NO_STATIC=1"]
+    """Return the ``make install`` command for an OpenBLAS build.
+
+    The prefix is written with forward slashes, which is the same string on
+    Linux and macOS and the only form MSYS2's make reads on Windows, where a
+    backslash is an escape.
+    """
+    return ["make", "install", f"PREFIX={prefix.as_posix()}", "NO_STATIC=1"]
 
 
 def recipe(arguments: Sequence[str]) -> tuple[str, ...]:

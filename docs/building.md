@@ -1,9 +1,9 @@
 # Building the wheel
 
 Every wheel is built natively: inside a `manylinux_2_28` container on Linux, on
-an Apple Silicon runner on macOS. CI builds the three platforms as three rows of
-one matrix, each on a native runner — `ubuntu-24.04`, `ubuntu-24.04-arm` and
-`macos-15`.
+an Apple Silicon runner on macOS, under MSYS2 on a Windows runner on Windows. CI
+builds the four platforms as four rows of one matrix, each on a native runner —
+`ubuntu-24.04`, `ubuntu-24.04-arm`, `macos-15` and `windows-2025`.
 
 ## Linux
 
@@ -42,6 +42,49 @@ driver and caches under `~/palace-build` — but nobody here has, and it expects
 the preinstalled Homebrew toolchain a runner image carries rather than
 installing one.
 
+## Windows
+
+Like the macOS script, `scripts/build-windows.sh` is both the driver and the
+recipe. It runs under MSYS2's UCRT64 bash, with a native Windows CPython in
+`PYTHON` for every `wheelbuild` step:
+
+```bash
+PYTHON=/c/Python312/python.exe scripts/build-windows.sh 0.18.1   # BUILD_ROOT defaults to D:\b
+```
+
+MSYS2 supplies gcc, g++ and gfortran, GNU make, the POSIX tools Palace's
+superbuild drives, and MS-MPI's import library and gfortran bridge
+(`mingw-w64-msmpi`); the packages are the ones the `wheels` workflow installs.
+MSYS2's own python cannot run the steps, because it reports a platform that
+would mis-tag the wheel. The driver fetches and hash-checks the MS-MPI
+redistributable, builds OpenBLAS, then runs the superbuild with the carried
+patches under `wheelbuild/data/patches/windows/` applied before its first
+compile. There is no repair tool: an `.exe` has no RPATH, so
+`wheelbuild.pe_repair` copies the payload's PE import closure flat into a
+directory of its own, the notices are harvested, and assembly stages that
+directory into `bin` beside the executables and link-checks it.
+
+The same caveat as macOS applies, more strongly. No Windows machine is
+available to this project, so the only Windows `scripts/build-windows.sh` has
+ever run on is a `windows-2025` GitHub runner, where a cold build takes about
+two hours. It is written so a Windows owner with MSYS2 can run it, but nobody
+here has.
+
+The wheel tests on Windows are Python scripts rather than the bash ones, run
+from a native CPython — not Git bash or MSYS2 — with nothing but the virtual
+environment and Windows on `PATH`:
+
+```bash
+python scripts/smoke-test-windows.py WHEEL CONFIG
+python scripts/interop-test-windows.py [--install-msmpi] WHEEL CONFIG
+```
+
+The smoke test refuses a machine with MS-MPI installed (a
+`System32\msmpi.dll`), since what it proves is that the wheel needs nothing
+else. `--install-msmpi` installs the pinned, hash-checked MS-MPI 10.1.3
+system-wide for the interop test to launch with; it needs an administrator and
+is meant for a disposable CI runner.
+
 ## The platform tag
 
 The repair tool is where the platform tag comes from, and the two tools differ:
@@ -49,7 +92,10 @@ The repair tool is where the platform tag comes from, and the two tools differ:
 `minos` in the payload and renames the wheel. So the macOS tag is a measurement
 of what was built rather than a value chosen at assembly time, and the pipeline
 ends by checking the filename against `wheelbuild.platforms.platform_tag()` — a
-wheel tagged for another macOS is a build failure, not a new floor.
+wheel tagged for another macOS is a build failure, not a new floor. On Windows
+there is no repair tool to ask, and `win_amd64` names no Windows version: the
+floor is a constant in `palace_solver/_exec.py`, which refuses an older Windows
+at start-up.
 
 ## The CPU baseline
 
@@ -68,9 +114,11 @@ what the published wheel claims.
   `palace-mpiexec` and the `mpiexec` from the PyPI `mpich` wheel, requires the
   results to agree, checks that a rank launched without a rendezvous is
   refused, and checks that a launcher from the next MPICH major series is not.
+- `scripts/smoke-test-windows.py` and `scripts/interop-test-windows.py` are
+  their Windows twins; see [Windows](#windows).
 - `python -m wheelbuild.pin_check` checks that the vendored MPICH stays inside
-  the major series the interoperability test proves the wheel against; it runs
-  in CI on every push.
+  the major series the interoperability test proves the wheel against, and the
+  vendored MS-MPI inside 10.1; it runs in CI on every push.
 - `scripts/verify-install.sh` checks an install prefix the way the smoke test
   checks a wheel — the version stamp, and two ranks solving one problem
   together — which is useful when a build has produced a prefix but not yet a

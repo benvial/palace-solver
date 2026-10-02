@@ -1,6 +1,6 @@
 import platform
 import subprocess
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import pytest
 
@@ -11,7 +11,8 @@ MACOS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build-macos.sh
 
 #: Every driver that branches on a `--check` verdict. They have to agree, and
 #: each holds the numbers as shell literals rather than importing them.
-DRIVERS = (BUILD_SCRIPT, MACOS_SCRIPT)
+WINDOWS_SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "build-windows.sh"
+DRIVERS = (BUILD_SCRIPT, MACOS_SCRIPT, WINDOWS_SCRIPT)
 
 
 def install_tree(tmp_path, *, system="Linux", machine=None, corename=None, stamp=True):
@@ -557,3 +558,42 @@ def test_every_driver_rebuilds_only_for_the_verdicts_that_say_to(driver):
     # exception's 1 included -- fatal rather than a rebuild.
     assert "*)" in script
     assert "not rebuilding" in script
+
+
+def test_windows_builds_with_the_linux_x86_64_recipe_byte_for_byte():
+    """ADR-0007: OpenBLAS is built with the Linux arguments on Windows.
+    Makefile.x86_64 is one file for both, and x86-64 pins no baseline under
+    DYNAMIC_ARCH, so any difference here would be a new recipe."""
+    windows = openblas.build_arguments(jobs=4, system="Windows", machine="AMD64")
+    linux = openblas.build_arguments(jobs=4, system="Linux", machine="x86_64")
+
+    assert windows == linux
+
+
+def test_required_artefacts_on_windows_are_the_dll_and_its_import_library():
+    """The DLL lands in bin, and what Palace links against is the import
+    library in lib."""
+    assert openblas.required_artefacts(system="Windows") == (
+        Path("include/cblas.h"),
+        Path("bin/libopenblas.dll"),
+        Path("lib/libopenblas.dll.a"),
+    )
+
+
+def test_validate_accepts_a_windows_install_tree(tmp_path):
+    for relative in openblas.required_artefacts(system="Windows"):
+        (tmp_path / relative).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / relative).write_text("")
+    openblas.write_build_stamp(
+        tmp_path, openblas.build_arguments(jobs=1, system="Windows", machine="AMD64")
+    )
+
+    assert openblas.validate(tmp_path, system="Windows", machine="AMD64") == tmp_path
+
+
+def test_install_arguments_write_the_prefix_with_forward_slashes():
+    """MSYS2's make reads a backslash as an escape; on POSIX the string is the
+    same either way."""
+    windows = openblas.install_arguments(prefix=PureWindowsPath("D:\\b\\install"))
+
+    assert "PREFIX=D:/b/install" in windows

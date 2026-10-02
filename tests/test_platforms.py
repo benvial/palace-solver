@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pe_files import write_pe
 
 from wheelbuild import platforms
 
@@ -83,6 +84,9 @@ def test_library_path_rejects_an_unsupported_platform():
         # manylinux calls aarch64; the wheel tag is the manylinux one.
         ("Linux", "arm64", "aarch64"),
         ("Darwin", "arm64", "arm64"),
+        # platform.machine() on Windows reports the uppercase AMD64; the wheel
+        # tag spells it lowercase.
+        ("Windows", "AMD64", "amd64"),
     ],
 )
 def test_architecture_normalises_the_machine_name(system, machine, expected):
@@ -100,6 +104,17 @@ def test_architecture_rejects_macos_x86_64():
         platforms.architecture(system="Darwin", machine="x86_64")
 
 
+def test_architecture_rejects_windows_arm64():
+    """Out of scope per ADR-0007: only x86-64 Windows ships a wheel."""
+    with pytest.raises(platforms.UnsupportedPlatformError, match="arm64"):
+        platforms.architecture(system="Windows", machine="ARM64")
+
+
+def test_architecture_rejects_a_system_no_wheel_is_built_for():
+    with pytest.raises(platforms.UnsupportedPlatformError, match="FreeBSD"):
+        platforms.architecture(system="FreeBSD", machine="amd64")
+
+
 def test_platform_tag_for_x86_64_linux_is_what_the_shipping_wheel_carries():
     """The published filename and every cache key namespace depend on this string."""
     assert (
@@ -113,6 +128,25 @@ def test_platform_tag_for_aarch64_linux_names_the_same_manylinux_version():
         platforms.platform_tag(system="Linux", machine="aarch64")
         == "manylinux_2_28_aarch64"
     )
+
+
+def test_platform_tag_for_x86_64_windows_is_win_amd64():
+    assert platforms.platform_tag(system="Windows", machine="AMD64") == "win_amd64"
+
+
+def test_platform_tag_on_windows_ignores_the_macos_floor(monkeypatch):
+    """The deployment target is a Darwin concept; a Windows tag has no floor."""
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "15.0")
+
+    assert (
+        platforms.platform_tag(system="Windows", machine="AMD64", macos_version="15.0")
+        == "win_amd64"
+    )
+
+
+def test_platform_tag_rejects_windows_arm64():
+    with pytest.raises(platforms.UnsupportedPlatformError, match="arm64"):
+        platforms.platform_tag(system="Windows", machine="ARM64")
 
 
 def test_platform_tag_on_macos_comes_from_the_deployment_target():
@@ -194,11 +228,13 @@ def test_an_old_macos_tag_keeps_its_minor():
     )
 
 
-def test_supported_platform_tags_are_the_three_platforms_adr_0006_fixes():
+def test_supported_platform_tags_are_the_four_platforms_adr_0006_and_0007_fix():
+    """The three of ADR-0006, unchanged, and the Windows one ADR-0007 adds."""
     assert platforms.supported_platform_tags() == (
         "manylinux_2_28_x86_64",
         "manylinux_2_28_aarch64",
         "macosx_15_0_arm64",
+        "win_amd64",
     )
 
 
@@ -219,3 +255,20 @@ def test_supported_platform_tags_lists_each_platform_once():
     tags = platforms.supported_platform_tags()
 
     assert len(tags) == len(set(tags))
+
+
+def test_is_native_binary_accepts_a_pe_binary(tmp_path):
+    """Palace names its Windows binary palace-x86_64.bin too, so only the
+    format tells it from the wrapper script beside it."""
+    path = write_pe(tmp_path / "palace-x86_64.bin", ["KERNEL32.dll"])
+
+    assert platforms.is_native_binary(path)
+    assert platforms.is_pe(path)
+
+
+def test_is_pe_rejects_a_text_file_that_starts_with_mz(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("MZ is how this line starts, and it is not a program.\n" * 3)
+
+    assert not platforms.is_pe(path)
+    assert not platforms.is_native_binary(path)

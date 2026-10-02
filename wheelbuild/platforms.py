@@ -1,9 +1,10 @@
 """The conventions that differ between the platforms the wheel is built for.
 
 The build always runs natively: inside the matching manylinux image on Linux,
-on an Apple Silicon runner on macOS. "Which platform" is therefore the one this
-interpreter runs on, and the three things that differ between them live here
-rather than being spelled out again in each validator that consults them.
+on an Apple Silicon runner on macOS, on an x86-64 runner on Windows. "Which
+platform" is therefore the one this interpreter runs on, and the three things
+that differ between them live here rather than being spelled out again in each
+validator that consults them.
 
 **Binary format.** Executables and shared libraries are ELF on Linux and Mach-O
 on Darwin, so the magic-number test that picks the real Palace binary out of an
@@ -22,7 +23,9 @@ only a floor — ``delocate`` walks every Mach-O in the wheel and computes the
 tag from the largest ``minos`` it finds, so the value here constrains which
 architectures survive the repair and namespaces the build cache, and the
 published filename comes from the payload. See
-``docs/adr/0006-parameterised-raw-jobs-not-cibuildwheel.md``.
+``docs/adr/0006-parameterised-raw-jobs-not-cibuildwheel.md``. On Windows the
+tag is final as on Linux, and has no floor: ``win_amd64``, applied by
+``wheel tags --platform-tag``. See ``docs/adr/0007-ship-a-windows-wheel.md``.
 """
 
 from __future__ import annotations
@@ -77,7 +80,8 @@ _MACH_O_MAGICS = frozenset(
 #: Deliberately not a single table: ``arm64`` means the aarch64 manylinux wheel
 #: on Linux and the ``arm64`` macOS wheel on Darwin, and macOS x86_64 is ruled
 #: out by ADR-0006 rather than merely unbuilt, so naming it nowhere is the
-#: check.
+#: check. Windows arm64 is likewise out of scope per ADR-0007. Windows reports
+#: x86-64 as ``AMD64``, which :func:`architecture` lowercases before the lookup.
 _ARCHITECTURES = {
     "Linux": {
         "x86_64": "x86_64",
@@ -86,6 +90,7 @@ _ARCHITECTURES = {
         "arm64": "aarch64",
     },
     "Darwin": {"arm64": "arm64", "aarch64": "arm64"},
+    "Windows": {"amd64": "amd64"},
 }
 
 
@@ -98,20 +103,43 @@ def is_native_binary(path: Path) -> bool:
 
     Recognises ELF and Mach-O, including universal Mach-O binaries, from the
     first four bytes — the cheapest possible read, and the reason this is not a
-    call out to ``file``. Deliberately not restricted to the running platform's
-    format: the callers are asking whether a file is the compiled artefact or
-    the wrapper script beside it, which is one question on both platforms.
+    call out to ``file`` — and PE by :func:`is_pe`. Deliberately not restricted
+    to the running platform's format: the callers are asking whether a file is
+    the compiled artefact or the wrapper script beside it, which is one
+    question on every platform. Palace names its Windows binary
+    ``palace-x86_64.bin`` as it does elsewhere, so the name cannot answer it
+    there either.
 
     Args:
         path: File to inspect.
 
     Returns:
-        True for an ELF or Mach-O file, False for anything else, a wrapper
+        True for an ELF, Mach-O or PE file, False for anything else, a wrapper
         script included.
     """
     with path.open("rb") as handle:
         magic = handle.read(4)
-    return magic == _ELF_MAGIC or magic in _MACH_O_MAGICS
+    return magic == _ELF_MAGIC or magic in _MACH_O_MAGICS or is_pe(path)
+
+
+def is_pe(path: Path) -> bool:
+    """Whether ``path`` is a PE file: a DOS stub pointing at a PE signature.
+
+    Both halves, because ``MZ`` alone is two printable letters a text file can
+    begin with.
+
+    Args:
+        path: File to inspect.
+
+    Returns:
+        True for a Windows executable or DLL.
+    """
+    with path.open("rb") as handle:
+        stub = handle.read(0x40)
+        if len(stub) < 0x40 or not stub.startswith(b"MZ"):
+            return False
+        handle.seek(int.from_bytes(stub[0x3C:0x40], "little"))
+        return handle.read(4) == b"PE\0\0"
 
 
 def _shared_library_name(
@@ -169,12 +197,14 @@ def architecture(*, system: str | None = None, machine: str | None = None) -> st
         machine: ``platform.machine()`` value; defaults to the running machine.
 
     Returns:
-        ``x86_64`` or ``aarch64`` on Linux, ``arm64`` on Darwin.
+        ``x86_64`` or ``aarch64`` on Linux, ``arm64`` on Darwin, ``amd64`` on
+        Windows.
 
     Raises:
         UnsupportedPlatformError: For a platform or machine this package does
             not ship a wheel for — macOS x86_64 included, which ADR-0006 rules
-            out rather than defers.
+            out rather than defers, and Windows arm64, which ADR-0007 leaves
+            out of scope.
     """
     resolved_system = system or platform.system()
     resolved_machine = (machine or platform.machine()).lower()
@@ -205,7 +235,8 @@ def supported_platform_tags() -> tuple[str, ...]:
     rather than a release.
 
     Returns:
-        One tag per supported platform, Linux platforms first.
+        One tag per supported platform, Linux platforms first, then macOS, then
+        Windows.
     """
     return tuple(
         platform_tag(
@@ -233,8 +264,8 @@ def platform_tag(
             ``MACOSX_DEPLOYMENT_TARGET``, and is ignored off Darwin.
 
     Returns:
-        ``manylinux_2_28_x86_64``, ``manylinux_2_28_aarch64`` or
-        ``macosx_<major>_<minor>_arm64``.
+        ``manylinux_2_28_x86_64``, ``manylinux_2_28_aarch64``,
+        ``macosx_<major>_<minor>_arm64`` or ``win_amd64``.
 
     Raises:
         UnsupportedPlatformError: For an unsupported platform, or on Darwin
@@ -246,6 +277,8 @@ def platform_tag(
     architecture_name = architecture(system=resolved_system, machine=machine)
     if resolved_system == "Linux":
         return f"{MANYLINUX_VERSION}_{architecture_name}"
+    if resolved_system == "Windows":
+        return f"win_{architecture_name}"
 
     target = macos_version or os.environ.get("MACOSX_DEPLOYMENT_TARGET")
     if not target:

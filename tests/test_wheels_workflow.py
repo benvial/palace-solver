@@ -5,13 +5,16 @@ expensive way to find out. These are the properties that hold for every row and
 that a second platform made possible to get wrong.
 """
 
+import json
 import re
+import subprocess
 import tomllib
 from pathlib import Path
 
 import pytest
 import yaml
 
+from wheelbuild import matrix
 from wheelbuild.link_check import PEFILE_REQUIREMENT
 from wheelbuild.platforms import (
     MACOS_DEPLOYMENT_TARGET,
@@ -57,8 +60,9 @@ def workflow():
 
 
 @pytest.fixture(scope="module")
-def rows(workflow):
-    return workflow["jobs"]["wheel"]["strategy"]["matrix"]["include"]
+def rows():
+    """The matrix rows, which live in .github/wheel-matrix.toml."""
+    return matrix.rows()
 
 
 @pytest.fixture(scope="module")
@@ -230,9 +234,205 @@ def test_the_container_only_steps_run_only_for_a_row_with_an_image(named_step, n
 def test_a_row_without_an_image_builds_on_the_runner(named_step):
     build = named_step("Build wheel on the runner")
 
-    assert build["if"] == "${{ !matrix.image }}"
+    assert build["if"] == "${{ !matrix.image && runner.os != 'Windows' }}"
     assert "scripts/build-macos.sh" in build["run"]
     assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_the_windows_row_builds_under_msys2(named_step):
+    """MSYS2's bash, not the job's Git for Windows bash: the driver needs its
+    toolchain, make and POSIX python on PATH, and MSYSTEM set."""
+    build = named_step("Build wheel under MSYS2")
+
+    assert build["if"] == "runner.os == 'Windows'"
+    assert build["shell"] == "msys2 {0}"
+    assert "scripts/build-windows.sh" in build["run"]
+    assert build["env"]["BUILD_ROOT"] == "${{ matrix.build_root }}"
+
+
+def test_msys2_is_provisioned_as_adr_0007_fixes_it(named_step):
+    """The image's MSYS2, nothing newer, and no package cache of its own
+    against the shared 10 GB budget."""
+    setup = named_step("Provision MSYS2 UCRT64")
+
+    assert setup["if"] == "runner.os == 'Windows'"
+    assert setup["uses"].startswith("msys2/setup-msys2@")
+    assert setup["with"]["msystem"] == "UCRT64"
+    for key in ("release", "update", "cache"):
+        assert setup["with"][key] is False
+    packages = setup["with"]["install"].split()
+    for package in ("gcc", "gcc-fortran", "libgomp", "ccache", "pkgconf", "msmpi"):
+        assert f"mingw-w64-ucrt-x86_64-{package}" in packages
+    for package in ("make", "git", "patch", "python"):
+        assert package in packages
+
+
+def test_the_steps_that_run_on_windows_do_not_call_python3(named_step):
+    """The Windows toolcache has no python3, and the job's bash would find the
+    Store alias or nothing."""
+    for name in (
+        "Resolve Palace version and platform tag",
+        "Check the build tree is readable before saving it",
+        "Check the wheel's metadata the way PyPI will",
+        "Report wheel size",
+    ):
+        assert "python3" not in named_step(name)["run"]
+
+
+def test_the_wheel_job_runs_its_steps_in_bash(workflow):
+    """Windows would otherwise run every shared step in PowerShell."""
+    assert workflow["jobs"]["wheel"]["defaults"]["run"]["shell"] == "bash"
+
+
+def test_the_windows_row_claims_the_tag_the_build_would_derive(rows):
+    expected = platform_tag(system="Windows", machine="AMD64")
+    row = next(row for row in rows if row["runner"].startswith("windows"))
+
+    assert row["tag"] == expected == "win_amd64"
+
+
+def test_the_windows_build_root_is_short_and_on_d(rows):
+    """Tools without a long-path manifest stop at MAX_PATH, and C: is slower."""
+    row = next(row for row in rows if row["tag"] == "win_amd64")
+
+    assert row["build_root"] == "D:\\b"
+
+
+def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(build_cache):
+    """hashFiles hashes the checkout's bytes. A CRLF checkout on Windows gave
+    that row's key a different hash from the one the Linux pruner computes, so
+    main's cleanup would have deleted the live Windows entry on every push."""
+    keyed = re.findall(r"'([^']+)'", _hashed_files(build_cache["with"]["key"]))
+    result = subprocess.run(
+        ["git", "check-attr", "eol", "--", *keyed],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.stdout.splitlines() == [f"{path}: eol: lf" for path in keyed]
+
+
+def test_the_cache_key_covers_the_windows_build_driver(build_cache):
+    assert "scripts/build-windows.sh" in build_cache["with"]["key"]
+
+
+def test_the_carried_patches_stay_out_of_the_cache_key(build_cache):
+    """An edited patch resets only its own tree (wheelbuild/patches.py); keying
+    the directory would send the whole Windows row cold instead."""
+    key = build_cache["with"]["key"]
+
+    assert "patches" not in key
+
+
+# -- the matrix is computed, so a dispatch can narrow it ---------------------
+
+
+def test_the_wheel_matrix_is_the_plan_jobs_rows(workflow):
+    wheel = workflow["jobs"]["wheel"]
+
+    assert wheel["needs"] == ["plan"]
+    assert wheel["strategy"]["matrix"] == {
+        "include": "${{ fromJSON(needs.plan.outputs.rows) }}"
+    }
+
+
+def test_the_plan_job_reads_the_rows_with_wheelbuild_matrix(workflow):
+    plan = workflow["jobs"]["plan"]
+    select = next(step for step in plan["steps"] if step.get("id") == "rows")
+
+    assert plan["outputs"]["rows"] == "${{ steps.rows.outputs.rows }}"
+    assert "python3 -m wheelbuild.matrix" in select["run"]
+    assert "windows_only" in select["env"]["ONLY"]
+    assert "win_amd64" in select["env"]["ONLY"]
+
+
+def test_only_a_dispatch_can_narrow_the_matrix(workflow):
+    """Pull requests and pushes always build every row: narrowing on anything
+    else would be the path-filter gating ADR-0007 rules out."""
+    plan = workflow["jobs"]["plan"]
+    select = next(step for step in plan["steps"] if step.get("id") == "rows")
+
+    assert select["env"]["ONLY"].startswith(
+        "${{ github.event_name == 'workflow_dispatch' && inputs.windows_only"
+    )
+
+
+def test_a_windows_only_dry_run_is_refused_before_anything_builds(workflow):
+    plan = workflow["jobs"]["plan"]
+    refuse = next(step for step in plan["steps"] if "Refuse" in step.get("name", ""))
+
+    assert "inputs.windows_only && inputs.testpypi" in refuse["if"]
+    assert "exit 1" in refuse["run"]
+
+
+def test_matrix_select_keeps_every_row_without_a_narrowing(rows):
+    assert matrix.select(rows, None) == rows
+    assert [row["tag"] for row in matrix.select(rows, "win_amd64")] == ["win_amd64"]
+
+
+def test_matrix_select_refuses_a_tag_no_row_has(rows):
+    """A narrowing that selects nothing would be a run that builds nothing and
+    reports success."""
+    with pytest.raises(matrix.MatrixError, match="win_arm64"):
+        matrix.select(rows, "win_arm64")
+
+
+def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, rows):
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    assert matrix.main(["--only", "win_amd64"]) == 0
+
+    name, value = output.read_text().strip().split("=", 1)
+    assert name == "rows"
+    assert value == json.dumps(matrix.select(rows, "win_amd64"))
+
+
+def _replacement(named_step):
+    return named_step("Drop the superseded Windows entry this iteration run restored")
+
+
+def test_an_iteration_run_replaces_its_entry_before_it_builds(steps, named_step):
+    """Deleting after the save is too late: for the length of the build the
+    branch holds two Windows entries, and with main's three that is over the
+    cap, where eviction takes one of main's."""
+    names = [step.get("name") for step in steps]
+    replace = names.index(_replacement(named_step)["name"])
+
+    assert names.index("Restore build cache") < replace
+    assert replace < names.index("Build wheel under MSYS2")
+
+
+def test_the_replacement_deletes_only_this_branchs_superseded_key(named_step):
+    replace = _replacement(named_step)
+
+    assert "inputs.windows_only" in replace["if"]
+    assert "github.ref != 'refs/heads/main'" in replace["if"]
+    assert (
+        "steps.build-cache.outputs.cache-matched-key != "
+        "steps.build-cache.outputs.cache-primary-key"
+    ) in replace["if"]
+    assert replace["env"]["MATCHED"] == (
+        "${{ steps.build-cache.outputs.cache-matched-key }}"
+    )
+    assert 'gh cache delete "$MATCHED"' in replace["run"]
+    assert '--ref "$GITHUB_REF"' in replace["run"]
+    assert "--all" not in replace["run"]
+
+
+def test_only_the_replacement_step_is_handed_the_token(workflow, steps, named_step):
+    """The job needs actions: write for that step alone; the build runs code it
+    downloads, so the token is neither in its environment nor in .git/config."""
+    wheel = workflow["jobs"]["wheel"]
+    holders = [step for step in steps if "github.token" in str(step.get("env", {}))]
+
+    assert wheel["permissions"] == {"contents": "read", "actions": "write"}
+    assert holders == [_replacement(named_step)]
+    checkout = steps[0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
@@ -242,7 +442,11 @@ def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_st
     smoke = named_step("Smoke test in a clean virtual environment")
 
     assert "wheelhouse/*.whl" in smoke["run"]
-    for name in ("Build wheel in the container", "Build wheel on the runner"):
+    for name in (
+        "Build wheel in the container",
+        "Build wheel on the runner",
+        "Build wheel under MSYS2",
+    ):
         assert "OUTPUT_DIR" not in named_step(name).get("env", {})
 
 
@@ -261,10 +465,7 @@ def test_the_readability_guard_covers_every_row(named_step):
 
 @pytest.mark.parametrize(
     "name",
-    [
-        "Smoke test in a clean virtual environment",
-        "Report wheel size",
-    ],
+    ["Smoke test in a clean virtual environment", "Report wheel size"],
 )
 def test_the_wheel_steps_run_for_every_row(named_step, name):
     """Every platform now emits a wheel, so these are unconditional. A row that
@@ -515,11 +716,24 @@ def test_the_procedure_names_the_input_a_release_operator_has_to_tick(
     line. A renamed input leaves that instruction describing a flag the
     workflow does not have, and the operator finds that out mid-release.
     """
-    assert len(dispatch_inputs) == 1, "a second input would need its own check here"
-    (name,) = dispatch_inputs
+    assert set(dispatch_inputs) == {"testpypi", "windows_only"}, (
+        "a further input would need its own check here"
+    )
 
-    assert f"-f {name}=true" in releasing
-    assert dispatch_inputs[name]["description"] in releasing
+    assert "-f testpypi=true" in releasing
+    assert dispatch_inputs["testpypi"]["description"] in releasing
+
+
+def test_the_iteration_input_is_off_by_default_and_says_it_is_no_release(
+    dispatch_inputs, releasing
+):
+    """windows_only is a developer's input, so the release procedure must not
+    name it, and its label must say why."""
+    windows_only = dispatch_inputs["windows_only"]
+
+    assert windows_only["default"] is False
+    assert "never a release" in windows_only["description"]
+    assert "windows_only" not in releasing
 
 
 def test_the_procedure_names_both_publishing_environments(releasing, dry_run, publish):
@@ -602,3 +816,49 @@ def test_the_pe_reader_the_tests_run_is_the_one_the_build_installs(workflow):
     }
     assert declared == {PEFILE_REQUIREMENT}
     assert f'"{PEFILE_REQUIREMENT}"' in install, install
+
+
+@pytest.mark.parametrize(
+    ("name", "script", "twin"),
+    [
+        (
+            "Smoke test in a clean virtual environment",
+            "scripts/smoke-test.sh",
+            "python scripts/smoke-test-windows.py",
+        ),
+        (
+            "Launcher interoperability",
+            "scripts/interop-test.sh",
+            "python scripts/interop-test-windows.py --install-msmpi",
+        ),
+    ],
+)
+def test_windows_runs_the_python_twin_of_each_wheel_test(
+    named_step, name, script, twin
+):
+    """The Windows row runs the twin, on the setup-python interpreter, and every
+    other row still runs the bash script it always ran."""
+    run = named_step(name)["run"]
+
+    assert '[[ "$RUNNER_OS" == Windows ]]' in run
+    assert f'{twin} "$wheel" "$config"' in run
+    assert f'{script} "$wheel" "$config"' in run
+    assert "python3" not in run
+    assert (ROOT / twin.split()[1]).is_file()
+
+
+def test_the_smoke_test_runs_before_the_interop_test_installs_msmpi(steps):
+    """The smoke test is the run with no MS-MPI on the machine but the wheel's."""
+    names = [step.get("name") for step in steps]
+
+    assert names.index("Smoke test in a clean virtual environment") < names.index(
+        "Launcher interoperability"
+    )
+
+
+def test_the_size_summary_path_is_read_from_the_environment(named_step):
+    """Spliced into the Python source, a Windows path's `\\a` is a bell."""
+    run = named_step("Report wheel size")["run"]
+
+    assert "os.environ['GITHUB_STEP_SUMMARY']" in run
+    assert "${GITHUB_STEP_SUMMARY}" not in run

@@ -9,11 +9,22 @@ on:
     inputs:
       # The release dry run. Deliberately an input on a manual event rather
       # than anything a push can reach: it uploads the version in
-      # palace_solver.__version__ to TestPyPI, which consumes those three
+      # palace_solver.__version__ to TestPyPI, which consumes those four
       # filenames there for good, so it has to be something a human asks for
       # once per release rather than something main does on every merge.
       testpypi:
-        description: "Upload the three wheels to TestPyPI as a release dry run"
+        description: "Upload the four wheels to TestPyPI as a release dry run"
+        type: boolean
+        default: false
+      # Iteration on the Windows row. Windows work edits files the build cache
+      # is keyed on, so a full run would send all four rows cold and hold a
+      # second generation of keys -- about 9 GiB more against the 10 GB cap --
+      # for changes that cannot affect the other three. This builds the
+      # Windows row alone, replacing the branch's Windows entry rather than
+      # adding to it. It is not path-filter gating: pull requests and pushes
+      # always build every row.
+      windows_only:
+        description: "Build only the Windows row (iteration; never a release)"
         type: boolean
         default: false
 
@@ -83,82 +94,66 @@ jobs:
         if: startsWith(github.ref, 'refs/tags/v')
         run: python -m wheelbuild.tag_check "$GITHUB_REF_NAME"
 
+  # The matrix rows, from .github/wheel-matrix.toml, where the comments on each
+  # row live too. A job of its own because a static `include` list cannot be
+  # narrowed by an input; see wheelbuild/matrix.py.
+  plan:
+    name: plan the wheel matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+      # A Windows-only run uploads one wheel, and a dry run that refuses it
+      # after three hours of build is a worse place to learn that than here.
+      - name: Refuse a Windows-only release dry run
+        if: github.event_name == 'workflow_dispatch' && inputs.windows_only && inputs.testpypi
+        run: |
+          echo "::error::windows_only builds one wheel; a TestPyPI dry run needs all of them"
+          exit 1
+      - name: Select the rows
+        id: rows
+        env:
+          ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'win_amd64' || '' }}
+        run: python3 -m wheelbuild.matrix --only "$ONLY"
+
   wheel:
     name: build ${{ matrix.name }} wheel
-    # Everything that names a platform comes from the row rather than from the
-    # step that uses it, so a further architecture is one entry here and no
-    # other edit -- which is how the aarch64 row was added. See
-    # docs/adr/0006-parameterised-raw-jobs-not-cibuildwheel.md.
+    needs: [plan]
     strategy:
-      # Three platforms share a 10 GB cache budget and each saves its own
+      # Four platforms share a 10 GB cache budget and each saves its own
       # entry; cancelling the others because one failed would throw away
       # 40 minutes of build for no gain.
       fail-fast: false
       matrix:
-        include:
-          # Pinned runner labels rather than *-latest: the ubuntu-latest label
-          # moves to Ubuntu 26 on 2026-10-19, and a 40-minute superbuild is not
-          # where a runner image should change underneath us. On macOS a moving
-          # label would also change the published filename.
-          - name: manylinux_2_28 x86_64
-            runner: ubuntu-24.04
-            image: quay.io/pypa/manylinux_2_28_x86_64
-            tag: manylinux_2_28_x86_64
-            build_root: /build
-          # Every platform builds natively, so the arm image needs an arm
-          # runner: ubuntu-24.04-arm is free and unlimited on a public
-          # repository and carries the same 4 vCPU / 16 GB as the x86_64 one.
-          # The spike in .scratch/cibuildwheel/issues/05-aarch64-superbuild-spike.md
-          # built this row cold in 36 minutes with the smoke test and all four
-          # interop stages passing, against scripts/build-wheel.sh unchanged --
-          # which is why this is a row and not a job.
-          #
-          # Upstream Palace pins its own arm superbuild to ubuntu-22.04-arm
-          # over "flaky arm builds with ubuntu 24", with no detail and no
-          # linked issue. That comment did not reproduce here and the
-          # configurations differ, but it is the first lead if this row starts
-          # failing intermittently.
-          #
-          # This row's first run on any branch is necessarily a cold build: a
-          # cache entry is fingerprinted by the machine that wrote it, so there
-          # is nothing for it to restore until it has saved once.
-          - name: manylinux_2_28 aarch64
-            runner: ubuntu-24.04-arm
-            image: quay.io/pypa/manylinux_2_28_aarch64
-            tag: manylinux_2_28_aarch64
-            build_root: /build
-
-          # Apple Silicon. The label is pinned harder than the Linux ones: on
-          # macOS the runner image decides the published filename and the set
-          # of machines that can install the wheel, not just the build inputs,
-          # so macos-latest -- which repointed to macOS 26 in mid-2026 -- must
-          # never appear here. macos-14, which the spike ran on, is fully
-          # unsupported from 2026-11-02. macos-15 has no retirement
-          # announcement and is the newest label whose Homebrew runtimes carry
-          # a minos this wheel can claim; see
-          # .scratch/platform-expansion/issues/06-macos-runner-image-and-floor.md.
-          #
-          # One row value is absent rather than empty, and it gates three steps:
-          # no `image`, because the build runs on the runner itself. macOS has
-          # no container, so the three steps that exist only to serve one are
-          # skipped and the build step is the driver rather than `docker run`.
-          # Every other step is shared, including the wheel's: this row assembles
-          # and repairs with delocate in place of auditwheel and clears the same
-          # bar as the other two.
-          #
-          # The build root is an absolute path under the runner's home rather
-          # than /build: macOS 11 and later seal the root volume, so no new
-          # top-level directory can be created at all. It is pinned because
-          # Mach-O records absolute install names -- a build root that moves
-          # between the save and the restore is a tree that no longer resolves,
-          # which is a way of wasting a cache the Linux platforms cannot.
-          - name: macosx_15_0 arm64
-            runner: macos-15
-            tag: macosx_15_0_arm64
-            build_root: /Users/runner/palace-build
+        include: ${{ fromJSON(needs.plan.outputs.rows) }}
     runs-on: ${{ matrix.runner }}
+    # Explicit, because the Windows row's default would be PowerShell and every
+    # shared step is bash; on Linux and macOS it adds only pipefail. The steps
+    # that run on Windows say `python` rather than `python3`, which the Windows
+    # toolcache does not provide; setup-python makes both the same interpreter
+    # on the other runners.
+    defaults:
+      run:
+        shell: bash
+    # actions: write is for one step, the iteration run's cache replacement
+    # below, and only that step is handed the token. The checkout does not
+    # persist it either, so nothing the build downloads and runs can reach it.
+    # A pull request from a fork gets a read-only token whatever this says.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      # The spike measured the build root at 2.3 GiB and D: is the runner's
+      # scratch disk, whose size the image does not promise.
+      - name: Log the Windows runner's free space
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Get-PSDrive C, D | Format-Table -AutoSize
 
       # Every action in this job runs on the runner, not in the build image.
       # That is the point of driving the container with `docker run` instead of
@@ -168,6 +163,33 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.13"
+
+      # The compile half of the Windows build: gcc, g++ and gfortran, GNU make
+      # and the POSIX tools Palace's superbuild drives, and MS-MPI's SDK.
+      # Reusing the image's C:\msys64 (`release: false`) and installing
+      # nothing newer than it has (`update: false`), so the toolchain changes
+      # when the image does; its own package cache is off because it would
+      # hold another 150-180 MiB entry against the shared 10 GB budget. The
+      # packages roll and are not pinned (ADR-0007), so the driver logs
+      # `pacman -Q`. MSYS2's `python` is the POSIX one PETSc's configure
+      # insists on; the MinGW one is there because the spike's build had it.
+      - name: Provision MSYS2 UCRT64
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          release: false
+          update: false
+          cache: false
+          install: >-
+            make git patch diffutils perl tar unzip python
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-libgomp
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-ccache
+            mingw-w64-ucrt-x86_64-pkgconf
+            mingw-w64-ucrt-x86_64-msmpi
 
       # The cache path is a runner directory bind-mounted into the container,
       # so it has to exist and belong to the runner user before the restore
@@ -183,7 +205,7 @@ jobs:
       # which ships the same Palace under a tag upstream does not have.
       - name: Resolve Palace version and platform tag
         run: |
-          version=$(python3 -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])")
+          version=$(python -c "import re, pathlib; print(re.search(r'__version__ = \"([^\"]+)\"', pathlib.Path('palace_solver/__init__.py').read_text()).group(1).split('.post')[0])" | tr -d '\r')
           echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
           # The macOS floor the build compiles to, and the one input
           # platform_tag() cannot derive: read off the runner it would name the
@@ -191,7 +213,7 @@ jobs:
           # can install it. Exported for every row because it is ignored off
           # Darwin, and here rather than in the macOS driver because this step
           # needs it too.
-          target=$(python3 -c 'from wheelbuild.platforms import MACOS_DEPLOYMENT_TARGET; print(MACOS_DEPLOYMENT_TARGET)')
+          target=$(python -c 'from wheelbuild.platforms import MACOS_DEPLOYMENT_TARGET; print(MACOS_DEPLOYMENT_TARGET)' | tr -d '\r')
           echo "MACOSX_DEPLOYMENT_TARGET=$target" >> "$GITHUB_ENV"
           export MACOSX_DEPLOYMENT_TARGET="$target"
           # The cache key is namespaced by the tag the wheel itself carries, so
@@ -203,7 +225,7 @@ jobs:
           # builds natively — the manylinux image matches the runner's
           # architecture. Checked against the row so a mismatched matrix entry
           # fails in seconds rather than by mis-tagging a wheel 40 minutes on.
-          tag=$(python3 -c 'from wheelbuild.platforms import platform_tag; print(platform_tag())')
+          tag=$(python -c 'from wheelbuild.platforms import platform_tag; print(platform_tag())' | tr -d '\r')
           if [[ "$tag" != "${{ matrix.tag }}" ]]; then
             echo "::error::runner derives platform tag $tag, matrix row says ${{ matrix.tag }}"
             exit 1
@@ -241,10 +263,37 @@ jobs:
         uses: actions/cache/restore@v5
         with:
           path: ${{ matrix.build_root }}
-          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
           restore-keys: |
             superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
             superbuild-${{ env.PLATFORM_TAG }}-
+
+      # An iteration run that edited a keyed file restores the branch's previous
+      # Windows entry and will save one under the new key, and two ~2.2 GiB
+      # Windows entries on top of main's three are over the 10 GB cap -- where
+      # GitHub evicts the least recently read entry, which would be one of
+      # main's. So the superseded entry goes as soon as its tree is on disk,
+      # before anything is built. Exactly the key that was restored, and only
+      # if it is this branch's own: a restore that fell back to main's entry
+      # leaves it alone, and so does every run that is not an iteration run.
+      - name: Drop the superseded Windows entry this iteration run restored
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.windows_only
+          && github.ref != 'refs/heads/main'
+          && steps.build-cache.outputs.cache-matched-key != ''
+          && steps.build-cache.outputs.cache-matched-key != steps.build-cache.outputs.cache-primary-key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATCHED: ${{ steps.build-cache.outputs.cache-matched-key }}
+        run: |
+          owned=$(gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$MATCHED" \
+            --limit 100 --json key --jq '.[].key' | grep -Fx "$MATCHED" || true)
+          if [[ -z "$owned" ]]; then
+            echo "$MATCHED is not $GITHUB_REF's own entry; leaving it"
+            exit 0
+          fi
+          gh cache delete "$MATCHED" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF"
+          echo "deleted $MATCHED from $GITHUB_REF; this run saves its replacement"
 
       # The same script a developer runs locally, against the same image, with
       # the cache directory pointed at the one the restore just filled. CI
@@ -266,8 +315,21 @@ jobs:
       # delocate where the Linux driver runs auditwheel. It writes its wheel to
       # the same wheelhouse/, so every step after this one is shared.
       - name: Build wheel on the runner
-        if: ${{ !matrix.image }}
+        if: ${{ !matrix.image && runner.os != 'Windows' }}
         run: scripts/build-macos.sh "$PALACE_VERSION"
+        env:
+          BUILD_ROOT: ${{ matrix.build_root }}
+
+      # The same script a Windows owner with MSYS2 runs. Under MSYS2's bash
+      # rather than the job's, which on this runner is Git for Windows'; every
+      # wheelbuild step inside it runs on the setup-python interpreter above,
+      # which it finds through the pythonLocation that action exports. It ends
+      # at a repaired, link-checked win_amd64 wheel in wheelhouse/, as the
+      # other drivers do.
+      - name: Build wheel under MSYS2
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: scripts/build-windows.sh "$PALACE_VERSION"
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
 
@@ -310,7 +372,7 @@ jobs:
       - name: Check the build tree is readable before saving it
         id: cache-guard
         if: always() && steps.build-cache.outputs.cache-hit != 'true'
-        run: python3 -m wheelbuild.cache_guard "${{ matrix.build_root }}"
+        run: python -m wheelbuild.cache_guard "${{ matrix.build_root }}"
 
       - name: Save build cache
         if: always() && steps.build-cache.outputs.cache-hit != 'true' && steps.cache-guard.outcome == 'success'
@@ -339,33 +401,51 @@ jobs:
       # about this wheel.
       - name: Check the wheel's metadata the way PyPI will
         run: |
-          python3 -m pip install --upgrade "twine>=6.1"
-          python3 -m twine check --strict wheelhouse/*.whl
+          python -m pip install --upgrade "twine>=6.1"
+          python -m twine check --strict wheelhouse/*.whl
 
       # Run on the runner rather than back inside the build image, for the same
       # reason a user's machine is not a manylinux container: it proves the
       # wheel is self-contained outside the environment that produced it. It is
       # also the shape macOS has no choice about, so that row adds no step here.
+      #
+      # Windows runs the Python twin of each script rather than the script
+      # under this job's Git bash, whose MSYS2 runtime would put its own tools
+      # on the PATH the test claims the wheel needs none of;
+      # scripts/_windows_wheel.py has the rest of the reasons. It runs before
+      # the interop step, while the runner has no MS-MPI installed: the
+      # wheel's own has to be enough.
       - name: Smoke test in a clean virtual environment
         run: |
-          scripts/smoke-test.sh \
-            "$(ls wheelhouse/*.whl)" \
-            "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          wheel="$(ls wheelhouse/*.whl)"
+          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/smoke-test-windows.py "$wheel" "$config"
+          else
+            scripts/smoke-test.sh "$wheel" "$config"
+          fi
 
       # The smoke test stops at --dry-run. This solves the example for real on
       # two ranks under both launchers, so collective communication is
       # exercised and the two results must agree.
       #
-      # Ungated, on every platform. The foreign launcher it pairs the wheel
-      # with is the PyPI `mpich` wheel, which publishes a macosx_11_0_arm64
-      # wheel for both the `mpich<5` series the vendored MPICH belongs to and
-      # the `mpich>=5` one stage 4 reaches for -- so macOS needs no Homebrew
-      # mpiexec and no source of its own.
+      # Ungated on every row. On Linux and macOS the foreign launcher it pairs
+      # the wheel with is the PyPI `mpich` wheel, which publishes a
+      # macosx_11_0_arm64 wheel for both the `mpich<5` series the vendored
+      # MPICH belongs to and the `mpich>=5` one stage 4 reaches for -- so macOS
+      # needs no Homebrew mpiexec and no source of its own. On Windows it is
+      # the system MS-MPI 10.1.x a user installs from msmpisetup.exe, which the
+      # twin installs on this disposable runner, hash-checked, when told to
+      # with --install-msmpi.
       - name: Launcher interoperability
         run: |
-          scripts/interop-test.sh \
-            "$(ls wheelhouse/*.whl)" \
-            "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          wheel="$(ls wheelhouse/*.whl)"
+          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/interop-test-windows.py --install-msmpi "$wheel" "$config"
+          else
+            scripts/interop-test.sh "$wheel" "$config"
+          fi
 
       # Writes the job summary, so this is the size verdict a human reads. It
       # also fails on an oversized wheel rather than only saying OVER: a size
@@ -374,16 +454,20 @@ jobs:
       # same wheel first (`wheelbuild.assemble.verify_size`), so on a normal run
       # this never fires; it is here because this is the step that reports, and
       # a report that prints a verdict and exits 0 is a report nothing acts on.
+      #
+      # The summary path is read from the environment rather than spliced into
+      # the source: on Windows it is a backslashed path, and `\a` in a Python
+      # string literal is a bell.
       - name: Report wheel size
         run: |
-          python3 -c "
-          import pathlib, sys
+          python -c "
+          import os, pathlib, sys
           sys.path.insert(0, '.')
           from wheelbuild.assemble import size_report
           wheel = next(pathlib.Path('wheelhouse').glob('*.whl'))
           report = size_report(wheel)
           print(report.text)
-          pathlib.Path('${GITHUB_STEP_SUMMARY}').write_text(report.text + '\n')
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(report.text + '\n')
           sys.exit(1 if report.exceeds_pypi_limit else 0)
           "
 
@@ -417,7 +501,7 @@ jobs:
       - name: Delete superbuild caches that no longer match main
         env:
           GH_TOKEN: ${{ github.token }}
-          INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
         run: |
           # The same two components the wheel job's key ends in, spelled the
           # same way: the .post segment dropped, and the hash of the same file
@@ -432,7 +516,7 @@ jobs:
   # a file over its size limit, and metadata validated more strictly than the
   # `wheel` module validated it.
   #
-  # The verdict is the index's acceptance of the three files, and nothing is
+  # The verdict is the index's acceptance of the four files, and nothing is
   # installed back out of TestPyPI -- a wheel can only be installed on a
   # machine of its own platform, and each platform already installs its own and
   # solves an example on the row that built it. The trusted publisher it proves
@@ -442,7 +526,7 @@ jobs:
   #
   # Manual, and gated on an input rather than on a ref, because the upload is
   # not free: TestPyPI reuses a filename no more than PyPI does, so each dry
-  # run spends the three filenames of the version it carries. It costs nothing
+  # run spends the four filenames of the version it carries. It costs nothing
   # against the PyPI quota, whose storage is separate.
   #
   # Everything that could differ from `publish` and does not is the point:
@@ -477,7 +561,7 @@ jobs:
       # event it rehearses is not, and a green run over a version TestPyPI
       # already holds says nothing about the wheels in this directory. When a
       # dry run has to be repeated -- including after one that uploaded some of
-      # the three and then failed -- the remedy is a .postN bump, which is free
+      # the four and then failed -- the remedy is a .postN bump, which is free
       # before a tag exists and is the same move a half-published release on
       # PyPI would force.
       - uses: pypa/gh-action-pypi-publish@release/v1
@@ -512,7 +596,7 @@ jobs:
       # By pattern rather than by name: the matrix uploads one artifact per row
       # named from the row, so naming them here is how this job came to collect
       # the x86_64 wheel alone while the other two sat in the run's artifacts.
-      # merge-multiple puts all three wheels in one flat directory, which is
+      # merge-multiple puts all four wheels in one flat directory, which is
       # what the upload step publishes; without it each artifact lands in a
       # subdirectory of its own and the upload finds no wheel at all.
       #

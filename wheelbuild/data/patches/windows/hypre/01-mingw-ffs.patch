@@ -1,0 +1,28 @@
+Carried patch, Windows only: hypre's ffs() under MinGW.
+
+MinGW has no ffs(). Backport of hypre master's own fix (__builtin_ffs under
+__MINGW32__) to _hypre_utilities.h and hopscotch_hash.h. Retires with the
+first Palace pin bump past it.
+
+--- a/src/utilities/_hypre_utilities.h
++++ b/src/utilities/_hypre_utilities.h
+@@ -2681,6 +2681,8 @@
+          x >>= 1;
+       }
+    }
++#elif defined(__MINGW32__)
++   pos = __builtin_ffs((hypre_int) x);
+ #else
+    pos = ffs((hypre_int) x);
+ #endif
+--- a/src/utilities/hopscotch_hash.h
++++ b/src/utilities/hopscotch_hash.h
+@@ -145,6 +145,8 @@
+          x >>= 1;
+       }
+    }
++#elif defined(__MINGW32__)
++   pos = __builtin_ffs((hypre_int) x);
+ #else
+    pos = ffs((hypre_int) x);
+ #endif
