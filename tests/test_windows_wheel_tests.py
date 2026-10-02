@@ -81,7 +81,10 @@ def test_lines_are_counted_whatever_their_ending():
 def _report(directory, values):
     (directory / "postpro").mkdir(parents=True)
     rows = "\n".join(",".join(str(v) for v in row) for row in values)
-    (directory / "postpro" / "domain-E.csv").write_text("a,b\n" + rows + "\n")
+    # Palace headers carry units such as Ω, so the file is read as UTF-8.
+    (directory / "postpro" / "domain-E.csv").write_text(
+        "E (Ω),b\n" + rows + "\n", encoding="utf-8"
+    )
 
 
 def test_two_equal_solves_agree(tmp_path):

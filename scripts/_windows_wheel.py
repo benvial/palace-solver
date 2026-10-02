@@ -200,7 +200,7 @@ def count_occurrences(output: str, marker: str) -> int:
 
 def _numbers(path: Path) -> list[float]:
     """Every float in a Palace postprocessing CSV, header row skipped."""
-    rows = path.read_text().splitlines()[1:]
+    rows = path.read_text(encoding="utf-8").splitlines()[1:]
     return [float(field) for row in rows for field in row.split(",") if field.strip()]
 
 

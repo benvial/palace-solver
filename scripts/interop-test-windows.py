@@ -211,10 +211,13 @@ def wait_for_ranks(process: subprocess.Popen[bytes], log: Path) -> None:
     deadline = time.monotonic() + START_TIMEOUT
     while running_images(RANK_IMAGE) < 2:
         if process.poll() is not None:
-            fail("the solve ended before it could be interrupted", log.read_text())
+            fail(
+                "the solve ended before it could be interrupted",
+                log.read_text(errors="replace"),
+            )
         if time.monotonic() > deadline:
             process.kill()
-            fail("the solve never started two ranks", log.read_text())
+            fail("the solve never started two ranks", log.read_text(errors="replace"))
         time.sleep(0.5)
     # Into the solve proper, past MPI_Init and the mesh read.
     time.sleep(3)
@@ -251,13 +254,16 @@ def ctrl_break(palace: Path, config: Path, workdir: Path, env) -> None:
             returncode = process.wait(timeout=EXIT_TIMEOUT)
         except subprocess.TimeoutExpired:
             process.kill()
-            fail("palace --np 2 did not end after Ctrl-Break", log.read_text())
+            fail(
+                "palace --np 2 did not end after Ctrl-Break",
+                log.read_text(errors="replace"),
+            )
     print(f"    exit status {returncode:#x}")
     if returncode & 0xFFFFFFFF != STATUS_CONTROL_C_EXIT:
         fail(
             f"Ctrl-Break ended palace --np 2 with {returncode:#x}, "
             f"not {STATUS_CONTROL_C_EXIT:#x}",
-            log.read_text(),
+            log.read_text(errors="replace"),
         )
     check_no_orphans("Ctrl-Break")
 
