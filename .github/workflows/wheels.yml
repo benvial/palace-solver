@@ -9,11 +9,11 @@ on:
     inputs:
       # The release dry run. Deliberately an input on a manual event rather
       # than anything a push can reach: it uploads the version in
-      # palace_solver.__version__ to TestPyPI, which consumes those three
+      # palace_solver.__version__ to TestPyPI, which consumes those four
       # filenames there for good, so it has to be something a human asks for
       # once per release rather than something main does on every merge.
       testpypi:
-        description: "Upload the three wheels to TestPyPI as a release dry run"
+        description: "Upload the four wheels to TestPyPI as a release dry run"
         type: boolean
         default: false
       # Iteration on the Windows row. Windows work edits files the build cache
@@ -516,7 +516,7 @@ jobs:
   # a file over its size limit, and metadata validated more strictly than the
   # `wheel` module validated it.
   #
-  # The verdict is the index's acceptance of the three files, and nothing is
+  # The verdict is the index's acceptance of the four files, and nothing is
   # installed back out of TestPyPI -- a wheel can only be installed on a
   # machine of its own platform, and each platform already installs its own and
   # solves an example on the row that built it. The trusted publisher it proves
@@ -526,7 +526,7 @@ jobs:
   #
   # Manual, and gated on an input rather than on a ref, because the upload is
   # not free: TestPyPI reuses a filename no more than PyPI does, so each dry
-  # run spends the three filenames of the version it carries. It costs nothing
+  # run spends the four filenames of the version it carries. It costs nothing
   # against the PyPI quota, whose storage is separate.
   #
   # Everything that could differ from `publish` and does not is the point:
@@ -561,7 +561,7 @@ jobs:
       # event it rehearses is not, and a green run over a version TestPyPI
       # already holds says nothing about the wheels in this directory. When a
       # dry run has to be repeated -- including after one that uploaded some of
-      # the three and then failed -- the remedy is a .postN bump, which is free
+      # the four and then failed -- the remedy is a .postN bump, which is free
       # before a tag exists and is the same move a half-published release on
       # PyPI would force.
       - uses: pypa/gh-action-pypi-publish@release/v1
@@ -596,7 +596,7 @@ jobs:
       # By pattern rather than by name: the matrix uploads one artifact per row
       # named from the row, so naming them here is how this job came to collect
       # the x86_64 wheel alone while the other two sat in the run's artifacts.
-      # merge-multiple puts all three wheels in one flat directory, which is
+      # merge-multiple puts all four wheels in one flat directory, which is
       # what the upload step publishes; without it each artifact lands in a
       # subdirectory of its own and the upload finds no wheel at all.
       #

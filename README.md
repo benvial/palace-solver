@@ -32,19 +32,27 @@ matches:
   the oldest macOS the payload is compiled for, and it comes from the runtime
   libraries the wheel vendors rather than from a preference. There is no Intel
   macOS wheel: upstream Palace stopped building that target in November 2024.
+- **Windows x86-64** — `win_amd64`; Windows 10 or Windows Server 2016 or later,
+  the floor of the toolchain it is built with. The tag names no Windows
+  version, so `palace` checks it at start-up and refuses an older one. Any
+  x86-64 CPU, and nothing to install first: no MSYS2, no MS-MPI.
+
+WSL2 should also run the Linux x86-64 wheel; no CI tests that.
 
 Anything outside that set gets `No matching distribution found` from pip, which
 is the intended answer — the alternative is a wheel that installs and then
-faults. Windows, musl-based Linux and GPU builds are not planned, and a cluster
-is better served by building Palace itself.
+faults. Musl-based Linux and GPU builds are not planned, and a cluster is
+better served by building Palace itself.
 
 ## What the wheel contains
 
 - `palace-real`, the Palace binary, built with the full feature set: OpenMP,
   SuperLU_DIST, STRUMPACK (with ZFP), MUMPS, SLEPc, ARPACK, LIBXSMM and GSLIB.
   No GPU support, 32-bit integers.
-- Every shared library that build needs, MPICH (with Hydra) and OpenBLAS
-  included, vendored by the platform's repair tool.
+- Every shared library that build needs, OpenBLAS and an MPI included. On
+  Linux and macOS the MPI is MPICH (with Hydra) and the platform's repair tool
+  vendors the libraries; on Windows it is Microsoft's MS-MPI, and the
+  libraries sit in `bin` beside the executables.
 - `THIRD-PARTY-NOTICES`, harvested from the superbuild's own source checkouts.
 
 The CPU requirement is the one stated above and no more: OpenBLAS is built with
@@ -54,6 +62,15 @@ through that dispatch rather than by installing a different wheel.
 The package version mirrors the Palace release it ships, with a `.postN`
 segment for packaging-only fixes. Palace is Apache-2.0; see `LICENSE` and
 `THIRD-PARTY-NOTICES`.
+
+The Windows wheel also carries three of Microsoft's files — `msmpi.dll`,
+`mpiexec.exe` and `smpd.exe`, unchanged from the MS-MPI 10.1.3 redistributable.
+They are licensed by Microsoft under the Microsoft MPI Redistributable license
+terms, not under this package's license, and whoever installs or redistributes
+the Windows wheel uses them under those terms. Among other things, the terms
+allow use on Windows only and forbid reverse engineering, decompiling or
+disassembling the files. That wheel's `THIRD-PARTY-NOTICES` reproduces them in
+full.
 
 ## Command line
 
@@ -84,6 +101,11 @@ rendezvous**, because that case does not fail — every rank would solve the
 whole problem alone, overwrite the others' output and exit 0.
 `PALACE_SOLVER_ALLOW_FOREIGN_LAUNCHER=1` runs anyway.
 
+On Windows, where MPICH has had no native port since 2011, the wheel vendors
+Microsoft's MS-MPI 10.1 instead, and `palace-mpiexec` is MS-MPI's own `mpiexec`.
+The `mpiexec` of a system-wide MS-MPI 10.1 install works as well. The same
+refusal holds; the rendezvous MS-MPI's ranks read is `PMI_KVS`.
+
 ## Python API
 
 ```python
@@ -93,7 +115,7 @@ palace_solver.executable_path()  # -> what to launch: the guarded console script
 palace_solver.binary_path()  # -> .../site-packages/palace_solver/bin/palace-real
 # Where the vendored libraries are, which differs by platform:
 # palace_solver.libs beside the package on Linux, palace_solver/.dylibs inside
-# it on macOS.
+# it on macOS, palace_solver/bin beside the executables on Windows.
 palace_solver.lib_dir()
 palace_solver.launcher_conflict()  # -> None, or why this launcher is refused
 ```
@@ -104,9 +126,9 @@ found. `binary_path()` returns that binary and is unguarded.
 
 ## More
 
-- [`docs/mpi.md`](https://github.com/benvial/palace-solver/blob/main/docs/mpi.md) — the vendored MPICH, the launchers it works
+- [`docs/mpi.md`](https://github.com/benvial/palace-solver/blob/main/docs/mpi.md) — the vendored MPI, the launchers it works
   with, and what the rendezvous check reads.
-- [`docs/building.md`](https://github.com/benvial/palace-solver/blob/main/docs/building.md) — building the wheel on either
+- [`docs/building.md`](https://github.com/benvial/palace-solver/blob/main/docs/building.md) — building the wheel on each
   platform, and the scripts that test one.
 - [`docs/releasing.md`](https://github.com/benvial/palace-solver/blob/main/docs/releasing.md) — the release procedure, its dry
   run, and the PyPI limits a release spends.
