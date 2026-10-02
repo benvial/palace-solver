@@ -382,6 +382,22 @@ def _same_file(first: Path, second: str) -> bool:
         )
 
 
+def _own_scripts(script: str) -> list[str]:
+    r"""Return the paths the running console script's ``.exe`` stub may have.
+
+    The ``__main__`` pip and uv write into a Windows launcher sets
+    ``sys.argv[0]`` to the launcher's path with ``.exe`` removed, so the stub
+    a process tree names is that path with ``.exe`` put back. Measured on a
+    ``windows-2025`` runner: ``Scripts\palace`` in ``sys.argv[0]``,
+    ``Scripts\palace.exe`` as the parent's image.
+    """
+    if not script:
+        return []
+    if script.lower().endswith(".exe"):
+        return [script]
+    return [script, f"{script}.exe"]
+
+
 def parent_executable(*, system: str | None = None) -> Path | None:
     """Return the executable of the process that started this one.
 
@@ -391,9 +407,11 @@ def parent_executable(*, system: str | None = None) -> Path | None:
     a virtual environment ``python.exe`` is a redirector that starts the base
     interpreter as its own. Those are this process's own launchers, and they
     are skipped to reach the process that started them. The stub is the
-    running script, ``sys.argv[0]``. The redirector is ``sys.executable`` when
-    that is not the image this process runs: outside a virtual environment the
-    two are one file, and a parent running it is some other Python program.
+    running script, ``sys.argv[0]``, less the ``.exe`` that the entry point pip
+    and uv write into it strips from that path before the script runs. The
+    redirector is ``sys.executable`` when that is not the image this process
+    runs: outside a virtual environment the two are one file, and a parent
+    running it is some other Python program.
 
     Args:
         system: ``sys.platform`` value; defaults to the running platform.
@@ -405,7 +423,7 @@ def parent_executable(*, system: str | None = None) -> Path | None:
     pid = os.getppid()
     if not _is_windows(system):
         return process_executable(pid, system=system)
-    own = [sys.argv[0]] if sys.argv and sys.argv[0] else []
+    own = _own_scripts(sys.argv[0] if sys.argv else "")
     image = _windows_executable(os.getpid())
     if image is not None and not _same_file(image, sys.executable):
         own.append(sys.executable)

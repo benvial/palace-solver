@@ -455,7 +455,10 @@ def windows_process(tmp_path, monkeypatch):
     }
     for path in paths.values():
         path.write_text(path.name)
-    monkeypatch.setattr(_launcher.sys, "argv", [str(paths["stub"]), "config.json"])
+    # As pip's launcher entry point leaves it: the stub's path less its .exe.
+    monkeypatch.setattr(
+        _launcher.sys, "argv", [str(paths["stub"].with_suffix("")), "config.json"]
+    )
     monkeypatch.setattr(_launcher.sys, "executable", str(paths["redirector"]))
 
     def install(table, parent_pid, image=paths["base"]):
@@ -497,6 +500,20 @@ def test_on_windows_the_parent_is_read_past_a_venv_redirector(windows_process):
     )
 
     assert _launcher.parent_executable(system=WINDOWS) == INTEL_PROXY
+
+
+def test_on_windows_a_stub_named_with_its_exe_is_skipped_too(
+    windows_process, monkeypatch
+):
+    # A launcher that leaves sys.argv[0] as the image it runs.
+    paths = windows_process.paths
+    monkeypatch.setattr(_launcher.sys, "argv", [str(paths["stub"])])
+    windows_process(
+        {20: (paths["redirector"], 10), 10: (paths["stub"], 5), 5: (SMPD, 1)},
+        parent_pid=20,
+    )
+
+    assert _launcher.parent_executable(system=WINDOWS) == SMPD
 
 
 def test_on_windows_another_python_program_is_a_parent_like_any_other(
