@@ -23,7 +23,7 @@ dynamic = ["version"]
 requires-python = ">=3.10"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff==0.16.9", "mypy", "auditwheel>=6.0", "packaging", "pyyaml", "wheel", "build"]
+dev = ["pytest>=7.0", "ruff==0.16.9", "mypy", "auditwheel>=6.0", "packaging", "pyyaml", "wheel", "build", "pefile==2024.8.26"]
 
 [project.scripts]
 palace = "palace_solver._exec:main"
@@ -48,6 +48,11 @@ warn_return_any = true
 warn_unreachable = true
 warn_unused_configs = true
 warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+# pefile ships no type information, and wheelbuild.link_check is its only user.
+ignore_missing_imports = true
+module = ["pefile"]
 
 [tool.pytest.ini_options]
 python_files = ["test_*.py"]
