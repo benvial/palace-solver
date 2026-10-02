@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+from pe_files import write_pe
 
-from wheelbuild import assemble, platforms
+from wheelbuild import assemble, link_check, platforms
 
 ELF_MAGIC = b"\x7fELF\x02\x01\x01\x00"
 MACH_O_MAGIC = b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01"
@@ -478,3 +479,213 @@ def test_main_refuses_to_assemble_on_windows_without_the_fetched_mpi(
 
     assert exited.value.code == 2
     assert "--msmpi-dir is required on Windows" in capsys.readouterr().err
+
+
+def _windows_install_tree(root: Path) -> Path:
+    """A Windows superbuild's prefix: Palace's PE binary keeps its ``.bin``."""
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "palace").write_text('#!/bin/sh\nexec palace-x86_64.bin "$@"\n')
+    write_pe(
+        root / "bin" / "palace-x86_64.bin",
+        ["KERNEL32.dll", "msmpi.dll", "libopenblas.dll"],
+    )
+    write_pe(root / "bin" / "libopenblas.dll", ["KERNEL32.dll"])
+    return root
+
+
+def _windows_inputs(root: Path) -> dict[str, Path]:
+    """The three directories the Windows driver hands assembly."""
+    msmpi = root / "msmpi"
+    payload = root / "payload"
+    msmpi.mkdir(parents=True)
+    payload.mkdir()
+    write_pe(msmpi / "msmpi.dll", ["KERNEL32.dll"])
+    write_pe(msmpi / "mpiexec.exe", ["KERNEL32.dll"])
+    write_pe(msmpi / "smpd.exe", ["KERNEL32.dll"])
+    write_pe(payload / "msmpi.dll", ["KERNEL32.dll"])
+    write_pe(payload / "libopenblas.dll", ["KERNEL32.dll"])
+    return {
+        "install": _windows_install_tree(root / "install"),
+        "msmpi": msmpi,
+        "payload": payload,
+    }
+
+
+def test_find_palace_binary_accepts_a_pe_install_tree(tmp_path):
+    install_prefix = _windows_install_tree(tmp_path / "install")
+
+    assert assemble.find_palace_binary(install_prefix).name == "palace-x86_64.bin"
+
+
+def test_stage_names_a_pe_solver_with_its_exe(tmp_path):
+    """Windows runs only files named .exe, and palace_solver looks for this one."""
+    inputs = _windows_inputs(tmp_path)
+    package_dir = tmp_path / "pkg" / "palace_solver"
+
+    staged = assemble.stage(
+        install_prefix=inputs["install"],
+        package_dir=package_dir,
+        msmpi_dir=inputs["msmpi"],
+        payload_dir=inputs["payload"],
+    )
+
+    assert staged == package_dir / "bin" / "palace-real.exe"
+
+
+def test_stage_puts_the_repaired_dlls_beside_the_executables(tmp_path):
+    inputs = _windows_inputs(tmp_path)
+    package_dir = tmp_path / "pkg" / "palace_solver"
+
+    assemble.stage(
+        install_prefix=inputs["install"],
+        package_dir=package_dir,
+        msmpi_dir=inputs["msmpi"],
+        payload_dir=inputs["payload"],
+    )
+
+    assert sorted(path.name for path in (package_dir / "bin").iterdir()) == [
+        "libopenblas.dll",
+        "mpiexec.exe",
+        "msmpi.dll",
+        "palace-real.exe",
+        "smpd.exe",
+    ]
+    assert not any((package_dir / "lib").iterdir())
+
+
+def test_check_payload_dir_requires_the_repair_on_windows():
+    with pytest.raises(ValueError, match="required on Windows"):
+        assemble.check_payload_dir(None, system="Windows")
+    assemble.check_payload_dir(Path("D:/b-payload"), system="Windows")
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin"])
+def test_check_payload_dir_refuses_it_where_a_tool_repairs_the_wheel(system):
+    with pytest.raises(ValueError, match="Windows wheel only"):
+        assemble.check_payload_dir(Path("payload"), system=system)
+    assemble.check_payload_dir(None, system=system)
+
+
+def test_main_refuses_to_assemble_on_windows_without_the_repair(
+    tmp_path, monkeypatch, capsys
+):
+    monkeypatch.setattr(assemble.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(
+        assemble, "build", lambda **_: pytest.fail("assembled an unrepaired payload")
+    )
+
+    with pytest.raises(SystemExit) as exited:
+        assemble.main(
+            [
+                f"--install-prefix={tmp_path}",
+                f"--output-dir={tmp_path / 'out'}",
+                f"--msmpi-dir={tmp_path / 'msmpi'}",
+            ]
+        )
+
+    assert exited.value.code == 2
+    assert "--payload-dir is required on Windows" in capsys.readouterr().err
+
+
+def test_verify_payload_links_passes_a_flat_payload(tmp_path):
+    write_pe(tmp_path / "palace-real.exe", ["KERNEL32.dll", "MSMPI.DLL"])
+    write_pe(tmp_path / "msmpi.dll", ["api-ms-win-crt-heap-l1-1-0.dll"])
+    (tmp_path / ".gitkeep").write_text("")
+
+    reports = assemble.verify_payload_links(tmp_path)
+
+    assert [report.binary.name for report in reports] == [
+        "msmpi.dll",
+        "palace-real.exe",
+    ]
+
+
+def test_verify_payload_links_names_every_file_with_a_dll_not_beside_it(
+    tmp_path, capsys
+):
+    """The repair searched the toolchain too; the user's machine will not."""
+    write_pe(tmp_path / "palace-real.exe", ["libgfortran-5.dll"])
+    write_pe(tmp_path / "smpd.exe", ["msmpi.dll"])
+
+    with pytest.raises(
+        link_check.UnresolvedImportError, match=r"palace-real\.exe, smpd\.exe"
+    ):
+        assemble.verify_payload_links(tmp_path)
+    output = capsys.readouterr().out
+    assert "libgfortran-5.dll" in output
+    assert "msmpi.dll" in output
+
+
+def test_verify_payload_links_refuses_to_pass_an_empty_payload(tmp_path):
+    (tmp_path / ".gitkeep").write_text("")
+
+    with pytest.raises(link_check.UnresolvedImportError, match="no PE file"):
+        assemble.verify_payload_links(tmp_path)
+
+
+def test_build_on_windows_retags_the_wheel_it_built_without_a_repair_tool(
+    tmp_path, monkeypatch
+):
+    """The repair ran before the wheel existed, so the built wheel goes
+    straight to `wheel tags`, which writes beside its input -- so that input
+    has to be in the output directory, where the other platforms' repair
+    leaves it.
+    """
+    inputs = _windows_inputs(tmp_path)
+    project_dir = tmp_path / "project"
+    output_dir = tmp_path / "wheelhouse"
+    output_dir.mkdir()
+    calls = []
+
+    def fake_check_call(command, **_):
+        calls.append(command)
+        if command[:3] == ["python", "-m", "build"]:
+            out = Path(command[command.index("--outdir") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "palace_solver-1.0-cp313-cp313-win_amd64.whl").write_bytes(b"PK")
+        elif command[:2] == ["wheel", "tags"]:
+            wheel = Path(command[-1])
+            wheel.rename(wheel.with_name("palace_solver-1.0-py3-none-win_amd64.whl"))
+        else:
+            pytest.fail(f"unexpected command {command}")
+
+    monkeypatch.setattr(assemble.platform, "system", lambda: "Windows")
+    monkeypatch.setattr(assemble.platform, "machine", lambda: "AMD64")
+    monkeypatch.setattr(assemble, "check_call", fake_check_call)
+    monkeypatch.setattr(assemble.msmpi, "verify_wheel", lambda _: [])
+    monkeypatch.setattr(
+        assemble.notices_module, "audit_wheel", lambda **_: ["libopenblas", "msmpi"]
+    )
+
+    final = assemble.build(
+        project_dir=project_dir,
+        install_prefix=inputs["install"],
+        output_dir=output_dir,
+        msmpi_dir=inputs["msmpi"],
+        payload_dir=inputs["payload"],
+    )
+
+    assert final == output_dir / "palace_solver-1.0-py3-none-win_amd64.whl"
+    assert [command[0] for command in calls] == ["python", "wheel"]
+    assert Path(calls[1][-1]).parent == output_dir
+
+
+def test_build_on_windows_link_checks_the_payload_before_packaging_it(
+    tmp_path, monkeypatch
+):
+    inputs = _windows_inputs(tmp_path)
+    (inputs["payload"] / "libopenblas.dll").unlink()
+    monkeypatch.setattr(
+        assemble,
+        "check_call",
+        lambda *_, **__: pytest.fail("packaged a broken payload"),
+    )
+
+    with pytest.raises(link_check.UnresolvedImportError, match=r"palace-real\.exe"):
+        assemble.build(
+            project_dir=tmp_path / "project",
+            install_prefix=inputs["install"],
+            output_dir=tmp_path / "wheelhouse",
+            msmpi_dir=inputs["msmpi"],
+            payload_dir=inputs["payload"],
+        )

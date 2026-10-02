@@ -13,6 +13,12 @@ it from the largest ``minos`` in the payload and renames the wheel to match. So
 on Linux the tag is an instruction and on Darwin it is evidence — which is why
 the pipeline ends by checking the tag on the file rather than trusting the tag
 it asked for. See ``wheelbuild.platforms`` for the tag itself.
+
+Windows has no repair tool in this sense. Its repair is this project's own flat
+copy of the DLL closure (``wheelbuild.pe_repair``), and it runs before the wheel
+is built, because the notices packaged into the wheel name the DLLs it copied.
+Assembly stages that copy with the executables, link-checks the result, and
+retags the built wheel, which on Windows applies the tag, as on Linux.
 """
 
 from __future__ import annotations
@@ -25,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from palace_solver import BINARY_NAME, LAUNCHER_NAME
-from wheelbuild import msmpi, platforms
+from wheelbuild import link_check, msmpi, platforms
 from wheelbuild import notices as notices_module
 from wheelbuild._process import check_call
 
@@ -144,8 +150,9 @@ def find_palace_binary(install_prefix: Path) -> Path:
     Palace installs a small ``bin/palace`` launcher script alongside the actual
     binary (``palace-<arch>.bin``); the wheel ships the binary and provides its
     own console script. Which of the two is which is decided by the file's
-    format — ELF on Linux, Mach-O on Darwin — not by its name, because the name
-    carries the architecture.
+    format — ELF on Linux, Mach-O on Darwin, PE on Windows — not by its name,
+    because the name carries the architecture, and on Windows it keeps the
+    ``.bin`` it has elsewhere.
 
     Args:
         install_prefix: Superbuild install prefix.
@@ -172,8 +179,12 @@ def stage(
     package_dir: Path,
     notices: Path | None = None,
     msmpi_dir: Path | None = None,
+    payload_dir: Path | None = None,
 ) -> Path:
     """Copy the superbuild payload into the package directory.
+
+    A PE solver is staged as ``palace-real.exe``, because Windows runs only
+    files named ``.exe``; see ``palace_solver._executable_name``.
 
     Args:
         install_prefix: Superbuild install prefix.
@@ -181,8 +192,11 @@ def stage(
         notices: Optional THIRD-PARTY-NOTICES file to ship alongside.
         msmpi_dir: On Windows, where ``wheelbuild.msmpi`` wrote the verified
             MS-MPI redistributable; its ``mpiexec.exe`` and ``smpd.exe`` are
-            staged beside the solver. ``msmpi.dll`` is not copied here: the
-            repair reaches it as an import of the solver.
+            staged beside the solver. ``msmpi.dll`` is not copied from here:
+            the repair reaches it as an import of the solver.
+        payload_dir: On Windows, the DLL closure ``wheelbuild.pe_repair``
+            copied. Every DLL in it is staged beside the executables, which is
+            where the Windows loader looks first.
 
     Returns:
         Path of the staged binary.
@@ -193,7 +207,8 @@ def stage(
     for directory in (binary_dir, library_dir):
         _clear_payload(directory)
 
-    staged_binary = binary_dir / BINARY_NAME
+    suffix = ".exe" if platforms.is_pe(source_binary) else ""
+    staged_binary = binary_dir / f"{BINARY_NAME}{suffix}"
     shutil.copy2(source_binary, staged_binary)
     staged_binary.chmod(staged_binary.stat().st_mode | 0o111)
 
@@ -207,6 +222,10 @@ def stage(
         for entry in msmpi.REDISTRIBUTABLE_FILES:
             if entry.name.endswith(".exe"):
                 shutil.copy2(msmpi_dir / entry.name, binary_dir / entry.name)
+
+    if payload_dir is not None:
+        for library in sorted(payload_dir.glob("*.dll")):
+            shutil.copy2(library, binary_dir / library.name)
 
     if notices is not None:
         shutil.copy2(notices, package_dir / "THIRD-PARTY-NOTICES")
@@ -267,6 +286,74 @@ def check_msmpi_dir(msmpi_dir: Path | None, *, system: str | None = None) -> Non
             f"--msmpi-dir is for the Windows wheel only; on {resolved} the "
             "vendored MPICH is in the install prefix"
         )
+
+
+def check_payload_dir(payload_dir: Path | None, *, system: str | None = None) -> None:
+    """Require the repaired DLL closure on Windows, and refuse it anywhere else.
+
+    On Windows the repair runs before the wheel exists (``wheelbuild.pe_repair``),
+    so assembly is handed its output. Elsewhere the repair is ``auditwheel`` or
+    ``delocate``, run on the built wheel, and a payload directory can only be a
+    mistake.
+
+    Args:
+        payload_dir: Where ``wheelbuild.pe_repair`` copied the DLL closure.
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Raises:
+        ValueError: If it is missing on Windows or given anywhere else.
+    """
+    resolved = system or platform.system()
+    if resolved == "Windows" and payload_dir is None:
+        raise ValueError(
+            "--payload-dir is required on Windows: the wheel's DLLs are the "
+            "closure wheelbuild.pe_repair copied, and nothing repairs the wheel "
+            "after it is built"
+        )
+    if resolved != "Windows" and payload_dir is not None:
+        raise ValueError(
+            f"--payload-dir is for the Windows wheel only; on {resolved} the "
+            "repair tool vendors the libraries into the built wheel"
+        )
+
+
+def verify_payload_links(directory: Path) -> list[link_check.LinkReport]:
+    """Check that every PE file in ``directory`` finds its DLLs beside it.
+
+    This is the Windows link check, run on the staged payload before it is
+    packaged. The repair's closure walk also searched the install prefix, the
+    MS-MPI directory and MSYS2's ``bin``; here the only place a DLL may come
+    from is the directory itself, as on a user's machine, or Windows. Every
+    file is reported before anything fails, so one run names every gap.
+
+    Args:
+        directory: The staged ``bin``: the solver, ``mpiexec.exe``,
+            ``smpd.exe`` and every vendored DLL.
+
+    Returns:
+        One report per PE file, in name order.
+
+    Raises:
+        wheelbuild.link_check.UnresolvedImportError: If a file imports a DLL
+            that is neither beside it nor a system DLL, or if ``directory``
+            holds no PE file at all, which would make the check pass vacuously.
+    """
+    reports = [
+        link_check.inspect_pe(path)
+        for path in sorted(directory.iterdir())
+        if path.is_file() and platforms.is_pe(path)
+    ]
+    for report in reports:
+        print(report.text, flush=True)
+    if not reports:
+        raise link_check.UnresolvedImportError(f"no PE file to check in {directory}")
+    failed = [report.binary.name for report in reports if report.unsatisfied]
+    if failed:
+        raise link_check.UnresolvedImportError(
+            f"{', '.join(failed)} import DLLs the wheel does not carry beside "
+            "them; see the listing above"
+        )
+    return reports
 
 
 def repair_command(
@@ -338,7 +425,10 @@ def repair_command(
             "--verbose",
             str(wheel),
         ]
-    raise platforms.UnsupportedPlatformError(f"no wheel repair tool for {resolved}")
+    raise platforms.UnsupportedPlatformError(
+        f"no wheel repair tool for {resolved}; the Windows payload is repaired "
+        "before the wheel is built, by wheelbuild.pe_repair"
+    )
 
 
 def retag_command(
@@ -489,8 +579,13 @@ def build(
     output_dir: Path,
     notices: Path | None = None,
     msmpi_dir: Path | None = None,
+    payload_dir: Path | None = None,
 ) -> Path:
     """Run the full assemble → repair → retag pipeline.
+
+    On Windows the repair has already run: ``payload_dir`` is its output, it is
+    staged with the executables, and the staged ``bin`` is link-checked before
+    it is packaged. The built wheel then goes straight to the retag.
 
     Args:
         project_dir: Repository root holding ``pyproject.toml``.
@@ -499,6 +594,8 @@ def build(
         notices: Optional THIRD-PARTY-NOTICES file to ship.
         msmpi_dir: On Windows, the verified MS-MPI redistributable; see
             :func:`check_msmpi_dir`.
+        payload_dir: On Windows, the DLL closure ``wheelbuild.pe_repair``
+            copied; see :func:`check_payload_dir`.
 
     Returns:
         Path of the final wheel.
@@ -510,6 +607,8 @@ def build(
         WheelTooLargeError: If the finished wheel is over PyPI's upload limit.
         wheelbuild.msmpi.ChecksumMismatchError: If the wheel's MS-MPI files are
             not the bytes that were fetched and verified.
+        wheelbuild.link_check.UnresolvedImportError: On Windows, if a staged
+            executable or DLL imports a DLL that is not beside it.
     """
     package_dir = project_dir / "palace_solver"
     stage(
@@ -517,7 +616,10 @@ def build(
         package_dir=package_dir,
         notices=notices,
         msmpi_dir=msmpi_dir,
+        payload_dir=payload_dir,
     )
+    if payload_dir is not None:
+        verify_payload_links(package_dir / "bin")
 
     clean_build_tree(project_dir)
     raw_dir = output_dir / "raw"
@@ -539,7 +641,12 @@ def build(
     # Wheels from earlier runs may still be in the output directory, so each
     # step is identified by the file it adds rather than by what is there.
     before_repair = _wheels(output_dir)
-    check_call(repair_command(wheel=raw_wheel, output_dir=output_dir))
+    if payload_dir is None:
+        check_call(repair_command(wheel=raw_wheel, output_dir=output_dir))
+    else:
+        # Repaired before it was built. `wheel tags` writes beside its input,
+        # so the wheel moves to where the other platforms' repair puts it.
+        shutil.copy2(raw_wheel, output_dir / raw_wheel.name)
     repaired = pick_wheel(
         before=before_repair, after=_wheels(output_dir), fallback=raw_wheel
     )
@@ -630,9 +737,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Windows only: where wheelbuild.msmpi wrote the MS-MPI redistributable",
     )
+    parser.add_argument(
+        "--payload-dir",
+        type=Path,
+        default=None,
+        help="Windows only: where wheelbuild.pe_repair copied the DLL closure",
+    )
     args = parser.parse_args(argv)
     try:
         check_msmpi_dir(args.msmpi_dir)
+        check_payload_dir(args.payload_dir)
     except ValueError as error:
         parser.error(str(error))
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -642,6 +756,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         output_dir=args.output_dir,
         notices=args.notices,
         msmpi_dir=args.msmpi_dir,
+        payload_dir=args.payload_dir,
     )
     return 0
 
