@@ -34,14 +34,16 @@ __version__ = "0.18.1.post2"
 #: exists only here.
 PALACE_VERSION = __version__.split(".post", maxsplit=1)[0]
 
-#: Name of the real solver executable inside :data:`_PACKAGE_DIR` / ``bin``.
+#: Name of the real solver executable inside :data:`_PACKAGE_DIR` / ``bin``,
+#: less the ``.exe`` it carries on Windows; see :func:`_executable_name`.
 BINARY_NAME = "palace-real"
 
-#: Name of the vendored MPICH process manager inside the same directory.
+#: Name of the vendored MPI process manager inside the same directory, less
+#: its ``.exe`` on Windows.
 LAUNCHER_NAME = "mpiexec"
 
 #: Name of the console script this package installs, which wraps the binary
-#: with the launcher guard in :mod:`._launcher`.
+#: with the launcher guard in :mod:`._launcher`, less its ``.exe`` on Windows.
 CONSOLE_SCRIPT_NAME = "palace"
 
 #: MPICH release vendored in this wheel. The build step and the runtime
@@ -52,36 +54,47 @@ MPICH_VERSION = "4.3.2"
 _PACKAGE_DIR = Path(__file__).resolve().parent
 
 
+def _executable_name(name: str) -> str:
+    """Return the file name ``name`` is installed under on this platform.
+
+    Windows runs only files named ``.exe``, so there the solver, the process
+    manager and the console script all carry it; elsewhere none does.
+    """
+    return f"{name}.exe" if sys.platform == "win32" else name
+
+
 def binary_path() -> Path:
     """Return the path of the packaged Palace executable.
 
     This is the raw binary, and launching it directly bypasses the ``palace``
     console script and with it the launcher guard, which is the only thing
     standing between a badly launched run and silently wrong results. Use
-    :func:`executable_path` to launch the solver; use this when the ELF binary
+    :func:`executable_path` to launch the solver; use this when the binary
     itself is what is wanted.
 
     Returns:
-        Absolute path to the ``palace-real`` binary shipped in this wheel.
+        Absolute path to the ``palace-real`` binary shipped in this wheel
+        (``palace-real.exe`` on Windows).
 
     Raises:
         FileNotFoundError: If the wheel was installed without its binary
             payload (for example an editable install of the source tree).
     """
-    candidate = _PACKAGE_DIR / "bin" / BINARY_NAME
+    candidate = _PACKAGE_DIR / "bin" / _executable_name(BINARY_NAME)
     if not candidate.is_file():
         raise FileNotFoundError(
-            f"{BINARY_NAME} is missing from {candidate.parent}; this install of "
+            f"{candidate.name} is missing from {candidate.parent}; this install of "
             "palace-solver does not contain a Palace binary"
         )
     return candidate
 
 
 def mpiexec_path() -> Path:
-    """Return the path of the MPICH process manager vendored in this wheel.
+    """Return the path of the MPI process manager vendored in this wheel.
 
     The wheel carries its own MPI, so multi-rank runs do not depend on an
-    ``mpiexec`` being installed elsewhere in the environment.
+    ``mpiexec`` being installed elsewhere in the environment. It is MPICH's
+    Hydra, or MS-MPI's ``mpiexec.exe`` on Windows.
 
     Returns:
         Absolute path to the vendored ``mpiexec``.
@@ -90,11 +103,11 @@ def mpiexec_path() -> Path:
         FileNotFoundError: If the wheel was installed without its binary
             payload.
     """
-    candidate = _PACKAGE_DIR / "bin" / LAUNCHER_NAME
+    candidate = _PACKAGE_DIR / "bin" / _executable_name(LAUNCHER_NAME)
     if not candidate.is_file():
         raise FileNotFoundError(
-            f"{LAUNCHER_NAME} is missing from {candidate.parent}; this install "
-            "of palace-solver does not contain the MPICH process manager"
+            f"{candidate.name} is missing from {candidate.parent}; this install "
+            "of palace-solver does not contain the MPI process manager"
         )
     return candidate
 
@@ -112,21 +125,27 @@ def console_script_path() -> Path | None:
     would silently run a different solver than the one this wheel ships. For
     the same reason a script that does not reference this package is rejected.
 
+    On Windows the script is ``palace.exe``: a launcher executable carrying
+    the Python script as a zip archive, which both pip and uv store
+    uncompressed, so the package name is searched for in the file's bytes
+    rather than its text.
+
     Returns:
         Path of the console script, or ``None`` if it cannot be located.
     """
+    name = _executable_name(CONSOLE_SCRIPT_NAME)
     candidates = (
-        Path(sysconfig.get_path("scripts")) / CONSOLE_SCRIPT_NAME,
-        Path(sys.executable).parent / CONSOLE_SCRIPT_NAME,
+        Path(sysconfig.get_path("scripts")) / name,
+        Path(sys.executable).parent / name,
     )
     for candidate in candidates:
         if not candidate.is_file():
             continue
         try:
-            content = candidate.read_text(errors="ignore")
+            content = candidate.read_bytes()
         except OSError:
             continue
-        if __name__ in content:
+        if __name__.encode() in content:
             return candidate
     return None
 
