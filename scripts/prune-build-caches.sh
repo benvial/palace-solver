@@ -2,7 +2,6 @@
 # Delete the superbuild caches on main that the current tree can no longer hit.
 #
 #   scripts/prune-build-caches.sh VERSION INPUTS_HASH [--dry-run]
-#       [--ref REF] [--key-prefix PREFIX]
 #
 # A version bump or an edit to any keyed build script orphans one entry per
 # platform, and GitHub holds an unused entry for seven days. Left to
@@ -24,22 +23,14 @@
 # when the pull request closes, so they are never this script's business:
 # deleting one would make a pull request that edits the build scripts rebuild
 # cold on every push, which is exactly what dropping github.sha from the key
-# avoided. Only refs/heads/main is listed, unless --ref says otherwise.
-#
-# --ref and --key-prefix exist for one other caller: the Windows-only dispatch
-# of the wheel workflow, which iterates on one row of a branch and would
-# otherwise leave a superseded ~2.3 GiB entry behind on every edit to a keyed
-# file. It prunes `--ref <that branch> --key-prefix superbuild-win_amd64-`, so
-# it can only ever delete the branch's own Windows entries, under the same
-# guard. The prefix must start with `superbuild-`: nothing else in the cache is
-# this script's business either.
+# avoided. Only refs/heads/main is listed.
 #
 # Run it with --dry-run to see what a push to main would delete. Needs a
 # GH_TOKEN with `actions: write` for anything else.
 set -euo pipefail
 
 usage() {
-  echo "usage: $0 VERSION INPUTS_HASH [--dry-run] [--ref REF] [--key-prefix PREFIX]" >&2
+  echo "usage: $0 VERSION INPUTS_HASH [--dry-run]" >&2
   exit 64
 }
 
@@ -48,30 +39,15 @@ usage() {
 # entry. `--dry-run 0.18.1 abc123` — the flag-first spelling of an interface
 # that takes the flag last — would otherwise make "--dry-run" the version and
 # delete the caches it was asked to preview.
-[[ $# -ge 2 ]] || usage
+[[ $# -ge 2 && $# -le 3 ]] || usage
+case "${3:-}" in
+  "") dry_run="" ;;
+  --dry-run) dry_run=1 ;;
+  *) usage ;;
+esac
+
 version="$1"
 inputs_hash="$2"
-shift 2
-dry_run=""
-ref=refs/heads/main
-key_prefix=superbuild-
-while (( $# > 0 )); do
-  case "$1" in
-    --dry-run) dry_run=1 ;;
-    --ref)
-      [[ $# -ge 2 && -n "$2" && "$2" != -* ]] || usage
-      ref="$2"
-      shift
-      ;;
-    --key-prefix)
-      [[ $# -ge 2 && "$2" == superbuild-* ]] || usage
-      key_prefix="$2"
-      shift
-      ;;
-    *) usage ;;
-  esac
-  shift
-done
 # Empty is the input CI can actually produce: `hashFiles` returns an empty
 # string when it matches no file. A leading dash is a misplaced flag.
 if [[ -z "$version" || -z "$inputs_hash" ]] \
@@ -80,22 +56,19 @@ if [[ -z "$version" || -z "$inputs_hash" ]] \
 fi
 
 current_suffix="-$version-$inputs_hash"
-echo "keeping every $key_prefix* cache on $ref ending in $current_suffix"
+echo "keeping every superbuild cache ending in $current_suffix"
 
 # --limit is well above what three platforms across a few versions produce.
 # It matters that it is: `gh cache list` sorts by last accessed, so a truncated
 # listing drops the least recently read entries — exactly the orphans this
 # exists to delete.
-listing=$(gh cache list --ref "$ref" --key "$key_prefix" --limit 1000 \
+listing=$(gh cache list --ref refs/heads/main --key superbuild- --limit 1000 \
   --json id,key --jq '.[] | [.id, .key] | @tsv')
 
 kept=0
 stale=()
 while IFS=$'\t' read -r id key; do
   [[ -n "$key" ]] || continue
-  # `gh cache list --key` already filters by prefix; this holds even if it
-  # someday matches more loosely.
-  [[ "$key" == "$key_prefix"* ]] || continue
   if [[ "$key" == *"$current_suffix" ]]; then
     echo "keeping $key"
     kept=$((kept + 1))

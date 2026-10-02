@@ -31,13 +31,11 @@ def fake_gh(tmp_path):
     listing = tmp_path / "caches.tsv"
     deleted = tmp_path / "deleted.txt"
     deleted.write_text("")
-    listed = tmp_path / "listed.txt"
     gh = bin_dir / "gh"
     gh.write_text(
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n"
         'if [[ "$2" == "list" ]]; then\n'
-        f'  echo "$*" > "{listed}"\n'
         f'  cat "{listing}"\n'
         'elif [[ "$2" == "delete" ]]; then\n'
         '  if [[ "$3" == "explode" ]]; then\n'
@@ -76,10 +74,6 @@ def fake_gh(tmp_path):
         @property
         def deleted(self):
             return deleted.read_text().split()
-
-        @property
-        def listed(self):
-            return listed.read_text().split()
 
     return Harness()
 
@@ -198,69 +192,6 @@ def test_a_misspelled_invocation_deletes_nothing(fake_gh, argv):
     fake_gh.caches(("1", X86), ("2", AARCH64))
 
     result = fake_gh.invoke(*argv, check=False)
-
-    assert result.returncode == 64
-    assert fake_gh.deleted == []
-
-
-WINDOWS = f"superbuild-win_amd64-{VERSION}-{INPUTS_HASH}"
-BRANCH = "refs/heads/feat/windows-wheel"
-
-
-def test_main_is_listed_by_default(fake_gh):
-    fake_gh.caches(("1", X86))
-
-    fake_gh.run()
-
-    assert fake_gh.listed[fake_gh.listed.index("--ref") + 1] == "refs/heads/main"
-    assert fake_gh.listed[fake_gh.listed.index("--key") + 1] == "superbuild-"
-
-
-def test_an_iteration_prunes_only_its_own_branch_and_platform(fake_gh):
-    """The Windows-only dispatch: a branch's superseded Windows entries go, and
-    nothing of another platform's is even a candidate, whatever the listing
-    hands back."""
-    fake_gh.caches(
-        ("1", WINDOWS),
-        ("2", f"superbuild-win_amd64-{VERSION}-oldhash"),
-        ("3", f"superbuild-manylinux_2_28_x86_64-{VERSION}-oldhash"),
-    )
-
-    fake_gh.run("--ref", BRANCH, "--key-prefix", "superbuild-win_amd64-")
-
-    assert fake_gh.listed[fake_gh.listed.index("--ref") + 1] == BRANCH
-    assert fake_gh.listed[fake_gh.listed.index("--key") + 1] == "superbuild-win_amd64-"
-    assert fake_gh.deleted == ["2"]
-
-
-def test_an_iteration_that_saved_nothing_deletes_nothing(fake_gh):
-    """A run that failed before its save leaves no entry for the current tree,
-    and the guard holds for the branch as it does for main."""
-    fake_gh.caches(("2", f"superbuild-win_amd64-{VERSION}-oldhash"))
-
-    result = fake_gh.run(
-        "--ref", BRANCH, "--key-prefix", "superbuild-win_amd64-", check=False
-    )
-
-    assert result.returncode == 1
-    assert fake_gh.deleted == []
-
-
-@pytest.mark.parametrize(
-    "extra",
-    [
-        ("--ref",),
-        ("--ref", "--dry-run"),
-        ("--key-prefix", "spike-windows-"),
-        ("--key-prefix",),
-    ],
-)
-def test_a_malformed_scope_deletes_nothing(fake_gh, extra):
-    """A missing value, or a prefix outside the superbuild caches, is a usage
-    error rather than a wider net."""
-    fake_gh.caches(("1", X86), ("2", "spike-windows-1"))
-
-    result = fake_gh.run(*extra, check=False)
 
     assert result.returncode == 64
     assert fake_gh.deleted == []

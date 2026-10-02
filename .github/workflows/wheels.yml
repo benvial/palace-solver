@@ -20,9 +20,9 @@ on:
       # is keyed on, so a full run would send all four rows cold and hold a
       # second generation of keys -- about 9 GiB more against the 10 GB cap --
       # for changes that cannot affect the other three. This builds the
-      # Windows row alone and prunes the branch's superseded Windows entries
-      # after it. It is not path-filter gating: pull requests and pushes always
-      # build every row.
+      # Windows row alone, replacing the branch's Windows entry rather than
+      # adding to it. It is not path-filter gating: pull requests and pushes
+      # always build every row.
       windows_only:
         description: "Build only the Windows row (iteration; never a release)"
         type: boolean
@@ -136,8 +136,17 @@ jobs:
     defaults:
       run:
         shell: bash
+    # actions: write is for one step, the iteration run's cache replacement
+    # below, and only that step is handed the token. The checkout does not
+    # persist it either, so nothing the build downloads and runs can reach it.
+    # A pull request from a fork gets a read-only token whatever this says.
+    permissions:
+      contents: read
+      actions: write
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       # The spike measured the build root at 2.3 GiB and D: is the runner's
       # scratch disk, whose size the image does not promise.
@@ -258,6 +267,33 @@ jobs:
           restore-keys: |
             superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
             superbuild-${{ env.PLATFORM_TAG }}-
+
+      # An iteration run that edited a keyed file restores the branch's previous
+      # Windows entry and will save one under the new key, and two ~2.2 GiB
+      # Windows entries on top of main's three are over the 10 GB cap -- where
+      # GitHub evicts the least recently read entry, which would be one of
+      # main's. So the superseded entry goes as soon as its tree is on disk,
+      # before anything is built. Exactly the key that was restored, and only
+      # if it is this branch's own: a restore that fell back to main's entry
+      # leaves it alone, and so does every run that is not an iteration run.
+      - name: Drop the superseded Windows entry this iteration run restored
+        if: >-
+          github.event_name == 'workflow_dispatch' && inputs.windows_only
+          && github.ref != 'refs/heads/main'
+          && steps.build-cache.outputs.cache-matched-key != ''
+          && steps.build-cache.outputs.cache-matched-key != steps.build-cache.outputs.cache-primary-key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MATCHED: ${{ steps.build-cache.outputs.cache-matched-key }}
+        run: |
+          owned=$(gh cache list --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF" --key "$MATCHED" \
+            --limit 100 --json key --jq '.[].key' | grep -Fx "$MATCHED" || true)
+          if [[ -z "$owned" ]]; then
+            echo "$MATCHED is not $GITHUB_REF's own entry; leaving it"
+            exit 0
+          fi
+          gh cache delete "$MATCHED" --repo "$GITHUB_REPOSITORY" --ref "$GITHUB_REF"
+          echo "deleted $MATCHED from $GITHUB_REF; this run saves its replacement"
 
       # The same script a developer runs locally, against the same image, with
       # the cache directory pointed at the one the restore just filled. CI
@@ -452,39 +488,6 @@ jobs:
           # would make every live entry look stale.
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
           scripts/prune-build-caches.sh "$version" "$INPUTS_HASH"
-
-  # The Windows-only dispatch's half of the same job. Each edit to a keyed file
-  # while iterating saves one more ~2.3 GiB Windows entry on the branch, and
-  # two of them on top of main's three push the repository over its 10 GB cap,
-  # where eviction takes whichever entry was read least recently -- possibly
-  # one of main's. So after every such run the branch keeps only the Windows
-  # entry for its current tree. The same script and the same guard as main's
-  # cleanup: if no entry matches the current tree, nothing is deleted.
-  #
-  # always(), because an iteration run is expected to fail -- often after
-  # saving the partial tree that the next one resumes from -- and the entry it
-  # superseded is stale either way. Never on main, whose entries are
-  # `cache-cleanup`'s alone.
-  iteration-cache-cleanup:
-    name: delete superseded Windows iteration caches
-    needs: [wheel]
-    if: >-
-      always() && github.event_name == 'workflow_dispatch' && inputs.windows_only
-      && github.ref != 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Delete this branch's superseded Windows superbuild caches
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
-        run: |
-          version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
-          scripts/prune-build-caches.sh "$version" "$INPUTS_HASH" \
-            --ref "$GITHUB_REF" --key-prefix superbuild-win_amd64-
 
   # The rehearsal. Everything a release does except which index it lands on,
   # run before the tag exists so that the problems which only appear at upload

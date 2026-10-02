@@ -388,36 +388,49 @@ def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, ro
     assert value == json.dumps(matrix.select(rows, "win_amd64"))
 
 
-@pytest.fixture(scope="module")
-def iteration_cleanup(workflow):
-    return workflow["jobs"]["iteration-cache-cleanup"]
+def _replacement(named_step):
+    return named_step("Drop the superseded Windows entry this iteration run restored")
 
 
-def test_the_iteration_cleanup_hashes_exactly_what_the_cache_key_hashes(
-    iteration_cleanup, build_cache
-):
-    """Same reason as main's cleanup: a divergent list makes the entry the run
-    just saved look stale."""
-    pruned = _hashed_files(
-        next(
-            step["env"]["INPUTS_HASH"]
-            for step in iteration_cleanup["steps"]
-            if "env" in step
-        )
+def test_an_iteration_run_replaces_its_entry_before_it_builds(steps, named_step):
+    """Deleting after the save is too late: for the length of the build the
+    branch holds two Windows entries, and with main's three that is over the
+    cap, where eviction takes one of main's."""
+    names = [step.get("name") for step in steps]
+    replace = names.index(_replacement(named_step)["name"])
+
+    assert names.index("Restore build cache") < replace
+    assert replace < names.index("Build Palace under MSYS2")
+
+
+def test_the_replacement_deletes_only_this_branchs_superseded_key(named_step):
+    replace = _replacement(named_step)
+
+    assert "inputs.windows_only" in replace["if"]
+    assert "github.ref != 'refs/heads/main'" in replace["if"]
+    assert (
+        "steps.build-cache.outputs.cache-matched-key != "
+        "steps.build-cache.outputs.cache-primary-key"
+    ) in replace["if"]
+    assert replace["env"]["MATCHED"] == (
+        "${{ steps.build-cache.outputs.cache-matched-key }}"
     )
+    assert 'gh cache delete "$MATCHED"' in replace["run"]
+    assert '--ref "$GITHUB_REF"' in replace["run"]
+    assert "--all" not in replace["run"]
 
-    assert pruned == _hashed_files(build_cache["with"]["key"])
 
+def test_only_the_replacement_step_is_handed_the_token(workflow, steps, named_step):
+    """The job needs actions: write for that step alone; the build runs code it
+    downloads, so the token is neither in its environment nor in .git/config."""
+    wheel = workflow["jobs"]["wheel"]
+    holders = [step for step in steps if "github.token" in str(step.get("env", {}))]
 
-def test_the_iteration_cleanup_never_touches_main_or_another_platform(
-    iteration_cleanup,
-):
-    script = "".join(step.get("run", "") for step in iteration_cleanup["steps"])
-
-    assert "github.ref != 'refs/heads/main'" in iteration_cleanup["if"]
-    assert "inputs.windows_only" in iteration_cleanup["if"]
-    assert '--ref "$GITHUB_REF"' in script
-    assert "--key-prefix superbuild-win_amd64-" in script
+    assert wheel["permissions"] == {"contents": "read", "actions": "write"}
+    assert holders == [_replacement(named_step)]
+    checkout = steps[0]
+    assert checkout["uses"].startswith("actions/checkout@")
+    assert checkout["with"]["persist-credentials"] is False
 
 
 def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
