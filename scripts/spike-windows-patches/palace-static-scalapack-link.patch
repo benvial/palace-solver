@@ -1,0 +1,17 @@
+diff --git a/palace/CMakeLists.txt b/palace/CMakeLists.txt
+index 89fdef2..4816f3a 100644
+--- a/palace/CMakeLists.txt
++++ b/palace/CMakeLists.txt
+@@ -521,6 +521,12 @@ if(PALACE_WITH_STRUMPACK OR PALACE_WITH_MUMPS)
+     add_library(SCALAPACK::SCALAPACK UNKNOWN IMPORTED)
+     set_target_properties(SCALAPACK::SCALAPACK PROPERTIES
+       IMPORTED_LOCATION "${SCALAPACK_LIBRARY}")
++    # A static ScaLAPACK records nothing of what it calls, so say it here, or the
++    # LAPACK/BLAS it needs can land before it on the link line.
++    if(SCALAPACK_LIBRARY MATCHES "${CMAKE_STATIC_LIBRARY_SUFFIX}$")
++      set_target_properties(SCALAPACK::SCALAPACK PROPERTIES
++        INTERFACE_LINK_LIBRARIES LAPACK::LAPACK)
++    endif()
+     message(STATUS "Found ScaLAPACK: ${SCALAPACK_LIBRARY}")
+   elseif(TARGET scalapack AND NOT TARGET SCALAPACK::SCALAPACK)
+     add_library(SCALAPACK::SCALAPACK ALIAS scalapack)

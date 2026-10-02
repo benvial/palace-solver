@@ -260,3 +260,13 @@ Failure classes, per ticket 06: **patch** (logged and counted), **pin bump**
   flags. In production this is one more platform in an existing branch,
   not a new deviation. Cost: every sub-project's configure command changes
   once, so this run reconfigures and relinks the stack.
+- **36943030981.** `-lzfp` resolves. The `palace.exe` link then fails with
+  about 80 undefined BLAS/LAPACK references, all from `libscalapack.a`. The
+  MFEM problem recurs in Palace's own link: its `find_library` branch
+  creates `SCALAPACK::SCALAPACK` as a bare `UNKNOWN IMPORTED` target, so
+  nothing places LAPACK after it. **Patch 7, part two
+  (`palace-static-scalapack-link.patch`):** when the library found is
+  static, the target gets `INTERFACE_LINK_LIBRARIES LAPACK::LAPACK`. MPI
+  already follows it (`${MPI_Fortran_LIBRARIES}`). Patch 7 is now one
+  finding with two halves, MFEM's and Palace's: Palace's CMake assumes a
+  shared ScaLAPACK. Not specific to Windows; worth sending upstream.
