@@ -242,7 +242,7 @@ def test_a_row_without_an_image_builds_on_the_runner(named_step):
 def test_the_windows_row_builds_under_msys2(named_step):
     """MSYS2's bash, not the job's Git for Windows bash: the driver needs its
     toolchain, make and POSIX python on PATH, and MSYSTEM set."""
-    build = named_step("Build Palace under MSYS2")
+    build = named_step("Build wheel under MSYS2")
 
     assert build["if"] == "runner.os == 'Windows'"
     assert build["shell"] == "msys2 {0}"
@@ -273,6 +273,8 @@ def test_the_steps_that_run_on_windows_do_not_call_python3(named_step):
     for name in (
         "Resolve Palace version and platform tag",
         "Check the build tree is readable before saving it",
+        "Check the wheel's metadata the way PyPI will",
+        "Report wheel size",
     ):
         assert "python3" not in named_step(name)["run"]
 
@@ -400,7 +402,7 @@ def test_an_iteration_run_replaces_its_entry_before_it_builds(steps, named_step)
     replace = names.index(_replacement(named_step)["name"])
 
     assert names.index("Restore build cache") < replace
-    assert replace < names.index("Build Palace under MSYS2")
+    assert replace < names.index("Build wheel under MSYS2")
 
 
 def test_the_replacement_deletes_only_this_branchs_superseded_key(named_step):
@@ -440,7 +442,11 @@ def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_st
     smoke = named_step("Smoke test in a clean virtual environment")
 
     assert "wheelhouse/*.whl" in smoke["run"]
-    for name in ("Build wheel in the container", "Build wheel on the runner"):
+    for name in (
+        "Build wheel in the container",
+        "Build wheel on the runner",
+        "Build wheel under MSYS2",
+    ):
         assert "OUTPUT_DIR" not in named_step(name).get("env", {})
 
 
@@ -457,10 +463,22 @@ def test_the_readability_guard_covers_every_row(named_step):
     assert "steps.cache-guard.outcome == 'success'" in save["if"]
 
 
+#: The smoke-and-interop ticket teaches both scripts the Windows wheel and
+#: removes the Windows condition these steps carry until then. Strict, so the
+#: tests that forbid a gate fail loudly the moment the gate is gone and the
+#: marker is left behind.
+UNTIL_WINDOWS_SMOKE = pytest.mark.xfail(
+    strict=True,
+    reason="smoke and interop skip Windows until the smoke-and-interop ticket",
+)
+
+
 @pytest.mark.parametrize(
     "name",
     [
-        "Smoke test in a clean virtual environment",
+        pytest.param(
+            "Smoke test in a clean virtual environment", marks=UNTIL_WINDOWS_SMOKE
+        ),
         "Report wheel size",
     ],
 )
@@ -496,6 +514,7 @@ def test_the_artifact_is_uploaded_for_every_row(steps):
     assert "if" not in upload
 
 
+@UNTIL_WINDOWS_SMOKE
 def test_every_row_proves_the_launcher(rows, named_step):
     """A platform that builds a wheel it cannot launch ranks with is not done,
     so this step runs everywhere rather than on the platforms that happened to
@@ -813,3 +832,20 @@ def test_the_pe_reader_the_tests_run_is_the_one_the_build_installs(workflow):
     }
     assert declared == {PEFILE_REQUIREMENT}
     assert f'"{PEFILE_REQUIREMENT}"' in install, install
+
+
+def test_only_windows_skips_the_smoke_and_interop_tests(named_step):
+    """The one gate the strict xfails above tolerate, and nothing wider."""
+    for name in (
+        "Smoke test in a clean virtual environment",
+        "Launcher interoperability",
+    ):
+        assert named_step(name)["if"] == "runner.os != 'Windows'"
+
+
+def test_the_size_summary_path_is_read_from_the_environment(named_step):
+    """Spliced into the Python source, a Windows path's `\\a` is a bell."""
+    run = named_step("Report wheel size")["run"]
+
+    assert "os.environ['GITHUB_STEP_SUMMARY']" in run
+    assert "${GITHUB_STEP_SUMMARY}" not in run

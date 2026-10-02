@@ -324,10 +324,9 @@ jobs:
       # rather than the job's, which on this runner is Git for Windows'; every
       # wheelbuild step inside it runs on the setup-python interpreter above,
       # which it finds through the pythonLocation that action exports. It ends
-      # at an installed, version-checked Palace: assembly, repair and the wheel
-      # are still to come, so the shared steps after the cache save fail on
-      # this row until they do.
-      - name: Build Palace under MSYS2
+      # at a repaired, link-checked win_amd64 wheel in wheelhouse/, as the
+      # other drivers do.
+      - name: Build wheel under MSYS2
         if: runner.os == 'Windows'
         shell: msys2 {0}
         run: scripts/build-windows.sh "$PALACE_VERSION"
@@ -402,14 +401,20 @@ jobs:
       # about this wheel.
       - name: Check the wheel's metadata the way PyPI will
         run: |
-          python3 -m pip install --upgrade "twine>=6.1"
-          python3 -m twine check --strict wheelhouse/*.whl
+          python -m pip install --upgrade "twine>=6.1"
+          python -m twine check --strict wheelhouse/*.whl
 
       # Run on the runner rather than back inside the build image, for the same
       # reason a user's machine is not a manylinux container: it proves the
       # wheel is self-contained outside the environment that produced it. It is
       # also the shape macOS has no choice about, so that row adds no step here.
+      #
+      # Not on Windows yet: both scripts are POSIX-only, and teaching them the
+      # Windows wheel is the smoke-and-interop ticket's work. That ticket
+      # removes this condition; the tests that require it gone are strict
+      # xfails until then.
       - name: Smoke test in a clean virtual environment
+        if: runner.os != 'Windows'
         run: |
           scripts/smoke-test.sh \
             "$(ls wheelhouse/*.whl)" \
@@ -419,12 +424,15 @@ jobs:
       # two ranks under both launchers, so collective communication is
       # exercised and the two results must agree.
       #
-      # Ungated, on every platform. The foreign launcher it pairs the wheel
+      # Ungated on Linux and macOS. The foreign launcher it pairs the wheel
       # with is the PyPI `mpich` wheel, which publishes a macosx_11_0_arm64
       # wheel for both the `mpich<5` series the vendored MPICH belongs to and
       # the `mpich>=5` one stage 4 reaches for -- so macOS needs no Homebrew
       # mpiexec and no source of its own.
+      #
+      # Not on Windows yet, for the same reason and until the same ticket.
       - name: Launcher interoperability
+        if: runner.os != 'Windows'
         run: |
           scripts/interop-test.sh \
             "$(ls wheelhouse/*.whl)" \
@@ -437,16 +445,20 @@ jobs:
       # same wheel first (`wheelbuild.assemble.verify_size`), so on a normal run
       # this never fires; it is here because this is the step that reports, and
       # a report that prints a verdict and exits 0 is a report nothing acts on.
+      #
+      # The summary path is read from the environment rather than spliced into
+      # the source: on Windows it is a backslashed path, and `\a` in a Python
+      # string literal is a bell.
       - name: Report wheel size
         run: |
-          python3 -c "
-          import pathlib, sys
+          python -c "
+          import os, pathlib, sys
           sys.path.insert(0, '.')
           from wheelbuild.assemble import size_report
           wheel = next(pathlib.Path('wheelhouse').glob('*.whl'))
           report = size_report(wheel)
           print(report.text)
-          pathlib.Path('${GITHUB_STEP_SUMMARY}').write_text(report.text + '\n')
+          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(report.text + '\n')
           sys.exit(1 if report.exceeds_pypi_limit else 0)
           "
 

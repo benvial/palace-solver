@@ -66,3 +66,30 @@ def test_the_script_is_checked_out_with_lf_line_endings():
 
     assert "*.sh text eol=lf" in attributes
     assert b"\r" not in SCRIPT.read_bytes()
+
+
+def test_the_wheel_is_repaired_then_noticed_then_assembled():
+    """The notices name the DLLs the repair copied and are packaged into the
+    wheel, so the repair has to come first and assembly last."""
+    script = _script()
+
+    repair = script.index("-m wheelbuild.pe_repair")
+    notices = script.index("-m wheelbuild.notices")
+    assemble = script.index("-m wheelbuild.assemble")
+    assert repair < notices < assemble
+    assert "--payload-dir" in script[notices:assemble]
+    assert "--msmpi-dir" in script[assemble:]
+    assert "--payload-dir" in script[assemble:]
+
+
+def test_the_payload_is_rebuilt_outside_the_build_root():
+    """Inside it, a stale DLL would be cached and restored with the tree."""
+    assert "-payload}" in _script()
+
+
+def test_the_rolling_gfortran_bridge_is_logged_by_package():
+    assert "pacman -Qo /ucrt64/bin/libmsmpifec.dll" in _script()
+
+
+def test_the_wheel_tools_install_the_pefile_the_tests_ran_against():
+    assert "PEFILE_REQUIREMENT" in _script()

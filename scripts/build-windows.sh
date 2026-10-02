@@ -26,6 +26,10 @@
 #   MSMPI_DIR    where the MS-MPI redistributable is fetched to (default
 #                <BUILD_ROOT>-msmpi). Outside the build root on purpose: it is
 #                fetched and hash-checked on every run, never cached.
+#   PAYLOAD_DIR  where the repair copies the wheel's DLLs (default
+#                <BUILD_ROOT>-payload). Outside the build root for the same
+#                reason: it is rebuilt from the closure on every run.
+#   OUTPUT_DIR   wheel output directory (default: <repo>/wheelhouse)
 #   CCACHE_DIR   ccache directory (default $BUILD_ROOT/ccache)
 #   CCACHE_MAXSIZE
 #                ccache size bound (default 2G), because this directory sits
@@ -66,6 +70,8 @@ wheelbuild_value() { wheelbuild "$@" | tr -d '\r'; }
 palace_version="${1:-$(wheelbuild_value -c 'import re,pathlib,sys; print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path(sys.argv[1]).read_text()).group(1).split(".post")[0])' "$(win "$repo_root/palace_solver/__init__.py")")}"
 build_root="$(cygpath -u "${BUILD_ROOT:-D:\\b}")"
 msmpi_dir="$(cygpath -u "${MSMPI_DIR:-$(cygpath -w "$build_root")-msmpi}")"
+payload_dir="$(cygpath -u "${PAYLOAD_DIR:-$(cygpath -w "$build_root")-payload}")"
+output_dir="$(cygpath -u "${OUTPUT_DIR:-$(cygpath -w "$repo_root")/wheelhouse}")"
 jobs="${JOBS:-$(nproc)}"
 CCACHE_DIR="$(win "${CCACHE_DIR:-$build_root/ccache}")"
 export CCACHE_DIR
@@ -272,3 +278,46 @@ if ! version="$(palace_reports "$binary")"; then
 fi
 echo "$version ($binary, $(stat -c %s "$binary") bytes)"
 echo "==> Palace is installed in $install_prefix"
+
+# MS-MPI's gfortran bridge is vendored but comes from MSYS2's rolling
+# mingw-w64-msmpi, unhashed (ADR-0007 §2), so the run names the package that
+# supplied it next to the full `pacman -Q` above.
+pacman -Qo /ucrt64/bin/libmsmpifec.dll
+
+echo "==> wheel tools"
+# Into the native CPython itself, not a venv: wheelbuild.assemble runs
+# `python -m build` and `wheel tags` by name, and a native Windows process
+# finds `python` in its own directory before anything on PATH. Its Scripts
+# directory goes on PATH for `wheel`, which MSYS2's minimal PATH leaves off.
+wheelbuild -m pip install --upgrade build wheel \
+  "$(wheelbuild_value -c 'from wheelbuild.link_check import PEFILE_REQUIREMENT; print(PEFILE_REQUIREMENT)')"
+python_dir="$(dirname "$PYTHON")"
+export PATH="$python_dir:$python_dir/Scripts:$PATH"
+
+echo "==> repair: the DLL closure, flat"
+# Before the wheel exists, unlike auditwheel and delocate: the notices below
+# are rendered from what this copies. See wheelbuild/pe_repair.py.
+wheelbuild -m wheelbuild.pe_repair \
+  --install-prefix "$(win "$install_prefix")" \
+  --msmpi-dir "$(win "$msmpi_dir")" \
+  --toolchain-dir "$(cygpath -m /ucrt64/bin)" \
+  --output-dir "$(win "$payload_dir")"
+
+echo "==> third-party notices"
+# The Linux driver's harvest less MPICH, which this wheel does not carry; the
+# Windows sections are chosen by the DLLs the repair copied.
+wheelbuild -m wheelbuild.notices \
+  --source-root "$(win "$superbuild_dir")" \
+  --source-root "$(win "$openblas_source")" \
+  --system Windows \
+  --payload-dir "$(win "$payload_dir")" \
+  --output "$(win "$build_root/THIRD-PARTY-NOTICES")"
+
+echo "==> wheel assembly, link check, retag"
+wheelbuild -m wheelbuild.assemble \
+  --project-dir "$(win "$repo_root")" \
+  --install-prefix "$(win "$install_prefix")" \
+  --output-dir "$(win "$output_dir")" \
+  --notices "$(win "$build_root/THIRD-PARTY-NOTICES")" \
+  --msmpi-dir "$(win "$msmpi_dir")" \
+  --payload-dir "$(win "$payload_dir")"
