@@ -25,19 +25,60 @@ should name it absolutely. The id is not a dependency, so it is read separately
 with ``otool -D`` and dropped -- by value rather than by position, so a binary
 that really does name another library's bundled copy is still reported.
 
+On Windows the evidence is the PE import table, and like an install name it is
+a *recorded* name rather than a resolution. It is read in-process with
+``pefile`` instead of by a platform tool, so the reader is chosen by the file's
+format rather than by the running platform: a Linux job can check a Windows
+payload, and the tests need no Windows. A DLL import is satisfied when the DLL
+sits beside the importer -- the flat layout, since an ``.exe`` has no RPATH and
+the loader searches the application's own directory first -- or when Windows
+itself ships it. Delay-loaded DLLs count: one is bound at its first call rather
+than at start-up, so a missing one is a crash deferred to whichever code path
+calls it first, which a smoke run may never take. The same walk, followed
+transitively and stopped at the system DLLs, is the closure the Windows repair
+copies (:func:`pe_import_closure`), so the repair and its check cannot disagree
+about what a DLL needs.
+
 Used by ``scripts/smoke-test.sh``, which has one payload and two platforms.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import platform
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from wheelbuild import platforms as platforms_module
+
+#: The pefile a build installs to read PE import tables, here so the Windows
+#: build driver installs the version the unit tests ran against from one
+#: spelling. Exact rather than a floor: pefile is a parser of hostile input
+#: that tightens its checks between releases, and a check that turns red needs
+#: a commit to blame. The ``dev`` extra and the checks job name the same pin.
+PEFILE_REQUIREMENT = "pefile==2024.8.26"
+
+#: API-set contracts. The loader resolves the name through the API-set schema
+#: on the running machine; it names a contract rather than a file, so no wheel
+#: can carry one. The UCRT's ``api-ms-win-crt-*`` is the set that matters here.
+_WINDOWS_API_SET_PREFIXES = ("api-ms-win-", "ext-ms-")
+
+#: System DLLs the shipped list leaves out because Windows 7 lacked them, which
+#: the wheel's Windows 10 floor guarantees: the UCRT's own implementation DLL.
+_WINDOWS_FLOOR_DLLS = frozenset({"ucrtbase.dll"})
+
+#: Every DLL present on every x64 Windows, from delvewheel; the file says where
+#: it came from and how to regenerate it.
+_WINDOWS_SYSTEM_DLL_LIST = (
+    Path(__file__).resolve().parent / "data" / "windows-system-dlls.txt"
+)
+
+#: Substrings that name an MPI library: MPICH's ``libmpi`` on Linux and macOS,
+#: MS-MPI's ``msmpi.dll`` on Windows.
+_MPI_LIBRARY_MARKERS = ("libmpi", "msmpi")
 
 #: Prefixes of the libraries macOS ships, which no wheel vendors and which are
 #: present on every machine. The same two directories ``delocate`` refuses to
@@ -73,9 +114,13 @@ class LinkReport:
         """Whether the binary links an MPI library at all.
 
         A Palace that links none is not a Palace that was built against the
-        vendored MPICH, whatever else the wheel carries.
+        vendored MPI, whatever else the wheel carries.
         """
-        return any("libmpi" in name for name in self.dependencies)
+        return any(
+            marker in name.lower()
+            for name in self.dependencies
+            for marker in _MPI_LIBRARY_MARKERS
+        )
 
     @property
     def text(self) -> str:
@@ -245,12 +290,199 @@ def _travels_with_the_wheel(install_name: str) -> bool:
     ) or install_name.startswith(_MACOS_SYSTEM_PREFIXES)
 
 
+class UnresolvedImportError(FileNotFoundError):
+    """A PE imports a DLL that is neither a system DLL nor anywhere searched."""
+
+
+def is_windows_system_dll(name: str) -> bool:
+    """Whether Windows itself provides the DLL a PE imports by ``name``.
+
+    An API-set contract (``api-ms-win-*``, ``ext-ms-*``), ``ucrtbase.dll``, or a
+    DLL every x64 Windows ships in ``System32``. The VC++ redistributables are
+    not system DLLs: a wheel vendors them or declares them.
+
+    Args:
+        name: The DLL name as recorded in an import table, in any case.
+
+    Returns:
+        True when no wheel should carry it.
+    """
+    lowered = name.lower()
+    return (
+        lowered.startswith(_WINDOWS_API_SET_PREFIXES)
+        or lowered in _WINDOWS_FLOOR_DLLS
+        or lowered in _windows_system_dlls()
+    )
+
+
+@functools.cache
+def _windows_system_dlls() -> frozenset[str]:
+    """Return the shipped list of System32 DLLs, read once."""
+    lines = _WINDOWS_SYSTEM_DLL_LIST.read_text(encoding="utf-8").splitlines()
+    return frozenset(
+        line.strip() for line in lines if line.strip() and not line.startswith("#")
+    )
+
+
+def pe_imports(binary: Path) -> tuple[str, ...]:
+    """Return the DLLs a PE file imports, delay-loaded ones included.
+
+    The one PE reader in this package: the link check reads one file's imports
+    with it, and :func:`pe_import_closure` follows them.
+
+    Names are as recorded, in table order, ordinary imports first. Each DLL is
+    named once, compared without regard to case as the Windows loader compares
+    them, so a DLL both imported and delay-loaded is one dependency.
+
+    Args:
+        binary: An executable or DLL.
+
+    Returns:
+        The imported DLL names.
+
+    Raises:
+        pefile.PEFormatError: If ``binary`` is not a PE file.
+    """
+    # Imported here rather than at the top: the Linux and macOS smoke tests run
+    # this module under a bare runner Python that has no reason to carry a PE
+    # parser, and reach none of this.
+    import pefile  # noqa: PLC0415
+
+    with pefile.PE(str(binary), fast_load=True) as image:
+        # Only the two import directories, and only the DLL names of the first:
+        # the solver is 93.5 MiB, and its symbol lists are not the question.
+        image.parse_data_directories(
+            directories=[
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_IMPORT"],
+                pefile.DIRECTORY_ENTRY["IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT"],
+            ],
+            import_dllnames_only=True,
+        )
+        entries = [
+            *getattr(image, "DIRECTORY_ENTRY_IMPORT", []),
+            *getattr(image, "DIRECTORY_ENTRY_DELAY_IMPORT", []),
+        ]
+    names: dict[str, str] = {}
+    for entry in entries:
+        name = entry.dll.decode("ascii", errors="replace")
+        names.setdefault(name.lower(), name)
+    return tuple(names.values())
+
+
+def pe_import_closure(
+    binaries: Iterable[Path], search_path: Sequence[Path]
+) -> tuple[Path, ...]:
+    """Return every non-system DLL ``binaries`` load, directly or through another.
+
+    The Windows repair copies exactly this, flat, beside the executables. The
+    walk reads each binary's imports with :func:`pe_imports`, stops at a system
+    DLL (:func:`is_windows_system_dll`), and looks every other name up in
+    ``search_path``, in order, the first directory holding the name winning as
+    the first ``PATH`` entry would. A DLL found is walked in turn.
+
+    Args:
+        binaries: The roots, such as the solver and the launcher executables.
+            They are walked but not returned.
+        search_path: Directories to find DLLs in, highest priority first: the
+            install prefix's, the toolchain's, the MS-MPI redistributable's.
+
+    Returns:
+        The DLL files found, each once, in the order the walk reached them.
+
+    Raises:
+        UnresolvedImportError: If any import is neither a system DLL nor in
+            ``search_path``, naming every such import and what imported it --
+            a repair that guessed Windows had it would ship a wheel that cannot
+            start.
+    """
+    available = _dll_index(search_path)
+    found: dict[str, Path] = {}
+    unresolved: list[str] = []
+    seen: set[str] = set()
+    queue = list(binaries)
+    while queue:
+        importer = queue.pop(0)
+        for name in pe_imports(importer):
+            key = name.lower()
+            if key in seen or is_windows_system_dll(name):
+                continue
+            seen.add(key)
+            location = available.get(key)
+            if location is None:
+                unresolved.append(f"{name} (imported by {importer.name})")
+                continue
+            found[key] = location
+            queue.append(location)
+    if unresolved:
+        searched = ", ".join(str(directory) for directory in search_path)
+        listed = "\n  ".join(unresolved)
+        raise UnresolvedImportError(
+            f"{len(unresolved)} DLLs are neither system DLLs nor in "
+            f"{searched}:\n  {listed}"
+        )
+    return tuple(found.values())
+
+
+def _dll_index(directories: Iterable[Path]) -> dict[str, Path]:
+    """Map each lowercased file name in ``directories`` to its first location.
+
+    Lowercased because the import table and the file system each have their own
+    idea of a DLL's case, and Windows honours neither; the closure has to agree
+    with Windows even when it runs on a case-sensitive file system.
+    """
+    index: dict[str, Path] = {}
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for child in sorted(directory.iterdir()):
+            if child.is_file():
+                index.setdefault(child.name.lower(), child)
+    return index
+
+
+def inspect_pe(binary: Path) -> LinkReport:
+    """Read a PE's imports and check each is beside it or part of Windows.
+
+    Args:
+        binary: An executable or DLL in the payload.
+
+    Returns:
+        The report.
+    """
+    dependencies = pe_imports(binary)
+    beside = _dll_index([binary.parent])
+    unsatisfied = tuple(
+        name
+        for name in dependencies
+        if not is_windows_system_dll(name) and name.lower() not in beside
+    )
+    return LinkReport(binary=binary, dependencies=dependencies, unsatisfied=unsatisfied)
+
+
+def _is_pe(path: Path) -> bool:
+    """Whether ``path`` is a PE file: a DOS stub pointing at a PE signature.
+
+    Both halves, because ``MZ`` alone is two printable letters a text file can
+    begin with.
+    """
+    with path.open("rb") as handle:
+        stub = handle.read(0x40)
+        if len(stub) < 0x40 or not stub.startswith(b"MZ"):
+            return False
+        handle.seek(int.from_bytes(stub[0x3C:0x40], "little"))
+        return handle.read(4) == b"PE\0\0"
+
+
 def inspect_binary(binary: Path, *, system: str | None = None) -> LinkReport:
-    """Run the platform's tool on ``binary`` and read its output.
+    """Read ``binary``'s dependencies and which of them the wheel satisfies.
+
+    A PE file is read in-process, wherever this runs; anything else is handed
+    to the running platform's tool.
 
     Args:
         binary: The packaged executable to inspect.
         system: ``platform.system()`` value; defaults to the running platform.
+            Not consulted for a PE file.
 
     Returns:
         The report.
@@ -259,6 +491,8 @@ def inspect_binary(binary: Path, *, system: str | None = None) -> LinkReport:
         platforms_module.UnsupportedPlatformError: For a platform with no tool
             here.
     """
+    if _is_pe(binary):
+        return inspect_pe(binary)
     identity = None
     id_command = identity_tool(system=system)
     if id_command is not None:
@@ -341,6 +575,10 @@ def _expand(paths: Sequence[Path]) -> list[Path]:
     shell glob that matches nothing would otherwise be passed through as a
     literal pattern and reported as a binary with no dependencies at all.
 
+    A PE file is recognised here rather than by ``is_native_binary``, whose
+    other callers pick the solver out of an ELF or Mach-O install prefix and
+    have no PE to ask about.
+
     Raises:
         FileNotFoundError: If a named path is neither a file nor a directory.
     """
@@ -351,7 +589,8 @@ def _expand(paths: Sequence[Path]) -> list[Path]:
                 sorted(
                     child
                     for child in path.iterdir()
-                    if child.is_file() and platforms_module.is_native_binary(child)
+                    if child.is_file()
+                    and (platforms_module.is_native_binary(child) or _is_pe(child))
                 )
             )
         elif path.is_file():

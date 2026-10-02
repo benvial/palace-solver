@@ -1,3 +1,4 @@
+import hashlib
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -5,6 +6,16 @@ from pathlib import Path
 import pytest
 
 from wheelbuild import notices
+
+
+@pytest.fixture(autouse=True)
+def _render_for_linux_by_default(monkeypatch):
+    """Rendering defaults to the host's platform; these tests name theirs.
+
+    A Windows host would otherwise render every test below for Windows, which
+    needs a payload the Linux and macOS cases do not pass.
+    """
+    monkeypatch.setattr(notices.platform, "system", lambda: "Linux")
 
 
 def _superbuild_tree(root: Path, licensed: dict[str, str]) -> Path:
@@ -450,3 +461,330 @@ def test_audit_refuses_a_vendored_file_whose_name_it_cannot_reduce(tmp_path):
 
     with pytest.raises(notices.UnattributedLibraryError, match="Python"):
         notices.audit_wheel(wheel=path, install_prefix=prefix)
+
+
+#: The DLL closure of the Windows solver, as the spike's flat wheel carried it:
+#: twelve DLLs beside the executables, under the toolchain's own names.
+_WINDOWS_VENDORED = (
+    "libceed.dll",
+    "libgcc_s_seh-1.dll",
+    "libgfortran-5.dll",
+    "libgomp-1.dll",
+    "libmsmpifec.dll",
+    "libopenblas.dll",
+    "libquadmath-0.dll",
+    "libstdc++-6.dll",
+    "libwinpthread-1.dll",
+    "libxsmm.dll",
+    "msmpi.dll",
+    "zlib1.dll",
+)
+
+#: The three of them the superbuild and the OpenBLAS build produce, which MinGW
+#: installs into ``bin`` rather than ``lib``.
+_WINDOWS_BUILT_HERE = ("libceed.dll", "libopenblas.dll", "libxsmm.dll")
+
+_WINDOWS_STEMS = [
+    "libceed",
+    "libgcc_s",
+    "libgfortran",
+    "libgomp",
+    "libmsmpifec",
+    "libopenblas",
+    "libquadmath",
+    "libstdc++",
+    "libwinpthread",
+    "libxsmm",
+    "msmpi",
+    "zlib1",
+]
+
+#: The section each library not built here gets in the Windows notices.
+_WINDOWS_SECTION_TITLES = {
+    "libgcc_s": "\nGCC runtime libraries (GPL-3.0",
+    "libmsmpifec": "\nlibmsmpifec (MIT, the gfortran bridge to MS-MPI)\n",
+    "libquadmath": "\nlibquadmath (LGPL, vendored where the payload links it)\n",
+    "libwinpthread": "\nlibwinpthread (MIT and BSD-3-Clause",
+    "msmpi": "\nMicrosoft MPI: msmpi.dll, mpiexec.exe, smpd.exe",
+    "zlib1": "\nzlib1 (zlib, vendored from the build toolchain)\n",
+}
+
+_WINDOWS_WHEEL = "palace_solver-0.18.1-py3-none-win_amd64.whl"
+
+
+def _windows_notices(tmp_path: Path, vendored: Sequence[str]) -> str:
+    return notices.render(
+        [_full_tree(tmp_path / "build")],
+        gcc_version="15.2.0",
+        system="Windows",
+        vendored=[notices.library_stem(name) for name in vendored],
+    )
+
+
+def _windows_wheel_carrying(
+    path: Path, vendored: Sequence[str], *, notices_text: str | None = None
+) -> Path:
+    """Write a wheel shaped the way the Windows repair leaves one.
+
+    The DLLs lie flat beside the executables in the package's ``bin``, with
+    MS-MPI's launcher and process manager, which no repair copies.
+    """
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("palace_solver/__init__.py", "")
+        for name in ("palace-real.exe", "mpiexec.exe", "smpd.exe", *vendored):
+            archive.writestr(f"palace_solver/bin/{name}", "MZ")
+        if notices_text is not None:
+            archive.writestr("palace_solver/THIRD-PARTY-NOTICES", notices_text)
+    return path
+
+
+def _windows_prefix(root: Path) -> Path:
+    (root / "lib").mkdir(parents=True)
+    (root / "lib" / "libopenblas.dll.a").write_text("")
+    (root / "bin").mkdir()
+    for name in (*_WINDOWS_BUILT_HERE, "palace.exe"):
+        (root / "bin" / name).write_text("")
+    return root
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [
+        # MinGW's libtool puts the DLL version after a hyphen.
+        ("libgfortran-5.dll", "libgfortran"),
+        ("libstdc++-6.dll", "libstdc++"),
+        ("libquadmath-0.dll", "libquadmath"),
+        ("libwinpthread-1.dll", "libwinpthread"),
+        # libgcc_s also names its exception model.
+        ("libgcc_s_seh-1.dll", "libgcc_s"),
+        ("libopenblas.dll", "libopenblas"),
+        ("msmpi.dll", "msmpi"),
+        # zlib's own Windows name, whose 1 is not a libtool version.
+        ("zlib1.dll", "zlib1"),
+        ("MSMPI.DLL", "msmpi"),
+    ],
+)
+def test_library_stem_reduces_windows_dll_names(name, expected):
+    assert notices.library_stem(name) == expected
+
+
+def test_vendored_libraries_reads_the_flat_windows_layout(tmp_path):
+    """The DLLs beside the executables count; the executables do not."""
+    wheel = _windows_wheel_carrying(tmp_path / _WINDOWS_WHEEL, _WINDOWS_VENDORED)
+
+    assert notices.vendored_libraries(wheel) == _WINDOWS_STEMS
+
+
+def test_payload_libraries_names_the_dlls_the_repair_copied(tmp_path):
+    payload = tmp_path / "bin"
+    payload.mkdir()
+    for name in (*_WINDOWS_VENDORED, "palace-real.exe", "mpiexec.exe"):
+        (payload / name).write_text("")
+
+    assert notices.payload_libraries(payload) == _WINDOWS_STEMS
+
+
+def test_audit_accounts_for_every_dll_the_windows_wheel_carries(tmp_path):
+    """The twelve DLLs of the spike's closure, against notices rendered from them."""
+    wheel = _windows_wheel_carrying(
+        tmp_path / _WINDOWS_WHEEL,
+        _WINDOWS_VENDORED,
+        notices_text=_windows_notices(tmp_path, _WINDOWS_VENDORED),
+    )
+    prefix = _windows_prefix(tmp_path / "install")
+
+    assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == _WINDOWS_STEMS
+
+
+def test_windows_notices_give_each_vendored_library_one_section(tmp_path):
+    text = _windows_notices(tmp_path, _WINDOWS_VENDORED)
+
+    for title in _WINDOWS_SECTION_TITLES.values():
+        assert text.count(title) == 1, title
+    gpl_note = text.split("GCC runtime libraries (GPL-3.0")[1].split(
+        "GCC Runtime Library Exception 3.1"
+    )[0]
+    for library in ("libgcc_s", "libgfortran", "libgomp", "libstdc++"):
+        assert library in gpl_note
+    assert "mingw-w64 runtime (linked statically" in text
+    assert "MinGW-w64 runtime licensing" in text
+    # Linux's, through hwloc, and absent from the Windows payload.
+    assert "libpciaccess" not in text
+
+
+def test_windows_notices_write_nothing_for_a_library_the_payload_lacks(tmp_path):
+    lacking = {"zlib1.dll", "libquadmath-0.dll", "libwinpthread-1.dll"}
+
+    text = _windows_notices(
+        tmp_path, [name for name in _WINDOWS_VENDORED if name not in lacking]
+    )
+
+    assert "zlib1" not in text
+    assert "libquadmath" not in text
+    assert "libwinpthread" not in text
+    assert "GNU LESSER GENERAL PUBLIC LICENSE" not in text
+    assert text.count(_WINDOWS_SECTION_TITLES["libmsmpifec"]) == 1
+
+
+def test_windows_notices_flag_the_ms_mpi_files_as_microsofts(tmp_path):
+    text = _windows_notices(tmp_path, _WINDOWS_VENDORED)
+
+    note = text.split(_WINDOWS_SECTION_TITLES["msmpi"])[1].split(
+        "Microsoft MPI Redistributable license terms"
+    )[0]
+    assert "not under this package's license" in note
+    assert "MICROSOFT SOFTWARE LICENSE TERMS" in text
+    assert "MICROSOFT MPI Redistributable" in text
+    assert "THIRD PARTY SOFTWARE NOTICES AND INFORMATION" in text
+    # The header says so before any section does.
+    header = text.split("\n---")[0]
+    assert "under Microsoft's license terms, not this package's" in " ".join(
+        header.split()
+    )
+
+
+def test_windows_harvest_does_not_require_mpich(tmp_path):
+    """MPICH has no Windows port; MS-MPI is noticed from Microsoft's texts."""
+    without_mpich = {
+        name: f"{name} license text"
+        for name in notices.REQUIRED_DEPENDENCIES
+        if name != "mpich"
+    }
+    superbuild = _superbuild_tree(tmp_path / "superbuild", without_mpich)
+
+    text = notices.render(
+        [superbuild], system="Windows", vendored=["msmpi", "libopenblas"]
+    )
+
+    assert "Microsoft MPI third-party notices" in text
+
+
+def test_windows_rendering_needs_the_payload(tmp_path):
+    with pytest.raises(ValueError, match="payload"):
+        notices.render([_full_tree(tmp_path / "build")], system="Windows")
+
+
+def test_windows_rendering_refuses_a_payload_with_no_dll(tmp_path):
+    with pytest.raises(notices.NoVendoredLibrariesError):
+        notices.render([_full_tree(tmp_path / "build")], system="Windows", vendored=[])
+
+
+def test_audit_fails_on_a_windows_wheel_that_carries_no_dll(tmp_path):
+    """The vacuous pass the macOS audit once made, refused on Windows."""
+    wheel = _windows_wheel_carrying(tmp_path / _WINDOWS_WHEEL, [], notices_text="")
+    prefix = _windows_prefix(tmp_path / "install")
+
+    with pytest.raises(notices.NoVendoredLibrariesError, match="no DLL"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_audit_fails_when_windows_notices_came_from_another_payload(tmp_path):
+    """Notices rendered without zlib1 cannot ship in a wheel that carries it."""
+    rendered_without_zlib = _windows_notices(
+        tmp_path, [name for name in _WINDOWS_VENDORED if name != "zlib1.dll"]
+    )
+    wheel = _windows_wheel_carrying(
+        tmp_path / _WINDOWS_WHEEL, _WINDOWS_VENDORED, notices_text=rendered_without_zlib
+    )
+    prefix = _windows_prefix(tmp_path / "install")
+
+    with pytest.raises(notices.UnattributedLibraryError, match="zlib1"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_audit_fails_on_an_unaccounted_windows_dll(tmp_path):
+    """msmpires.dll is deliberately not shipped; if it arrives, it has no notice."""
+    vendored = [*_WINDOWS_VENDORED, "msmpires.dll"]
+    wheel = _windows_wheel_carrying(
+        tmp_path / _WINDOWS_WHEEL,
+        vendored,
+        notices_text=_windows_notices(tmp_path, vendored),
+    )
+    prefix = _windows_prefix(tmp_path / "install")
+
+    with pytest.raises(notices.UnattributedLibraryError, match="msmpires"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_windows_runtime_libraries_are_not_covered_on_linux(tmp_path):
+    """A Linux wheel never ships their texts, so it cannot borrow the coverage."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-manylinux_2_28_x86_64.whl",
+        ["libwinpthread-1a2b3c4d.so.1"],
+    )
+    prefix = _install_prefix(tmp_path / "install", [])
+
+    with pytest.raises(notices.UnattributedLibraryError, match="libwinpthread"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)
+
+
+def test_linux_and_macos_notices_carry_no_windows_text(tmp_path):
+    source_root = _full_tree(tmp_path / "build")
+
+    linux = notices.render([source_root], system="Linux")
+    macos = notices.render([source_root], system="Darwin")
+
+    assert linux == macos
+    for text in (linux, macos):
+        assert "Microsoft" not in text
+        assert "mingw-w64" not in text
+        assert "libpciaccess (vendored from the build image" in text
+
+
+def test_each_windows_runtime_library_is_pinned_to_its_own_license():
+    assert notices.WINDOWS_RUNTIME_LIBRARIES == {
+        "libmsmpifec": "MIT",
+        "libwinpthread": "MIT AND BSD-3-Clause",
+        "msmpi": "LicenseRef-Microsoft-MPI-Redistributable",
+        "zlib1": "Zlib",
+    }
+
+
+def test_ms_mpi_third_party_notices_are_microsofts_file_unchanged():
+    """The SHA-256 of MPI_Redistributables_TPN.txt in msmpisetup.exe 10.1.12498.52.
+
+    The same value as ``wheelbuild.msmpi.MICROSOFT_TEXTS`` records for the file the
+    MS-MPI fetch checks inside the x64 MSI; this should read it from there once
+    both are on ``main``. The license terms are committed converted from their
+    RTF, so their source hash is recorded beside the path in ``notices`` rather
+    than tested here.
+    """
+    shipped = Path(notices.__file__).parent / "data" / "MPI_Redistributables_TPN.txt"
+
+    assert (
+        hashlib.sha256(shipped.read_bytes()).hexdigest()
+        == "e202e6c77b4ecb7be69e39d647be54bb5d076d90522e533d11dbaaacd618d7f8"
+    )
+
+
+def _cli_arguments(tmp_path: Path) -> list[str]:
+    return [
+        "--source-root",
+        str(_full_tree(tmp_path / "build")),
+        "--output",
+        str(tmp_path / "NOTICES"),
+        "--gcc-version",
+        "15.2.0",
+        "--system",
+        "Windows",
+    ]
+
+
+def test_cli_requires_the_payload_for_a_windows_wheel(tmp_path):
+    with pytest.raises(SystemExit) as exit_info:
+        notices.main(_cli_arguments(tmp_path))
+
+    assert exit_info.value.code == 2
+
+
+def test_cli_renders_the_windows_notices_from_the_payload_dir(tmp_path):
+    payload = tmp_path / "payload"
+    payload.mkdir()
+    for name in _WINDOWS_VENDORED:
+        (payload / name).write_text("")
+
+    notices.main([*_cli_arguments(tmp_path), "--payload-dir", str(payload)])
+
+    text = (tmp_path / "NOTICES").read_text()
+    for title in _WINDOWS_SECTION_TITLES.values():
+        assert text.count(title) == 1, title

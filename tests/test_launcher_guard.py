@@ -288,3 +288,285 @@ def test_a_rank_reads_the_process_that_launched_it():
     ).stdout.strip()
 
     assert Path(reported) == _launcher.process_executable(os.getpid())
+
+
+# Windows. Every test below runs on every platform: the platform is passed in
+# as ``system`` and the Windows process readers are stubbed, so none of the
+# ctypes calls they make is reached off Windows.
+
+WINDOWS = "win32"
+SMPD = Path(r"C:\Users\me\venv\Lib\site-packages\palace_solver\bin\smpd.exe")
+# Intel MPI's Hydra proxy: the Hydra-family launcher a Windows user may have.
+INTEL_PROXY = Path(
+    r"C:\Program Files (x86)\Intel\oneAPI\mpi\latest\bin\hydra_pmi_proxy.exe"
+)
+CMD = Path(r"C:\Windows\System32\cmd.exe")
+# What MS-MPI's smpd hands each rank it starts.
+MSMPI_RANK_ENVIRONMENT = {
+    "PMI_KVS": "{2b3c1f9e-0d7a-4e57-9a43-5a1c0f6e7d21}",
+    "PMI_DOMAIN": "{8f6f2a0e-5b8f-4b4e-a2b6-0c4d1d2e9a11}",
+    "PMI_PORT": "{6b1f2e3d-9c8a-4f7e-b6d5-4c3b2a190807}",
+    "PMI_RANK": "1",
+    "PMI_SIZE": "2",
+    "PMI_SMPD_KEY": "1",
+    "MSMPI_LOCAL_ONLY": "1",
+}
+# The spike's reproduction on a windows-2025 runner: the binary, given these
+# and no PMI_KVS, ran as a silent singleton and exited 0.
+SPIKE_REPRODUCTION = {"PMI_RANK": "1", "PMI_SIZE": "2"}
+
+
+def test_the_posix_rendezvous_set_is_unchanged():
+    expected = (
+        "PMI_FD",
+        "PMI_PORT",
+        "PMI_RANK",
+        "PMIX_RANK",
+        "PMIX_NAMESPACE",
+        "PMIX_SERVER_URI",
+        "OMPI_COMM_WORLD_RANK",
+    )
+
+    assert expected == _launcher.RENDEZVOUS_VARIABLES
+    assert _launcher.rendezvous_variables(system="linux") == expected
+    assert _launcher.rendezvous_variables(system="darwin") == expected
+
+
+def test_on_windows_the_rendezvous_is_pmi_kvs_alone():
+    assert _launcher.rendezvous_variables(system=WINDOWS) == ("PMI_KVS",)
+    assert _launcher.has_rendezvous({"PMI_KVS": "{guid}"}, system=WINDOWS)
+
+
+def test_on_windows_what_a_hydra_launcher_sets_is_no_rendezvous():
+    # MS-MPI's PMI client reads PMI_KVS alone, so everything a Hydra-family
+    # launcher sets still leaves each rank a singleton.
+    hydra = {"PMI_RANK": "0", "PMI_SIZE": "2", "PMI_FD": "5", "PMI_PORT": "1:2"}
+
+    assert not _launcher.has_rendezvous(hydra, system=WINDOWS)
+    assert _launcher.has_rendezvous(hydra, system="linux")
+
+
+def test_smpd_is_a_process_manager():
+    assert "smpd" in _launcher.PROCESS_MANAGERS
+    assert _launcher.launched_by_process_manager(SMPD, system=WINDOWS)
+
+
+def test_on_windows_a_parent_is_named_without_its_exe_and_in_any_case():
+    assert _launcher.launched_by_process_manager(INTEL_PROXY, system=WINDOWS)
+    assert _launcher.launched_by_process_manager(
+        Path(r"C:\MPI\BIN\SMPD.EXE"), system=WINDOWS
+    )
+    assert not _launcher.launched_by_process_manager(CMD, system=WINDOWS)
+    assert not _launcher.launched_by_process_manager(None, system=WINDOWS)
+
+
+def test_on_posix_a_parent_name_is_still_compared_exactly():
+    for name in ("smpd.exe", "MPIEXEC", "hydra_pmi_proxy.exe"):
+        assert not _launcher.launched_by_process_manager(
+            Path("/opt/mpi/bin") / name, system="linux"
+        )
+
+
+def test_a_foreign_hydra_launch_on_windows_is_refused():
+    # The regression case: PMI_RANK without PMI_KVS, under a Hydra proxy.
+    reason = _launcher.refusal_reason(SPIKE_REPRODUCTION, INTEL_PROXY, system=WINDOWS)
+
+    assert reason is not None
+    assert "PMI_KVS" in reason
+    assert "palace-mpiexec" in reason
+    assert _launcher.OVERRIDE_ENV in reason
+
+
+def test_the_same_launch_on_posix_is_still_let_through():
+    assert _launcher.refusal_reason(SPIKE_REPRODUCTION, PROXY, system="linux") is None
+
+
+def test_the_override_lets_a_foreign_launch_through_on_windows():
+    environ = dict(SPIKE_REPRODUCTION, **{_launcher.OVERRIDE_ENV: "1"})
+
+    assert _launcher.refusal_reason(environ, INTEL_PROXY, system=WINDOWS) is None
+
+
+def test_ranks_of_ms_mpis_launcher_are_let_through():
+    assert (
+        _launcher.refusal_reason(MSMPI_RANK_ENVIRONMENT, SMPD, system=WINDOWS) is None
+    )
+
+
+def test_an_smpd_rank_without_pmi_kvs_is_refused():
+    environ = dict(MSMPI_RANK_ENVIRONMENT)
+    del environ["PMI_KVS"]
+
+    assert _launcher.refusal_reason(environ, SMPD, system=WINDOWS) is not None
+
+
+def test_a_direct_run_on_windows_is_never_refused():
+    # A PMI_RANK set by hand in a shell is no launcher's doing.
+    assert _launcher.refusal_reason(SPIKE_REPRODUCTION, CMD, system=WINDOWS) is None
+    assert _launcher.refusal_reason({}, None, system=WINDOWS) is None
+
+
+def test_no_launcher_is_probed_for_its_version_on_windows():
+    probed = []
+
+    note = _launcher.version_note(
+        INTEL_PROXY,
+        vendored_bin=SMPD.parent,
+        probe=probed.append,
+        system=WINDOWS,
+    )
+
+    assert note is None
+    assert probed == []
+
+
+def test_on_windows_a_process_is_read_through_the_windows_reader(monkeypatch):
+    monkeypatch.setattr(_launcher, "_windows_executable", lambda _: SMPD)
+    monkeypatch.setattr(_launcher, "_proc_executable", lambda _: pytest.fail("/proc"))
+
+    assert _launcher.process_executable(42, system=WINDOWS) == SMPD
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the real readers answer here")
+def test_off_windows_the_windows_readers_answer_nothing():
+    # They are stand-ins there, so asking about real processes as if this were
+    # Windows reads nothing and raises nothing.
+    assert _launcher.process_executable(os.getpid(), system=WINDOWS) is None
+    assert _launcher.parent_executable(system=WINDOWS) is None
+
+
+@pytest.fixture
+def windows_process(tmp_path, monkeypatch):
+    """Stand in for this process's view of a Windows process tree.
+
+    Returns a function taking the tree as ``{pid: (executable, parent pid)}``
+    and this process's parent pid. The console script's stub, a venv's
+    ``python.exe`` redirector and the base interpreter this process runs are
+    real files, so that a path compares as Windows compares it.
+    """
+    scripts = tmp_path / "venv" / "Scripts"
+    base = tmp_path / "Python313"
+    for directory in (scripts, base):
+        directory.mkdir(parents=True)
+    paths = {
+        "stub": scripts / "palace.exe",
+        "redirector": scripts / "python.exe",
+        "base": base / "python.exe",
+    }
+    for path in paths.values():
+        path.write_text(path.name)
+    monkeypatch.setattr(_launcher.sys, "argv", [str(paths["stub"]), "config.json"])
+    monkeypatch.setattr(_launcher.sys, "executable", str(paths["redirector"]))
+
+    def install(table, parent_pid, image=paths["base"]):
+        table = {os.getpid(): (image, parent_pid), **table}
+        monkeypatch.setattr(_launcher.os, "getppid", lambda: parent_pid)
+        monkeypatch.setattr(
+            _launcher,
+            "_windows_executable",
+            lambda pid: table[pid][0] if pid in table else None,
+        )
+        monkeypatch.setattr(
+            _launcher,
+            "_windows_parent_pid",
+            lambda pid: table[pid][1] if pid in table else None,
+        )
+
+    install.paths = paths
+    return install
+
+
+def test_on_windows_the_parent_is_read_past_the_console_script_stub(windows_process):
+    # Outside a venv: smpd -> palace.exe (the stub) -> python (this process).
+    paths = windows_process.paths
+    windows_process(
+        {10: (paths["stub"], 5), 5: (SMPD, 1)},
+        parent_pid=10,
+        image=paths["redirector"],
+    )
+
+    assert _launcher.parent_executable(system=WINDOWS) == SMPD
+
+
+def test_on_windows_the_parent_is_read_past_a_venv_redirector(windows_process):
+    # In a venv: hydra proxy -> palace.exe -> python.exe redirector -> base python.
+    paths = windows_process.paths
+    windows_process(
+        {20: (paths["redirector"], 10), 10: (paths["stub"], 5), 5: (INTEL_PROXY, 1)},
+        parent_pid=20,
+    )
+
+    assert _launcher.parent_executable(system=WINDOWS) == INTEL_PROXY
+
+
+def test_on_windows_another_python_program_is_a_parent_like_any_other(
+    windows_process, monkeypatch
+):
+    # Outside a venv a Python program that runs this one shares its
+    # interpreter, and is not one of its launchers.
+    paths = windows_process.paths
+    monkeypatch.setattr(_launcher.sys, "argv", ["-c"])
+    windows_process(
+        {10: (paths["redirector"], 5), 5: (SMPD, 1)},
+        parent_pid=10,
+        image=paths["redirector"],
+    )
+
+    assert _launcher.parent_executable(system=WINDOWS) == paths["redirector"]
+
+
+def test_on_windows_a_parent_that_is_not_ours_is_reported_as_it_is(windows_process):
+    windows_process({10: (CMD, 5)}, parent_pid=10)
+
+    assert _launcher.parent_executable(system=WINDOWS) == CMD
+
+
+def test_on_windows_a_stub_named_another_way_is_still_recognised(
+    tmp_path, windows_process, monkeypatch
+):
+    # QueryFullProcessImageNameW gives the long name where sys.argv[0] may hold
+    # an 8.3 short one; both name one file. A link stands in for the alias.
+    paths = windows_process.paths
+    alias = tmp_path / "PALACE~1.EXE"
+    try:
+        alias.symlink_to(paths["stub"])
+    except OSError:
+        pytest.skip("this account may not create symbolic links")
+    monkeypatch.setattr(_launcher.sys, "argv", [str(alias)])
+    windows_process({10: (paths["stub"], 5), 5: (SMPD, 1)}, parent_pid=10)
+
+    assert _launcher.parent_executable(system=WINDOWS) == SMPD
+
+
+def test_on_windows_an_ancestor_that_cannot_be_read_is_no_parent(windows_process):
+    windows_process({10: (windows_process.paths["stub"], None)}, parent_pid=10)
+
+    assert _launcher.parent_executable(system=WINDOWS) is None
+
+
+def test_on_windows_the_walk_up_is_bounded(windows_process):
+    # Past a stub and a redirector the walk stops and reports what it finds
+    # rather than climbing any further.
+    paths = windows_process.paths
+    windows_process(
+        {
+            30: (paths["redirector"], 20),
+            20: (paths["stub"], 10),
+            10: (paths["redirector"], 5),
+            5: (SMPD, 1),
+        },
+        parent_pid=30,
+    )
+
+    assert _launcher.parent_executable(system=WINDOWS) == paths["redirector"]
+
+
+def test_on_posix_the_parent_read_never_asks_windows(monkeypatch):
+    def refuse(_):
+        pytest.fail("asked Windows")
+
+    monkeypatch.setattr(_launcher, "_windows_executable", refuse)
+    monkeypatch.setattr(_launcher, "_windows_parent_pid", refuse)
+
+    _launcher.parent_executable(system="linux")
+    _launcher.parent_executable(system="darwin")
