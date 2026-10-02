@@ -44,6 +44,20 @@ THIRD-PARTY-NOTICES is a claim about the payload that is not true. ``libomp``
 is absent from :data:`COMPILER_RUNTIME_LIBRARIES` for the same reason, so a
 toolchain change that vendors it fails the audit and whoever makes that change
 writes the note then.
+
+Windows is a third layout and a different MPI. Its repair copies the solver's
+DLL closure flat into the directory beside the executables, under the names the
+toolchain gave them, so a vendored library there is recognised by its ``.dll``
+suffix rather than by its directory. The MPI is Microsoft's MS-MPI, shipped as
+Microsoft built it and under Microsoft's license terms rather than this
+package's, so its notice is those terms and Microsoft's third-party notices,
+flagged as applying to the MS-MPI files alone; MPICH is not built there and is
+not required of the harvest. The mingw-w64 runtime is linked statically into
+every Windows binary and owes its notice although no file of it is vendored.
+Because that repair is this project's own copy rather than a tool run after the
+harvest, what it copies is known before the harvest runs, so on Windows the
+notices are rendered from the payload and name only what it carries, and the
+audit checks the shipped notices against the wheel.
 """
 
 from __future__ import annotations
@@ -51,11 +65,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import platform
 import re
 import subprocess
 import sys
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Collection, Sequence
 from fnmatch import fnmatch
 from pathlib import Path
 
@@ -78,6 +93,13 @@ REQUIRED_DEPENDENCIES = (
     "sundials",
     "superlu",
     "zfp",
+)
+
+#: The dependencies required of the Windows harvest. MPICH has no Windows port,
+#: so the Windows wheel vendors MS-MPI instead, which is not built here and is
+#: noticed from Microsoft's own texts in ``data``.
+WINDOWS_REQUIRED_DEPENDENCIES = tuple(
+    name for name in REQUIRED_DEPENDENCIES if name != "mpich"
 )
 
 #: Where the CeCILL-C obligation's "corresponding sources" pointer aims.
@@ -126,6 +148,22 @@ SYSTEM_LIBRARY_LICENSES = {
     "libpciaccess": "libpciaccess-COPYING.txt",
 }
 
+#: Libraries only the Windows wheel vendors beyond the GCC runtime, under the
+#: name :func:`library_stem` reduces them to, mapped to the license each is
+#: noticed under. ``msmpi`` is Microsoft's MPI runtime, under Microsoft's
+#: Redistributable license terms; ``libmsmpifec`` is the gfortran bridge to it,
+#: which MSYS2's ``mingw-w64-msmpi`` builds and distributes under the MIT
+#: license; ``libwinpthread`` is mingw-w64's POSIX threads library, which the
+#: GCC runtime links; ``zlib1`` is the toolchain's zlib, which Palace's
+#: ``find_package(ZLIB)`` finds there. They count as covered only in a Windows
+#: wheel, whose notices are the only ones that carry their texts.
+WINDOWS_RUNTIME_LIBRARIES = {
+    "libmsmpifec": "MIT",
+    "libwinpthread": "MIT AND BSD-3-Clause",
+    "msmpi": "LicenseRef-Microsoft-MPI-Redistributable",
+    "zlib1": "Zlib",
+}
+
 #: Where a repair tool leaves what it copied, as a suffix of the directory
 #: name. ``auditwheel`` writes ``palace_solver.libs`` beside the package and
 #: ``delocate`` writes ``.dylibs`` inside it, so neither ends with the other's
@@ -137,6 +175,11 @@ SYSTEM_LIBRARY_LICENSES = {
 #: already carries the ``macosx`` tag, it is the smoke test's link check, which
 #: reads the payload's install names and is handed a vendor directory that is
 #: not there.
+#:
+#: The Windows repair has no such directory: it copies the DLLs beside the
+#: executables that import them, since Windows has no RPATH to point them
+#: elsewhere. There the suffix is what marks a vendored library, and a Windows
+#: wheel that carries no DLL fails the audit rather than passing on nothing.
 _VENDOR_DIRECTORIES = (".libs", ".dylibs")
 
 #: File names that hold a license or copyright notice.
@@ -155,6 +198,30 @@ _GPL_3_TEXT = _DATA / "GPL-3.0.txt"
 _GCC_EXCEPTION_TEXT = _DATA / "GCC-Runtime-Library-Exception-3.1.txt"
 _LGPL_2_1_TEXT = _DATA / "LGPL-2.1.txt"
 
+# The Windows texts. Microsoft's two come from the x64 MSI inside msmpisetup.exe
+# 10.1.12498.52, the MS-MPI 10.1.3 redistributable, SHA-256
+# 47443829114d8d8670f77af98939fe876d33eceb35d0ce4e0e85efeec4d87213.
+# MPI_Redistributables_TPN.txt is that file byte for byte, CRLF and all; its
+# SHA-256 is pinned by a test. The license terms ship there only as
+# MicrosoftMPI_Redistributable_EULA.rtf (224,476 bytes), SHA-256
+# 125d29a463c724ddb5eed6a14370f5ce74dfd063cfca3eddad2d50082eb62106 -- both
+# values are the ones wheelbuild.msmpi.MICROSOFT_TEXTS checks in the MSI -- so the text
+# here is LibreOffice's plain-text export of it, with the list labels Word wrote
+# into the RTF's own \listtext fallback rather than LibreOffice's renumbering,
+# and the paragraphs wrapped at 79 columns; the words are the export's,
+# unchanged. Microsoft-MPI-LICENSE.txt is LICENSE.txt of
+# github.com/microsoft/Microsoft-MPI at f2d849f. The mingw-w64 texts are
+# COPYING.MinGW-w64-runtime/COPYING.MinGW-w64-runtime.txt and
+# mingw-w64-libraries/winpthreads/COPYING at mingw-w64 4564ee4b5, the commit
+# MSYS2's crt and winpthreads packages build and install those files from, and
+# zlib-LICENSE.txt is LICENSE of zlib 1.3.2, the release MSYS2's zlib packages.
+_MSMPI_EULA_TEXT = _DATA / "MicrosoftMPI_Redistributable_EULA.txt"
+_MSMPI_TPN_TEXT = _DATA / "MPI_Redistributables_TPN.txt"
+_MSMPI_MIT_TEXT = _DATA / "Microsoft-MPI-LICENSE.txt"
+_MINGW_RUNTIME_TEXT = _DATA / "COPYING.MinGW-w64-runtime.txt"
+_WINPTHREADS_TEXT = _DATA / "winpthreads-COPYING.txt"
+_ZLIB_TEXT = _DATA / "zlib-LICENSE.txt"
+
 _HEADER = """\
 THIRD-PARTY NOTICES for palace-solver
 =======================================
@@ -164,6 +231,41 @@ library it links: the dependencies built by Palace's superbuild, the MPICH and
 OpenBLAS builds the wheel vendors, and the runtime libraries the wheel repair
 step copies in from the build image. The license of each redistributed
 component is reproduced below.
+"""
+
+_WINDOWS_HEADER = """\
+THIRD-PARTY NOTICES for palace-solver
+=======================================
+
+This wheel redistributes the Palace solver (Apache-2.0) together with every
+library it links: the dependencies built by Palace's superbuild, the OpenBLAS
+build the wheel vendors, Microsoft's MS-MPI runtime, and the runtime libraries
+the wheel repair step copies in from the build toolchain. The license of each
+redistributed component is reproduced below. The MS-MPI files are Microsoft's
+and are under Microsoft's license terms, not this package's; their section
+names them.
+"""
+
+_MSMPI_NOTE = """\
+The wheel vendors Microsoft MPI (MS-MPI): msmpi.dll, mpiexec.exe and smpd.exe,
+byte for byte as Microsoft's x64 redistributable installer ships them. These
+three files are licensed by Microsoft under the Microsoft MPI Redistributable
+license terms reproduced below, not under this package's license or any other
+license in this file, and anyone who uses or redistributes them as part of
+this wheel does so under those terms. Microsoft's third-party notices for
+MS-MPI follow the license terms. Both texts come from the MS-MPI 10.1.3
+redistributable installer (msmpisetup.exe 10.1.12498.52): the notices are its
+MPI_Redistributables_TPN.txt unchanged, and the license terms are its
+MicrosoftMPI_Redistributable_EULA.rtf rendered as plain text.
+"""
+
+_LIBMSMPIFEC_NOTE = """\
+libmsmpifec.dll is the gfortran bridge to MS-MPI: a helper library that MSYS2's
+mingw-w64-msmpi package builds from its own sources and Microsoft's MS-MPI SDK
+headers, and distributes under the MIT license. It is not one of Microsoft's
+MS-MPI binaries and is not under the license terms above. The MIT license of
+the MS-MPI sources its headers come from is reproduced below; the MPICH notice
+those headers carry is in Microsoft's third-party notices above.
 """
 
 
@@ -182,13 +284,9 @@ def _gcc_release(gcc_version: str | None) -> str:
     return f"GCC {gcc_version}" if gcc_version else "the GCC release used to build it"
 
 
-def _gcc_runtime_note(gcc_version: str | None) -> str:
+def _gcc_runtime_note(gcc_version: str | None, libraries: Sequence[str]) -> str:
     """Render the GCC runtime note, naming the libraries and their sources."""
-    named = ", ".join(
-        library
-        for library, terms in COMPILER_RUNTIME_LIBRARIES.items()
-        if terms == GCC_RUNTIME_LICENSE
-    )
+    named = ", ".join(libraries)
     release = _gcc_release(gcc_version)
     return (
         "The wheel repair step copies the GCC runtime libraries the payload "
@@ -287,6 +385,10 @@ class UnattributedLibraryError(RuntimeError):
     """Raised when a wheel vendors a library no notice in it accounts for."""
 
 
+class NoVendoredLibrariesError(RuntimeError):
+    """Raised when a Windows payload names no DLL, so an audit would pass vacuously."""
+
+
 def collect(source_roots: Sequence[Path]) -> dict[str, list[Path]]:
     """Collect every license file below the given trees, by checkout.
 
@@ -325,37 +427,69 @@ def _is_license_file(path: Path) -> bool:
     )
 
 
-def _missing_dependencies(collected: dict[str, list[Path]]) -> list[str]:
+def _missing_dependencies(
+    collected: dict[str, list[Path]], required: Sequence[str]
+) -> list[str]:
     harvested = " ".join(collected).lower()
-    return [name for name in REQUIRED_DEPENDENCIES if name not in harvested]
+    return [name for name in required if name not in harvested]
 
 
 def _mumps_checkouts(collected: dict[str, list[Path]]) -> list[str]:
     return sorted(name for name in collected if "mumps" in name.lower())
 
 
-def render(source_roots: Sequence[Path], *, gcc_version: str | None = None) -> str:
+def render(
+    source_roots: Sequence[Path],
+    *,
+    gcc_version: str | None = None,
+    system: str | None = None,
+    vendored: Collection[str] | None = None,
+) -> str:
     """Render the THIRD-PARTY-NOTICES body.
 
     Args:
         source_roots: Trees to harvest.
         gcc_version: Version of the compiler whose runtime the repair step will
             vendor, named in the GPL source pointer.
+        system: ``platform.system()`` value of the platform the wheel is for;
+            defaults to this one. ``Windows`` adds the MS-MPI and mingw-w64
+            notices and does not require MPICH of the harvest.
+        vendored: The libraries the repair step copies into the wheel, as
+            :func:`library_stem` names them. When given, a library noticed from
+            a text in ``data`` gets its section only if it is here; when not,
+            every such section is written, worded as conditional on the
+            payload. Required on Windows, where the repair is this project's
+            own copy and its payload is known before the harvest.
 
     Returns:
         The complete notices text.
 
     Raises:
         MissingLicenseError: If a required dependency has no license file.
+        NoVendoredLibrariesError: If a Windows payload names no library.
+        ValueError: If a Windows rendering is not given its payload.
     """
+    windows = (system or platform.system()) == "Windows"
+    if windows:
+        if vendored is None:
+            raise ValueError(
+                "the Windows notices name only what the payload carries, so "
+                "they need the libraries the repair copies"
+            )
+        _require_libraries(vendored, payload="the payload given to the harvest")
     collected = collect(source_roots)
-    missing = _missing_dependencies(collected)
+    required = WINDOWS_REQUIRED_DEPENDENCIES if windows else REQUIRED_DEPENDENCIES
+    missing = _missing_dependencies(collected, required)
     if missing:
         searched = ", ".join(str(root) for root in source_roots)
         raise MissingLicenseError(
             f"no license file found under {searched} for: {', '.join(missing)}"
         )
-    sections = [_HEADER]
+
+    def ships(library: str) -> bool:
+        return vendored is None or library in vendored
+
+    sections = [_WINDOWS_HEADER if windows else _HEADER]
     for checkout, files in collected.items():
         for path in files:
             sections.append(
@@ -373,52 +507,140 @@ def render(source_roots: Sequence[Path], *, gcc_version: str | None = None) -> s
     sections.append(
         _section("CeCILL-C license text", _CECILL_C_TEXT.read_text(encoding="utf-8"))
     )
-    sections.append(
-        _section(
-            "GCC runtime libraries (GPL-3.0 with the Runtime Library Exception)",
-            _gcc_runtime_note(gcc_version),
-        )
-    )
-    sections.append(
-        _section(
-            "GCC Runtime Library Exception 3.1",
-            _GCC_EXCEPTION_TEXT.read_text(encoding="utf-8"),
-        )
-    )
-    sections.append(
-        _section(
-            "GNU General Public License version 3",
-            _GPL_3_TEXT.read_text(encoding="utf-8"),
-        )
-    )
-    sections.append(
-        _section(
-            # Conditional for the same reason as the system libraries below:
-            # GCC builds no libquadmath for aarch64 Linux, so that payload
-            # never carries it.
-            "libquadmath (LGPL, vendored where the payload links it)",
-            _libquadmath_note(gcc_version),
-        )
-    )
-    sections.append(
-        _section(
-            "GNU Lesser General Public License version 2.1",
-            _LGPL_2_1_TEXT.read_text(encoding="utf-8"),
-        )
-    )
-    for library, filename in SYSTEM_LIBRARY_LICENSES.items():
+    sections.extend(_runtime_sections(gcc_version, ships))
+    if windows:
+        sections.extend(_windows_sections(ships))
+    return "\n".join(sections)
+
+
+def _runtime_sections(
+    gcc_version: str | None, ships: Callable[[str], bool]
+) -> list[str]:
+    """Render the notices of what the toolchain and the build image provide."""
+    sections = []
+    gcc_runtime = [
+        library
+        for library, terms in COMPILER_RUNTIME_LIBRARIES.items()
+        if terms == GCC_RUNTIME_LICENSE and ships(library)
+    ]
+    if gcc_runtime:
         sections.append(
             _section(
-                # Conditional, because this file is written before the repair
-                # step that decides. libpciaccess reaches the Linux payload
-                # through hwloc and the macOS one through nothing, so a flat
-                # claim that it is redistributed would be false on one of the
-                # two platforms this text ships on.
+                "GCC runtime libraries (GPL-3.0 with the Runtime Library Exception)",
+                _gcc_runtime_note(gcc_version, gcc_runtime),
+            )
+        )
+        sections.append(
+            _section(
+                "GCC Runtime Library Exception 3.1",
+                _GCC_EXCEPTION_TEXT.read_text(encoding="utf-8"),
+            )
+        )
+        sections.append(
+            _section(
+                "GNU General Public License version 3",
+                _GPL_3_TEXT.read_text(encoding="utf-8"),
+            )
+        )
+    if ships("libquadmath"):
+        sections.append(
+            _section(
+                # Conditional for the same reason as the system libraries below:
+                # GCC builds no libquadmath for aarch64 Linux, so that payload
+                # never carries it.
+                "libquadmath (LGPL, vendored where the payload links it)",
+                _libquadmath_note(gcc_version),
+            )
+        )
+        sections.append(
+            _section(
+                "GNU Lesser General Public License version 2.1",
+                _LGPL_2_1_TEXT.read_text(encoding="utf-8"),
+            )
+        )
+    for library, filename in SYSTEM_LIBRARY_LICENSES.items():
+        if not ships(library):
+            continue
+        sections.append(
+            _section(
+                # Conditional, because on Linux and macOS this file is written
+                # before the repair step that decides. libpciaccess reaches the
+                # Linux payload through hwloc and the macOS one through nothing,
+                # so a flat claim that it is redistributed would be false on one
+                # of the two platforms this text ships on.
                 f"{library} (vendored from the build image where the payload links it)",
                 (_DATA / filename).read_text(encoding="utf-8"),
             )
         )
-    return "\n".join(sections)
+    return sections
+
+
+def _windows_sections(ships: Callable[[str], bool]) -> list[str]:
+    """Render the notices only a Windows wheel carries.
+
+    MS-MPI's are written whatever the DLL closure holds, because ``mpiexec.exe``
+    and ``smpd.exe`` are vendored beside it rather than through it, and the
+    mingw-w64 runtime's because it is in every binary rather than in a file of
+    its own. The rest follow the payload.
+    """
+    sections = [
+        _section(
+            "Microsoft MPI: msmpi.dll, mpiexec.exe, smpd.exe (Microsoft's terms)",
+            _MSMPI_NOTE,
+        ),
+        _section(
+            "Microsoft MPI Redistributable license terms",
+            _MSMPI_EULA_TEXT.read_text(encoding="utf-8"),
+        ),
+        _section(
+            "Microsoft MPI third-party notices",
+            _MSMPI_TPN_TEXT.read_text(encoding="utf-8"),
+        ),
+    ]
+    if ships("libmsmpifec"):
+        sections.append(
+            _section(
+                "libmsmpifec (MIT, the gfortran bridge to MS-MPI)",
+                f"{_LIBMSMPIFEC_NOTE}\n{_MSMPI_MIT_TEXT.read_text(encoding='utf-8')}",
+            )
+        )
+    if ships("libwinpthread"):
+        sections.append(
+            _section(
+                "libwinpthread (MIT and BSD-3-Clause, from the mingw-w64 toolchain)",
+                _WINPTHREADS_TEXT.read_text(encoding="utf-8"),
+            )
+        )
+    if ships("zlib1"):
+        sections.append(
+            _section(
+                "zlib1 (zlib, vendored from the build toolchain)",
+                _ZLIB_TEXT.read_text(encoding="utf-8"),
+            )
+        )
+    sections.append(
+        _section(
+            "mingw-w64 runtime (linked statically into every Windows binary)",
+            _MINGW_RUNTIME_TEXT.read_text(encoding="utf-8"),
+        )
+    )
+    return sections
+
+
+def _require_libraries(libraries: Collection[str], *, payload: str) -> None:
+    """Refuse a Windows payload that names no library.
+
+    The macOS audit once passed with nothing in it, because it read a layout it
+    did not recognise as empty. A Windows payload always carries DLLs — MS-MPI's
+    at the least — so one that carries none is a layout this module did not
+    recognise, not a wheel with nothing to notice.
+    """
+    if not libraries:
+        raise NoVendoredLibrariesError(
+            f"{payload} carries no DLL, so there is nothing to audit; a Windows "
+            "payload always vendors MS-MPI, so its DLLs are somewhere this "
+            "module does not look"
+        )
 
 
 def _section(title: str, body: str) -> str:
@@ -449,6 +671,15 @@ def library_stem(name: str) -> str:
     where the ELF spelling keeps the version — which is harmless because both
     sides of every comparison in :func:`audit_wheel` come through here.
 
+    A PE name is the toolchain's own, since the Windows repair copies without
+    renaming. MinGW's libtool puts the DLL version after a hyphen, so
+    ``libgfortran-5.dll`` reduces to ``libgfortran``; GCC's ``libgcc_s`` also
+    carries its exception model, ``libgcc_s_seh-1.dll``, which is dropped so the
+    one notice covers it on every platform. A name with no hyphenated version
+    keeps what it has: ``zlib1.dll``, whose ``1`` is zlib's own spelling of its
+    ABI, reduces to ``zlib1``. Windows file names are case-insensitive, so PE
+    names are lowercased.
+
     Which convention applies is decided by the file name rather than by the
     running platform: the name is the evidence, and the same audit reads names
     out of a wheel and out of an install prefix.
@@ -461,6 +692,9 @@ def library_stem(name: str) -> str:
         The library name, without the hash, the extension or the soversion.
     """
     unhashed = re.sub(r"-[0-9a-f]{6,}(?=\.|$)", "", name)
+    if _is_dll(unhashed):
+        stem = re.sub(r"-\d+$", "", unhashed[: -len(".dll")].lower())
+        return re.sub(r"^libgcc_s_(seh|sjlj|dw2)$", "libgcc_s", stem)
     if ".dylib" in unhashed:
         return re.sub(r"(\.\d+)+$", "", unhashed.split(".dylib", maxsplit=1)[0])
     return unhashed.split(".so", maxsplit=1)[0]
@@ -477,6 +711,12 @@ def vendored_libraries(wheel: Path) -> list[str]:
     :func:`library_stem` cannot reduce to a known library therefore fails the
     build, which is the direction to fail in.
 
+    The Windows layout has no vendor directory to trust that way: its DLLs lie
+    beside the executables, in a directory the repair shares with the package.
+    There every ``.dll`` counts, wherever in the wheel it lies, so a DLL put
+    somewhere unexpected is still audited rather than missed. No Linux or macOS
+    wheel carries one.
+
     Args:
         wheel: The repaired wheel.
 
@@ -491,9 +731,50 @@ def vendored_libraries(wheel: Path) -> list[str]:
         {
             library_stem(member.name)
             for member in members
-            if member.parent.name.endswith(_VENDOR_DIRECTORIES)
+            if member.parent.name.endswith(_VENDOR_DIRECTORIES) or _is_dll(member.name)
         }
     )
+
+
+def payload_libraries(directory: Path) -> list[str]:
+    """Return the libraries among the DLLs in a Windows payload directory.
+
+    This is what the Windows harvest is told the wheel will carry: the directory
+    the repair copied the DLL closure into, read the way :func:`vendored_libraries`
+    reads the finished wheel, so the two name the same libraries.
+
+    Args:
+        directory: Where the repair copied the DLLs, beside the executables.
+
+    Returns:
+        One entry per DLL, as :func:`library_stem` names it, sorted.
+    """
+    return sorted(
+        {
+            library_stem(path.name)
+            for path in directory.iterdir()
+            if path.is_file() and _is_dll(path.name)
+        }
+    )
+
+
+def _is_dll(name: str) -> bool:
+    return name.lower().endswith(".dll")
+
+
+def _is_windows_wheel(wheel: Path) -> bool:
+    """Whether the filename's platform tag is a Windows one, as ``win_amd64``."""
+    tags = wheel.name.removesuffix(".whl").rsplit("-", 1)[-1].split(".")
+    return any(tag.startswith("win") for tag in tags)
+
+
+def _shipped_notices(wheel: Path) -> str | None:
+    """Return the THIRD-PARTY-NOTICES a wheel carries, or ``None``."""
+    with zipfile.ZipFile(wheel) as archive:
+        for name in archive.namelist():
+            if Path(name).name == "THIRD-PARTY-NOTICES":
+                return archive.read(name).decode("utf-8", errors="replace")
+    return None
 
 
 def audit_wheel(*, wheel: Path, install_prefix: Path) -> list[str]:
@@ -507,6 +788,16 @@ def audit_wheel(*, wheel: Path, install_prefix: Path) -> list[str]:
     build, which is the guard the source-tree walk cannot provide for libraries
     that have no source tree.
 
+    A wheel whose platform tag is a Windows one is held to three things more.
+    The :data:`WINDOWS_RUNTIME_LIBRARIES` count as covered there and nowhere
+    else. It must carry a DLL, since a payload that names none is a layout this
+    module did not recognise rather than one with nothing to notice. And because
+    its notices were rendered from the payload rather than for every payload,
+    the THIRD-PARTY-NOTICES it ships must name each library it vendors that was
+    not built here, which catches notices rendered from a different payload
+    than the one packaged. MinGW installs DLLs into ``bin`` rather than ``lib``,
+    so both are read for what was built here.
+
     Args:
         wheel: The repaired wheel.
         install_prefix: Superbuild install prefix, holding everything built
@@ -516,30 +807,61 @@ def audit_wheel(*, wheel: Path, install_prefix: Path) -> list[str]:
         The vendored library names, in the order reported.
 
     Raises:
-        UnattributedLibraryError: If a vendored library is neither.
+        UnattributedLibraryError: If a vendored library is neither, or on
+            Windows is not named by the notices the wheel ships.
+        NoVendoredLibrariesError: If a Windows wheel vendors no DLL.
     """
     built_here = {
         library_stem(path.name)
         for path in (install_prefix / "lib").glob("*")
-        if ".so" in path.name or path.name.endswith(".dylib")
+        if ".so" in path.name or path.name.endswith(".dylib") or _is_dll(path.name)
     }
+    built_here.update(
+        library_stem(path.name)
+        for path in (install_prefix / "bin").glob("*")
+        if _is_dll(path.name)
+    )
     found = vendored_libraries(wheel)
+    windows = _is_windows_wheel(wheel)
+    if windows:
+        _require_libraries(found, payload=wheel.name)
     covered = built_here.union(COMPILER_RUNTIME_LIBRARIES, SYSTEM_LIBRARY_LICENSES)
+    if windows:
+        covered.update(WINDOWS_RUNTIME_LIBRARIES)
     unattributed = [name for name in found if name not in covered]
     if unattributed:
         raise UnattributedLibraryError(
             f"{wheel.name} vendors libraries with no license notice: "
             f"{', '.join(unattributed)}. Either they are built by the "
             "superbuild and the harvest missed them, or they come from the "
-            "build image and belong in COMPILER_RUNTIME_LIBRARIES or "
-            "SYSTEM_LIBRARY_LICENSES with their license text in "
-            "wheelbuild/data."
+            "build image and belong in COMPILER_RUNTIME_LIBRARIES, "
+            "SYSTEM_LIBRARY_LICENSES or WINDOWS_RUNTIME_LIBRARIES with their "
+            "license text in wheelbuild/data."
         )
+    if windows:
+        # Named, not parsed: every section a shipped text renders on Windows
+        # carries its library's name, and only that section does.
+        shipped = _shipped_notices(wheel) or ""
+        unnamed = [
+            name for name in found if name not in built_here and name not in shipped
+        ]
+        if unnamed:
+            raise UnattributedLibraryError(
+                f"{wheel.name} vendors libraries its THIRD-PARTY-NOTICES does not "
+                f"name: {', '.join(unnamed)}. The Windows notices are rendered "
+                "from the payload, so they were rendered from a different one "
+                "than the wheel carries, or the wheel carries none."
+            )
     return found
 
 
 def harvest(
-    *, source_roots: Sequence[Path], output: Path, gcc_version: str | None = None
+    *,
+    source_roots: Sequence[Path],
+    output: Path,
+    gcc_version: str | None = None,
+    system: str | None = None,
+    vendored: Collection[str] | None = None,
 ) -> Path:
     """Write the harvested notices to ``output``.
 
@@ -548,11 +870,15 @@ def harvest(
         output: Destination file.
         gcc_version: Version of the compiler whose runtime the wheel will
             vendor, named in the GPL source pointer.
+        system: Platform the wheel is for, as :func:`render` takes it.
+        vendored: Libraries the wheel will carry, as :func:`render` takes them.
 
     Returns:
         The path written.
     """
-    text = render(source_roots, gcc_version=gcc_version)
+    text = render(
+        source_roots, gcc_version=gcc_version, system=system, vendored=vendored
+    )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(text, encoding="utf-8")
     return output
@@ -576,7 +902,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="compiler release named in the GCC runtime source pointer "
         "(default: what the build's own CC, FC or the gcc on PATH reports)",
     )
+    parser.add_argument(
+        "--system",
+        default=None,
+        help="platform.system() value of the platform the wheel is for "
+        "(default: this one)",
+    )
+    parser.add_argument(
+        "--payload-dir",
+        type=Path,
+        default=None,
+        help="directory the Windows repair copied the DLL closure into; "
+        "required on Windows, whose notices name only what it carries",
+    )
     args = parser.parse_args(argv)
+    system = args.system or platform.system()
+    if system == "Windows" and args.payload_dir is None:
+        parser.error("--payload-dir is required for a Windows wheel")
+    vendored = (
+        payload_libraries(args.payload_dir) if args.payload_dir is not None else None
+    )
     gcc_version = args.gcc_version
     if not gcc_version:
         compiler = _resolve_compiler()
@@ -595,6 +940,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         source_roots=args.source_roots,
         output=args.output,
         gcc_version=gcc_version,
+        system=system,
+        vendored=vendored,
     )
     print(f"wrote {path} ({path.stat().st_size} bytes)")
     return 0
