@@ -1,0 +1,29 @@
+Carried patch, Windows only: STRUMPACK under LLP64.
+
+src/misc/MPIWrapper.hpp specialises mpi_type<> for unsigned long but not
+unsigned long long, which is std::size_t on Windows (MPI_UNSIGNED_LONG_LONG
+is in MS-MPI's mpi.h). src/iterative/GMResMPI.cpp's std::max(n, 1ul) mixes
+size_t with unsigned long. Harmless on LP64, where the types are distinct.
+
+--- a/src/iterative/GMResMPI.cpp
++++ b/src/iterative/GMResMPI.cpp
+@@ -146,7 +146,7 @@
+           }
+         }
+         blas::trsv('U', 'N', 'N', nrit+1, hess, ldh, b_, 1);
+-        blas::gemv('N', n, nrit+1, scalar_t(1.), V, std::max(n, 1ul),
++        blas::gemv('N', n, nrit+1, scalar_t(1.), V, std::max(n, std::size_t(1)),
+                    b_, 1, scalar_t(1.), x, 1);
+       }
+       return rho;
+--- a/src/misc/MPIWrapper.hpp
++++ b/src/misc/MPIWrapper.hpp
+@@ -71,6 +71,8 @@
+   template<> inline MPI_Datatype mpi_type<unsigned long>() { return MPI_UNSIGNED_LONG; }
+   /** return MPI datatype for C++ long long int */
+   template<> inline MPI_Datatype mpi_type<long long int>() { return MPI_LONG_LONG_INT; }
++  // std::size_t is unsigned long long on LLP64 (Windows).
++  template<> inline MPI_Datatype mpi_type<unsigned long long>() { return MPI_UNSIGNED_LONG_LONG; }
+   /** return MPI datatype for C++ float */
+   template<> inline MPI_Datatype mpi_type<float>() { return MPI_FLOAT; }
+   /** return MPI datatype for C++ double */

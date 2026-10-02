@@ -1,0 +1,76 @@
+Carried patch, Windows only: Palace's memory report.
+
+palace/utils/memoryreporting.cpp reads peak memory with getrusage(), which
+Windows lacks; on _WIN32 it reads PROCESS_MEMORY_COUNTERS from
+GetProcessMemoryInfo instead. The only POSIX-only file in Palace's own
+sources. Portable: Linux and macOS compile the same code as before.
+
+diff --git a/palace/utils/memoryreporting.cpp b/palace/utils/memoryreporting.cpp
+index 2d754b9..681057e 100644
+--- a/palace/utils/memoryreporting.cpp
++++ b/palace/utils/memoryreporting.cpp
+@@ -3,7 +3,9 @@
+ 
+ #include "memoryreporting.hpp"
+ 
++#if !defined(_WIN32)
+ #include <sys/resource.h>
++#endif
+ 
+ #if defined(__APPLE__)
+ #include <mach/mach.h>
+@@ -14,6 +16,15 @@
+ 
+ #include "utils/communication.hpp"
+ 
++// Last, so the Windows headers' macros cannot reach MFEM's or MPI's.
++#if defined(_WIN32)
++#define NOMINMAX
++#define WIN32_LEAN_AND_MEAN
++#define PSAPI_VERSION 2
++#include <windows.h>
++#include <psapi.h>
++#endif
++
+ namespace palace::memory_reporting
+ {
+ 
+@@ -36,7 +47,14 @@ namespace palace::memory_reporting
+ // See: man footprint
+ long GetCurrentMemory()
+ {
+-#if defined(__APPLE__)
++#if defined(_WIN32)
++  PROCESS_MEMORY_COUNTERS counters;
++  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
++  {
++    return static_cast<long>(counters.WorkingSetSize);
++  }
++  return 0;
++#elif defined(__APPLE__)
+   task_vm_info_data_t vm_info;
+   mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
+   if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm_info, &count) ==
+@@ -69,6 +87,14 @@ long GetCurrentMemory()
+ // Note that Linux reports the result in kilobytes, MacOS in bytes.
+ long GetPeakMemory()
+ {
++#if defined(_WIN32)
++  PROCESS_MEMORY_COUNTERS counters;
++  if (GetProcessMemoryInfo(GetCurrentProcess(), &counters, sizeof(counters)))
++  {
++    return static_cast<long>(counters.PeakWorkingSetSize);
++  }
++  return 0;
++#else
+   struct rusage usage;
+   if (getrusage(RUSAGE_SELF, &usage) == 0)
+   {
+@@ -81,6 +107,7 @@ long GetPeakMemory()
+ #endif
+   }
+   return 0;
++#endif
+ }
+ 
+ std::string FormatBytes(double bytes)

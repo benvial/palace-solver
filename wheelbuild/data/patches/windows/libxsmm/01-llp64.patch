@@ -1,0 +1,26 @@
+Carried patch, Windows only: LIBXSMM's RISC-V generator under LLP64.
+
+src/generator_rv64_instructions.c stores a 64-bit mask in an unsigned long,
+which is 32 bits on Windows, and -Werror=overflow fails the compile. The code
+never runs on x86; it is still compiled. Still present on LIBXSMM main.
+
+--- a/src/generator_rv64_instructions.c
++++ b/src/generator_rv64_instructions.c
+@@ -1248,7 +1248,7 @@
+ void libxsmm_rv64_instruction_alu_set_imm64( libxsmm_generated_code*  io_generated_code,
+                                              const unsigned int       i_gp_reg_dst,
+                                              const unsigned long long i_imm64 ) {
+-  unsigned long imm_mask = 0xffe0000000000000;
++  unsigned long long imm_mask = 0xffe0000000000000ULL;
+   unsigned int imm_11;
+   int i_11;
+ 
+@@ -1275,7 +1275,7 @@
+ #define BIT_LEFT  (9)
+ #define BIT_SFT   (53)
+ 
+-    imm_mask = 0xffe0000000000000;
++    imm_mask = 0xffe0000000000000ULL;
+ 
+     for (i_11 = 0; i_11 < 5; i_11++) {
+       /* Get next 11 bits of immediate to LSB */

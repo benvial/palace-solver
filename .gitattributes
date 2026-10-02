@@ -2,3 +2,13 @@
 # them (CRLF line endings), so their SHA-256 can be checked against the file
 # extracted from msmpisetup.exe.
 wheelbuild/data/MPI_Redistributables_TPN.txt -text
+
+# The Windows carried patches, byte for byte on every checkout. A Windows
+# checkout would otherwise give them CRLF, and `git apply` then matches no hunk
+# -- which is how the spike's first runs skipped every patch.
+# tests/test_patches.py asserts the attribute holds for each one.
+wheelbuild/data/patches/** -text
+
+# Scripts that MSYS2's bash runs on the Windows runner, where a CRLF checkout
+# would make every line end in a stray \r.
+*.sh text eol=lf

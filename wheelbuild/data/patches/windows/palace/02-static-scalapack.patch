@@ -1,0 +1,78 @@
+Carried patch, Windows only: link a static ScaLAPACK before what it needs.
+
+Palace's CMake assumes a shared ScaLAPACK. Static (BUILD_SHARED_LIBS=OFF, as
+on Windows) the archive records nothing it depends on, so its BLAS/LAPACK
+and MPI references have to follow it on the link line, in two places:
+cmake/ExternalMFEM.cmake, for MFEM's FindSTRUMPACK and FindMUMPS tests, and
+palace/CMakeLists.txt, whose find_library branch makes SCALAPACK::SCALAPACK a
+bare UNKNOWN IMPORTED target. Not specific to Windows; worth sending upstream.
+
+diff --git a/cmake/ExternalMFEM.cmake b/cmake/ExternalMFEM.cmake
+index a6bb721..7a4d6e4 100644
+--- a/cmake/ExternalMFEM.cmake
++++ b/cmake/ExternalMFEM.cmake
+@@ -304,10 +304,29 @@ Intel C++ compiler for MUMPS and STRUMPACK dependencies")
+     endif()
+   endif()
+ 
++  # A static ScaLAPACK carries no record of what it needs, so its BLAS/LAPACK
++  # and MPI references must follow it on the link line. MFEM puts the
++  # REQUIRED_LIBRARIES after the REQUIRED_PACKAGES and then REMOVE_DUPLICATES
++  # the whole list, keeping the first (too early) copy of each, so the
++  # trailing ones are spelled -Wl,<path>: the same file to the linker, a
++  # different string to CMake. A shared build never noticed.
++  set(SCALAPACK_LINK_LIBRARIES ${SCALAPACK_LIBRARIES})
++  if(NOT BUILD_SHARED_LIBS)
++    string(REPLACE "$<SEMICOLON>" ";" _SCALAPACK_DEPENDENCIES "${BLAS_LAPACK_LIBRARIES}")
++    list(APPEND _SCALAPACK_DEPENDENCIES ${MPI_Fortran_LIBRARIES} ${MPI_C_LIBRARIES})
++    foreach(_LIB IN LISTS _SCALAPACK_DEPENDENCIES)
++      if(IS_ABSOLUTE "${_LIB}")
++        list(APPEND SCALAPACK_LINK_LIBRARIES "-Wl,${_LIB}")
++      else()
++        list(APPEND SCALAPACK_LINK_LIBRARIES "${_LIB}")
++      endif()
++    endforeach()
++  endif()
++
+   # Configure STRUMPACK
+   if(PALACE_WITH_STRUMPACK)
+     set(STRUMPACK_REQUIRED_PACKAGES "ParMETIS" "METIS" "LAPACK" "BLAS" "MPI" "MPI_Fortran")
+-    set(STRUMPACK_REQUIRED_LIBRARIES ${SCALAPACK_LIBRARIES} ${STRUMPACK_MUMPS_GFORTRAN_LIBRARY})
++    set(STRUMPACK_REQUIRED_LIBRARIES ${SCALAPACK_LINK_LIBRARIES} ${STRUMPACK_MUMPS_GFORTRAN_LIBRARY})
+     if(NOT "${STRUMPACK_EXTRA_LIBRARIES}" STREQUAL "")
+       list(PREPEND STRUMPACK_REQUIRED_LIBRARIES ${STRUMPACK_EXTRA_LIBRARIES})
+     endif()
+@@ -332,6 +351,7 @@ Intel C++ compiler for MUMPS and STRUMPACK dependencies")
+   endif()
+ 
+   # Configure MUMPS
++  string(REPLACE ";" "$<SEMICOLON>" SCALAPACK_LINK_LIBRARIES_ESCAPED "${SCALAPACK_LINK_LIBRARIES}")
+   if(PALACE_WITH_MUMPS)
+     set(MUMPS_REQUIRED_PACKAGES "ParMETIS" "METIS" "LAPACK" "BLAS" "MPI" "MPI_Fortran" "Threads")
+     if(PALACE_WITH_OPENMP)
+@@ -341,7 +361,7 @@ Intel C++ compiler for MUMPS and STRUMPACK dependencies")
+     list(APPEND MFEM_OPTIONS
+       "-DMUMPS_DIR=${CMAKE_INSTALL_PREFIX}"
+       "-DMUMPS_REQUIRED_PACKAGES=${MUMPS_REQUIRED_PACKAGES}"
+-      "-DMUMPS_REQUIRED_LIBRARIES=${SCALAPACK_LIBRARIES}$<SEMICOLON>${STRUMPACK_MUMPS_GFORTRAN_LIBRARY}"
++      "-DMUMPS_REQUIRED_LIBRARIES=${SCALAPACK_LINK_LIBRARIES_ESCAPED}$<SEMICOLON>${STRUMPACK_MUMPS_GFORTRAN_LIBRARY}"
+     )
+   endif()
+ 
+diff --git a/palace/CMakeLists.txt b/palace/CMakeLists.txt
+index 89fdef2..4816f3a 100644
+--- a/palace/CMakeLists.txt
++++ b/palace/CMakeLists.txt
+@@ -521,6 +521,12 @@ if(PALACE_WITH_STRUMPACK OR PALACE_WITH_MUMPS)
+     add_library(SCALAPACK::SCALAPACK UNKNOWN IMPORTED)
+     set_target_properties(SCALAPACK::SCALAPACK PROPERTIES
+       IMPORTED_LOCATION "${SCALAPACK_LIBRARY}")
++    # A static ScaLAPACK records nothing of what it calls, so say it here, or the
++    # LAPACK/BLAS it needs can land before it on the link line.
++    if(SCALAPACK_LIBRARY MATCHES "${CMAKE_STATIC_LIBRARY_SUFFIX}$")
++      set_target_properties(SCALAPACK::SCALAPACK PROPERTIES
++        INTERFACE_LINK_LIBRARIES LAPACK::LAPACK)
++    endif()
+     message(STATUS "Found ScaLAPACK: ${SCALAPACK_LIBRARY}")
+   elseif(TARGET scalapack AND NOT TARGET SCALAPACK::SCALAPACK)
+     add_library(SCALAPACK::SCALAPACK ALIAS scalapack)
