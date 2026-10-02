@@ -8,6 +8,13 @@ changes upstream cannot quietly change what the wheel ships.
 MPI comes from the MPICH built by :mod:`wheelbuild.mpich`, which is the same
 MPICH the wheel vendors, so the solver runs against exactly what it was
 compiled against.
+
+Windows is a separate arm rather than a variation of the other two: MS-MPI
+comes from MSYS2's ``mingw-w64-msmpi`` instead of a prefix, the stack links
+statically, the generator is named, and the carried patches of
+:mod:`wheelbuild.patches` go in around the configure. Its argument vector and
+its run are built by functions of their own, so nothing on the Linux and macOS
+path changes by a byte.
 """
 
 from __future__ import annotations
@@ -19,7 +26,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from wheelbuild import mpich
+from wheelbuild import mpich, patches
 from wheelbuild._process import check_call
 
 #: Palace feature flags, in spec order. Never trimmed for packaging reasons.
@@ -49,6 +56,34 @@ FEATURE_FLAGS = (
     # and named here because the wheel ships the libraries either way.
     "-DPALACE_WITH_SUNDIALS=ON",
 )
+
+
+#: The generator on Windows. Palace drives libCEED, GSLIB and LIBXSMM with
+#: ``${CMAKE_MAKE_PROGRAM} VAR=value install``, which needs GNU make and a
+#: POSIX shell, so it is MSYS2's make rather than anything native. The driver
+#: also exports it as ``CMAKE_GENERATOR``, because several sub-projects are
+#: configured by a bare ``${CMAKE_COMMAND} <SOURCE_DIR>`` that would otherwise
+#: take CMake's Windows default, NMake.
+WINDOWS_GENERATOR = "MSYS Makefiles"
+
+#: Written into the build directory on Windows and passed as
+#: ``CMAKE_PROJECT_INCLUDE``; see :data:`wheelbuild.patches.PROJECT_INCLUDE`.
+WINDOWS_PROJECT_INCLUDE = "carried-patch-steps.cmake"
+
+
+def windows_feature_flags() -> tuple[str, ...]:
+    """:data:`FEATURE_FLAGS` with the one change Windows makes: a static stack.
+
+    Windows has no RPATH, and several dependencies install their DLLs in the
+    wrong place or produce no import library, so everything links into
+    ``palace.exe`` and only the GCC runtimes, OpenBLAS, MS-MPI and the two
+    libraries Palace forces shared (libCEED, LIBXSMM) ship as DLLs. No feature
+    is trimmed.
+    """
+    return tuple(
+        "-DBUILD_SHARED_LIBS=OFF" if flag == "-DBUILD_SHARED_LIBS=ON" else flag
+        for flag in FEATURE_FLAGS
+    )
 
 
 def mpi_home(prefix: Path) -> Path:
@@ -121,6 +156,106 @@ def cmake_arguments(
     return arguments
 
 
+def windows_cmake_arguments(
+    *,
+    source_dir: Path,
+    install_prefix: Path,
+    project_include: Path,
+    ccache: bool = True,
+) -> list[str]:
+    """Build the CMake configure command for the superbuild on Windows.
+
+    Paths are written with forward slashes (``D:/b/install``): CMake and the
+    MSYS2 tools both read that form, where a backslash is an escape to one and
+    a separator to the other.
+
+    No ``MPI_HOME``: MS-MPI's headers, import library and the ``libmsmpifec``
+    gfortran bridge come from MSYS2's ``mingw-w64-msmpi``, and FindMPI finds
+    them on its own. The prefix is still searched first, for OpenBLAS.
+
+    Args:
+        source_dir: Palace source tree (the superbuild's top-level CMake dir).
+        install_prefix: Where the built Palace tree is installed.
+        project_include: The file :func:`run_windows` writes, giving every
+            ExternalProject a ``<name>-patch`` step target.
+        ccache: Route the compilers through ccache.
+
+    Returns:
+        The full ``cmake`` argument vector, source directory last.
+    """
+    prefix = install_prefix.as_posix()
+    # The Darwin flags, for the Darwin reason: Palace links STRUMPACK's
+    # companions by bare name (`-lzfp`) and MinGW's ld searches no path that
+    # reaches the prefix either.
+    library_dir = f"-L{prefix}/lib"
+    arguments = [
+        "cmake",
+        "-G",
+        WINDOWS_GENERATOR,
+        f"-DCMAKE_INSTALL_PREFIX={prefix}",
+        f"-DCMAKE_PREFIX_PATH={prefix}",
+        *windows_feature_flags(),
+        f"-DCMAKE_PROJECT_INCLUDE={project_include.as_posix()}",
+        f"-DCMAKE_EXE_LINKER_FLAGS={library_dir}",
+        f"-DCMAKE_SHARED_LINKER_FLAGS={library_dir}",
+    ]
+    if ccache:
+        arguments += [
+            "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+            "-DCMAKE_Fortran_COMPILER_LAUNCHER=ccache",
+        ]
+    arguments.append(source_dir.as_posix())
+    return arguments
+
+
+def run_windows(
+    *,
+    source_dir: Path,
+    build_dir: Path,
+    install_prefix: Path,
+    jobs: int,
+    ccache: bool = True,
+) -> None:
+    """Patch, configure and build Palace on Windows.
+
+    The order is the carried-patch recipe of :mod:`wheelbuild.patches`: Palace's
+    patches committed and stale dependency trees discarded before the configure;
+    a pre-pass that only fetches; the dependency patches; then the build; then
+    proof that every patch survived it.
+
+    Args:
+        source_dir: Palace's checkout, tagged ``upstream-v<version>`` on its
+            tarball commit.
+        build_dir: Scratch directory for the superbuild.
+        install_prefix: Install destination for the Palace tree.
+        jobs: Parallel build jobs.
+        ccache: Route the compilers through ccache.
+    """
+    build_dir.mkdir(parents=True, exist_ok=True)
+    patches.prepare_palace(source_dir)
+    patches.discard_stale_dependencies(build_dir)
+    include = build_dir / WINDOWS_PROJECT_INCLUDE
+    # Rewritten only when it differs: the configure depends on it, so touching
+    # it on every run would regenerate the superbuild for nothing.
+    if not include.is_file() or include.read_text() != patches.PROJECT_INCLUDE:
+        include.write_text(patches.PROJECT_INCLUDE)
+    configure = windows_cmake_arguments(
+        source_dir=source_dir,
+        install_prefix=install_prefix,
+        project_include=include,
+        ccache=ccache,
+    )
+    check_call(configure, cwd=build_dir)
+    check_call(
+        ["cmake", "--build", ".", f"-j{jobs}", "--target", *patches.patch_targets()],
+        cwd=build_dir,
+    )
+    patches.apply_dependencies(build_dir)
+    check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    patches.verify(source_dir, build_dir)
+
+
 def run(
     *,
     source_dir: Path,
@@ -129,6 +264,7 @@ def run(
     prefix: Path,
     jobs: int,
     ccache: bool = True,
+    system: str | None = None,
 ) -> None:
     """Configure and build Palace, installing into ``install_prefix``.
 
@@ -137,10 +273,20 @@ def run(
         build_dir: Scratch directory for the superbuild (reuse it to benefit
             from the cached dependency tree).
         install_prefix: Install destination for the Palace tree.
-        prefix: MPICH install prefix.
+        prefix: MPICH install prefix. Unused on Windows, which has no MPICH.
         jobs: Parallel build jobs.
         ccache: Route the compilers through ccache.
+        system: ``platform.system()`` value; defaults to the running platform.
     """
+    if (system or platform.system()) == "Windows":
+        run_windows(
+            source_dir=source_dir,
+            build_dir=build_dir,
+            install_prefix=install_prefix,
+            jobs=jobs,
+            ccache=ccache,
+        )
+        return
     build_dir.mkdir(parents=True, exist_ok=True)
     configure = cmake_arguments(
         source_dir=source_dir,
@@ -162,7 +308,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--prefix",
         type=Path,
         default=Path(sys.prefix),
-        help="MPICH install prefix (default: sys.prefix)",
+        help="MPICH install prefix (default: sys.prefix); unused on Windows",
     )
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
     parser.add_argument("--no-ccache", action="store_true")
