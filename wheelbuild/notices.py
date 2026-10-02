@@ -71,7 +71,7 @@ import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Collection, Sequence
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import Path
 
 #: Dependencies compiled into the wheel. A missing license file for any of
@@ -191,6 +191,9 @@ LICENSE_FILE_PATTERNS = (
     "COPYRIGHT*",
     "NOTICE*",
 )
+
+#: Longest file read as a possible symlink stub; a link target, not a license.
+_SYMLINK_STUB_MAX_BYTES = 1024
 
 _DATA = Path(__file__).resolve().parent / "data"
 _CECILL_C_TEXT = _DATA / "CeCILL-C-V1-en.txt"
@@ -411,20 +414,41 @@ def collect(source_roots: Sequence[Path]) -> dict[str, list[Path]]:
         for path in sorted(root.rglob("*")):
             if not path.is_file() or path.is_symlink() or not _is_license_file(path):
                 continue
+            if _is_symlink_stub(path):
+                continue
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if digest in seen_texts:
                 continue
             seen_texts.add(digest)
             relative = path.parent.relative_to(root)
-            checkout = str(root.name / relative) if str(relative) != "." else root.name
+            checkout = (
+                f"{root.name}/{relative.as_posix()}"
+                if str(relative) != "."
+                else root.name
+            )
             collected.setdefault(checkout, []).append(path)
     return collected
 
 
 def _is_license_file(path: Path) -> bool:
+    # Case-sensitive on every host: Windows' case-folding ``fnmatch`` would
+    # otherwise pick up ``copyright.txt`` files the Linux harvest leaves out.
     return bool(path.stat().st_size) and any(
-        fnmatch(path.name, pattern) for pattern in LICENSE_FILE_PATTERNS
+        fnmatchcase(path.name, pattern) for pattern in LICENSE_FILE_PATTERNS
     )
+
+
+def _is_symlink_stub(path: Path) -> bool:
+    """Whether ``path`` is a symlink that git checked out as a plain file.
+
+    Git without symlink support, as on Windows, writes a link as a file holding
+    the link's target. The target is harvested in its own right; the stub
+    would otherwise ship as a "license" reading ``../../LICENSE``.
+    """
+    if path.stat().st_size > _SYMLINK_STUB_MAX_BYTES:
+        return False
+    target = path.read_text(encoding="utf-8", errors="replace")
+    return "\n" not in target.strip() and (path.parent / target.strip()).is_file()
 
 
 def _missing_dependencies(
@@ -880,7 +904,8 @@ def harvest(
         source_roots, gcc_version=gcc_version, system=system, vendored=vendored
     )
     output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(text, encoding="utf-8")
+    # LF on every host, so the Windows notices read as the others do.
+    output.write_text(text, encoding="utf-8", newline="\n")
     return output
 
 
