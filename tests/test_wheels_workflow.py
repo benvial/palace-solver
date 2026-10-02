@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 import yaml
 
+from wheelbuild.link_check import PEFILE_REQUIREMENT
 from wheelbuild.platforms import (
     MACOS_DEPLOYMENT_TARGET,
     platform_tag,
@@ -564,3 +565,24 @@ def test_the_pinned_linter_is_the_one_a_contributor_installs(workflow):
 
     declared = {requirement for requirement in extra if requirement.startswith("ruff")}
     assert declared == {RUFF_REQUIREMENT.search(install).group(0)}
+
+
+def test_the_pe_reader_the_tests_run_is_the_one_the_build_installs(workflow):
+    """pefile is the Windows link check and repair, not a test helper, so the
+    checks job, the dev extra and the constant the Windows driver installs from
+    name one version. A drift between them is tests passing against a parser
+    the build does not run.
+    """
+    with (ROOT / "pyproject.toml").open("rb") as handle:
+        extra = tomllib.load(handle)["project"]["optional-dependencies"]["dev"]
+    install = next(
+        step["run"]
+        for step in workflow["jobs"]["checks"]["steps"]
+        if "pip install" in str(step.get("run", ""))
+    )
+
+    declared = {
+        requirement for requirement in extra if requirement.startswith("pefile")
+    }
+    assert declared == {PEFILE_REQUIREMENT}
+    assert f'"{PEFILE_REQUIREMENT}"' in install, install

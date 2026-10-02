@@ -50,8 +50,13 @@ jobs:
       # commit that says so, with whatever that version newly objects to fixed
       # in the same commit. tests/test_wheels_workflow.py ties it to the `dev`
       # extra, which is where a contributor gets the same version from.
+      #
+      # pefile is pinned for the other reason a tool gets pinned here: it is not
+      # a test dependency but the PE reader the Windows link check and repair
+      # run, so the tests have to exercise the version the build installs
+      # (wheelbuild.link_check.PEFILE_REQUIREMENT). The same test ties all three.
       - name: Install dev dependencies
-        run: python -m pip install --upgrade pip pytest "ruff==0.16.9" mypy packaging pyyaml
+        run: python -m pip install --upgrade pip pytest "ruff==0.16.9" mypy packaging pyyaml "pefile==2024.8.26"
       - run: ruff check .
       - run: ruff format --check .
       - run: mypy palace_solver
