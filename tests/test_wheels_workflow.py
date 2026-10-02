@@ -463,24 +463,9 @@ def test_the_readability_guard_covers_every_row(named_step):
     assert "steps.cache-guard.outcome == 'success'" in save["if"]
 
 
-#: The smoke-and-interop ticket teaches both scripts the Windows wheel and
-#: removes the Windows condition these steps carry until then. Strict, so the
-#: tests that forbid a gate fail loudly the moment the gate is gone and the
-#: marker is left behind.
-UNTIL_WINDOWS_SMOKE = pytest.mark.xfail(
-    strict=True,
-    reason="smoke and interop skip Windows until the smoke-and-interop ticket",
-)
-
-
 @pytest.mark.parametrize(
     "name",
-    [
-        pytest.param(
-            "Smoke test in a clean virtual environment", marks=UNTIL_WINDOWS_SMOKE
-        ),
-        "Report wheel size",
-    ],
+    ["Smoke test in a clean virtual environment", "Report wheel size"],
 )
 def test_the_wheel_steps_run_for_every_row(named_step, name):
     """Every platform now emits a wheel, so these are unconditional. A row that
@@ -514,7 +499,6 @@ def test_the_artifact_is_uploaded_for_every_row(steps):
     assert "if" not in upload
 
 
-@UNTIL_WINDOWS_SMOKE
 def test_every_row_proves_the_launcher(rows, named_step):
     """A platform that builds a wheel it cannot launch ranks with is not done,
     so this step runs everywhere rather than on the platforms that happened to
@@ -834,13 +818,42 @@ def test_the_pe_reader_the_tests_run_is_the_one_the_build_installs(workflow):
     assert f'"{PEFILE_REQUIREMENT}"' in install, install
 
 
-def test_only_windows_skips_the_smoke_and_interop_tests(named_step):
-    """The one gate the strict xfails above tolerate, and nothing wider."""
-    for name in (
-        "Smoke test in a clean virtual environment",
-        "Launcher interoperability",
-    ):
-        assert named_step(name)["if"] == "runner.os != 'Windows'"
+@pytest.mark.parametrize(
+    ("name", "script", "twin"),
+    [
+        (
+            "Smoke test in a clean virtual environment",
+            "scripts/smoke-test.sh",
+            "python scripts/smoke-test-windows.py",
+        ),
+        (
+            "Launcher interoperability",
+            "scripts/interop-test.sh",
+            "python scripts/interop-test-windows.py --install-msmpi",
+        ),
+    ],
+)
+def test_windows_runs_the_python_twin_of_each_wheel_test(
+    named_step, name, script, twin
+):
+    """The Windows row runs the twin, on the setup-python interpreter, and every
+    other row still runs the bash script it always ran."""
+    run = named_step(name)["run"]
+
+    assert '[[ "$RUNNER_OS" == Windows ]]' in run
+    assert f'{twin} "$wheel" "$config"' in run
+    assert f'{script} "$wheel" "$config"' in run
+    assert "python3" not in run
+    assert (ROOT / twin.split()[1]).is_file()
+
+
+def test_the_smoke_test_runs_before_the_interop_test_installs_msmpi(steps):
+    """The smoke test is the run with no MS-MPI on the machine but the wheel's."""
+    names = [step.get("name") for step in steps]
+
+    assert names.index("Smoke test in a clean virtual environment") < names.index(
+        "Launcher interoperability"
+    )
 
 
 def test_the_size_summary_path_is_read_from_the_environment(named_step):

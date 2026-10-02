@@ -409,34 +409,43 @@ jobs:
       # wheel is self-contained outside the environment that produced it. It is
       # also the shape macOS has no choice about, so that row adds no step here.
       #
-      # Not on Windows yet: both scripts are POSIX-only, and teaching them the
-      # Windows wheel is the smoke-and-interop ticket's work. That ticket
-      # removes this condition; the tests that require it gone are strict
-      # xfails until then.
+      # Windows runs the Python twin of each script rather than the script
+      # under this job's Git bash, whose MSYS2 runtime would put its own tools
+      # on the PATH the test claims the wheel needs none of;
+      # scripts/_windows_wheel.py has the rest of the reasons. It runs before
+      # the interop step, while the runner has no MS-MPI installed: the
+      # wheel's own has to be enough.
       - name: Smoke test in a clean virtual environment
-        if: runner.os != 'Windows'
         run: |
-          scripts/smoke-test.sh \
-            "$(ls wheelhouse/*.whl)" \
-            "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          wheel="$(ls wheelhouse/*.whl)"
+          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/smoke-test-windows.py "$wheel" "$config"
+          else
+            scripts/smoke-test.sh "$wheel" "$config"
+          fi
 
       # The smoke test stops at --dry-run. This solves the example for real on
       # two ranks under both launchers, so collective communication is
       # exercised and the two results must agree.
       #
-      # Ungated on Linux and macOS. The foreign launcher it pairs the wheel
-      # with is the PyPI `mpich` wheel, which publishes a macosx_11_0_arm64
-      # wheel for both the `mpich<5` series the vendored MPICH belongs to and
-      # the `mpich>=5` one stage 4 reaches for -- so macOS needs no Homebrew
-      # mpiexec and no source of its own.
-      #
-      # Not on Windows yet, for the same reason and until the same ticket.
+      # Ungated on every row. On Linux and macOS the foreign launcher it pairs
+      # the wheel with is the PyPI `mpich` wheel, which publishes a
+      # macosx_11_0_arm64 wheel for both the `mpich<5` series the vendored
+      # MPICH belongs to and the `mpich>=5` one stage 4 reaches for -- so macOS
+      # needs no Homebrew mpiexec and no source of its own. On Windows it is
+      # the system MS-MPI 10.1.x a user installs from msmpisetup.exe, which the
+      # twin installs on this disposable runner, hash-checked, when told to
+      # with --install-msmpi.
       - name: Launcher interoperability
-        if: runner.os != 'Windows'
         run: |
-          scripts/interop-test.sh \
-            "$(ls wheelhouse/*.whl)" \
-            "${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          wheel="$(ls wheelhouse/*.whl)"
+          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/interop-test-windows.py --install-msmpi "$wheel" "$config"
+          else
+            scripts/interop-test.sh "$wheel" "$config"
+          fi
 
       # Writes the job summary, so this is the size verdict a human reads. It
       # also fails on an oversized wheel rather than only saying OVER: a size
