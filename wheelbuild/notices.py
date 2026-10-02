@@ -18,6 +18,13 @@ wheel repair step. Their notices are therefore added from the texts shipped in
 a library neither harvested nor named here fails the build rather than shipping
 unnoticed.
 
+The compiler runtime is not one license. Most of it is GPL-3.0 with the GCC
+Runtime Library Exception, but ``libquadmath`` is the GNU Library General
+Public License, version 2 or any later version, and GCC ships it beside the
+LGPL 2.1 text. :data:`COMPILER_RUNTIME_LIBRARIES` therefore maps each runtime
+to its license rather than listing them, so that neither note can be written
+for a library the other covers.
+
 The audit is the same question on both platforms asked of two different file
 name conventions, because the repair tools differ in where they put what they
 copy and in what they call it. ``auditwheel`` bundles into a
@@ -76,23 +83,34 @@ REQUIRED_DEPENDENCIES = (
 #: Where the CeCILL-C obligation's "corresponding sources" pointer aims.
 MUMPS_SOURCE_URL = "https://mumps-solver.org/index.php?page=dwnld"
 
+#: The license of the GCC runtime libraries, as an SPDX expression. The
+#: Exception permits this redistribution but does not remove the obligation to
+#: reproduce the notice.
+GCC_RUNTIME_LICENSE = "GPL-3.0-or-later WITH GCC-exception-3.1"
+
+#: The license of ``libquadmath``, as an SPDX expression. Its sources grant the
+#: GNU Library General Public License "version 2 of the License, or (at your
+#: option) any later version"; the text GCC ships with it, in
+#: ``libquadmath/COPYING.LIB``, is the LGPL 2.1, which is the version the wheel
+#: redistributes it under.
+LIBQUADMATH_LICENSE = "LGPL-2.0-or-later"
+
 #: Runtime libraries that come from the compiler rather than from a source
 #: checkout, under the name :func:`library_stem` reduces them to on either
-#: platform.
+#: platform, mapped to the license each is noticed under.
 #: ``libgfortran``, ``libgomp`` and ``libquadmath`` are vendored because the
-#: manylinux_2_28 policy whitelist does not cover them; ``libstdc++`` and
-#: ``libgcc_s`` are whitelisted on Linux and so are not vendored there, but the
-#: macOS wheel carries them, which the first macOS build confirmed. All of them
-#: are GPL-3.0 with the GCC Runtime Library Exception, which permits this
-#: redistribution but does not remove the obligation to reproduce the notice.
+#: manylinux_2_28 policy whitelist does not cover them, though GCC builds no
+#: ``libquadmath`` for aarch64 Linux and that wheel carries none; ``libstdc++``
+#: and ``libgcc_s`` are whitelisted on Linux and so are not vendored there, but
+#: the macOS wheel carries them, which the first macOS build confirmed.
 #: LLVM's ``libomp`` is deliberately not here — see the module docstring.
-COMPILER_RUNTIME_LIBRARIES = (
-    "libgcc_s",
-    "libgfortran",
-    "libgomp",
-    "libquadmath",
-    "libstdc++",
-)
+COMPILER_RUNTIME_LIBRARIES = {
+    "libgcc_s": GCC_RUNTIME_LICENSE,
+    "libgfortran": GCC_RUNTIME_LICENSE,
+    "libgomp": GCC_RUNTIME_LICENSE,
+    "libquadmath": LIBQUADMATH_LICENSE,
+    "libstdc++": GCC_RUNTIME_LICENSE,
+}
 
 #: Where the GPL's "corresponding sources" pointer aims for the GCC runtime.
 GCC_SOURCE_URL = "https://gcc.gnu.org/mirrors.html"
@@ -135,6 +153,7 @@ _DATA = Path(__file__).resolve().parent / "data"
 _CECILL_C_TEXT = _DATA / "CeCILL-C-V1-en.txt"
 _GPL_3_TEXT = _DATA / "GPL-3.0.txt"
 _GCC_EXCEPTION_TEXT = _DATA / "GCC-Runtime-Library-Exception-3.1.txt"
+_LGPL_2_1_TEXT = _DATA / "LGPL-2.1.txt"
 
 _HEADER = """\
 THIRD-PARTY NOTICES for palace-solver
@@ -159,12 +178,18 @@ def _mumps_note(checkouts: list[str]) -> str:
     )
 
 
+def _gcc_release(gcc_version: str | None) -> str:
+    return f"GCC {gcc_version}" if gcc_version else "the GCC release used to build it"
+
+
 def _gcc_runtime_note(gcc_version: str | None) -> str:
     """Render the GCC runtime note, naming the libraries and their sources."""
-    named = ", ".join(COMPILER_RUNTIME_LIBRARIES)
-    release = (
-        f"GCC {gcc_version}" if gcc_version else "the GCC release used to build it"
+    named = ", ".join(
+        library
+        for library, terms in COMPILER_RUNTIME_LIBRARIES.items()
+        if terms == GCC_RUNTIME_LICENSE
     )
+    release = _gcc_release(gcc_version)
     return (
         "The wheel repair step copies the GCC runtime libraries the payload "
         f"links ({named}, whichever of them the platform does not provide) out "
@@ -174,6 +199,22 @@ def _gcc_runtime_note(gcc_version: str | None) -> str:
         "permits this redistribution without extending the GPL to the rest of "
         f"the wheel. The binaries were produced by {release}, whose "
         f"corresponding sources are available from {GCC_SOURCE_URL}.\n"
+    )
+
+
+def _libquadmath_note(gcc_version: str | None) -> str:
+    """Render the libquadmath note: its license, its sources, and relinking."""
+    return (
+        "libquadmath is the one GCC runtime library not under the GPL. Its "
+        "sources grant the GNU Library General Public License version 2 or, at "
+        "your option, any later version; GCC distributes it with the GNU Lesser "
+        "General Public License version 2.1, reproduced below, and it is "
+        "redistributed here under that version. The wheel repair step copies it "
+        "into the wheel where the payload links it. It is shipped as its own "
+        "shared library, which the solver loads at run time rather than "
+        "containing, so a compatible build of it can be substituted. The binary "
+        f"was produced by {_gcc_release(gcc_version)}, whose corresponding "
+        f"sources are available from {GCC_SOURCE_URL}.\n"
     )
 
 
@@ -348,6 +389,21 @@ def render(source_roots: Sequence[Path], *, gcc_version: str | None = None) -> s
         _section(
             "GNU General Public License version 3",
             _GPL_3_TEXT.read_text(encoding="utf-8"),
+        )
+    )
+    sections.append(
+        _section(
+            # Conditional for the same reason as the system libraries below:
+            # GCC builds no libquadmath for aarch64 Linux, so that payload
+            # never carries it.
+            "libquadmath (LGPL, vendored where the payload links it)",
+            _libquadmath_note(gcc_version),
+        )
+    )
+    sections.append(
+        _section(
+            "GNU Lesser General Public License version 2.1",
+            _LGPL_2_1_TEXT.read_text(encoding="utf-8"),
         )
     )
     for library, filename in SYSTEM_LIBRARY_LICENSES.items():

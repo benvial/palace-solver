@@ -153,6 +153,38 @@ def test_harvest_covers_the_compiler_runtime_the_repair_step_vendors(tmp_path):
         assert library in text
 
 
+def test_each_compiler_runtime_library_is_pinned_to_its_own_license():
+    """libquadmath is not the GPL-3 runtime; a regrouping must not fold it back."""
+    assert notices.COMPILER_RUNTIME_LIBRARIES == {
+        "libgcc_s": "GPL-3.0-or-later WITH GCC-exception-3.1",
+        "libgfortran": "GPL-3.0-or-later WITH GCC-exception-3.1",
+        "libgomp": "GPL-3.0-or-later WITH GCC-exception-3.1",
+        "libquadmath": "LGPL-2.0-or-later",
+        "libstdc++": "GPL-3.0-or-later WITH GCC-exception-3.1",
+    }
+
+
+def test_harvest_notices_libquadmath_under_the_lgpl_not_the_gpl(tmp_path):
+    source_root = _full_tree(tmp_path / "build")
+
+    text = notices.harvest(
+        source_roots=[source_root], output=tmp_path / "NOTICES", gcc_version="14.2.1"
+    ).read_text()
+
+    gpl_note = text.split("GCC runtime libraries (GPL-3.0")[1].split(
+        "GCC Runtime Library Exception 3.1"
+    )[0]
+    assert "libgfortran" in gpl_note
+    assert "libquadmath" not in gpl_note
+    # The note names the LGPL too, so the next section is found by its title line.
+    lgpl_note = text.split("libquadmath (LGPL")[1].split(
+        "\nGNU Lesser General Public License version 2.1\n"
+    )[0]
+    assert "GCC 14.2.1" in lgpl_note
+    assert notices.GCC_SOURCE_URL in lgpl_note
+    assert "GNU LESSER GENERAL PUBLIC LICENSE\n\t\t       Version 2.1" in text
+
+
 def _wheel_carrying(path: Path, vendored: list[str]) -> Path:
     """Write a wheel whose .libs directory holds the given file names."""
     with zipfile.ZipFile(path, "w") as archive:
@@ -189,13 +221,18 @@ def test_library_stem_strips_auditwheels_hash_and_the_soversion(name, expected):
 def test_audit_accepts_libraries_built_here_and_the_named_compiler_runtime(tmp_path):
     wheel = _wheel_carrying(
         tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
-        ["libmpi-1a2b3c4d.so.12.1.8", "libgfortran-83c28eba.so.5.0.0"],
+        [
+            "libmpi-1a2b3c4d.so.12.1.8",
+            "libgfortran-83c28eba.so.5.0.0",
+            "libquadmath-2284e583.so.0.0.0",
+        ],
     )
     prefix = _install_prefix(tmp_path / "install", ["libmpi.so.12"])
 
     assert notices.audit_wheel(wheel=wheel, install_prefix=prefix) == [
         "libgfortran",
         "libmpi",
+        "libquadmath",
     ]
 
 
