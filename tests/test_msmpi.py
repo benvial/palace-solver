@@ -1,4 +1,5 @@
 import hashlib
+import zipfile
 
 import pytest
 
@@ -233,3 +234,62 @@ def test_unpack_carves_the_msis_then_unpacks_each(tmp_path, monkeypatch):
         str(tmp_path / "work" / "parts" / "2.msi"),
         str(tmp_path / "work" / "parts" / "4.msi"),
     ]
+
+
+def _wheel(path, members):
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("palace_solver/bin/", "")
+        for name, data in members.items():
+            archive.writestr(name, data)
+    return path
+
+
+SHIPPED = {
+    "palace_solver/bin/msmpi.dll": X64_FILES["msmpi64.dll"],
+    "palace_solver/bin/mpiexec.exe": X64_FILES["mpiexec.exe"],
+    "palace_solver/bin/smpd.exe": X64_FILES["smpd.exe"],
+    "palace_solver/bin/palace-real.exe": b"solver",
+}
+
+
+def test_verify_wheel_accepts_the_x64_files_wherever_the_repair_put_them(tmp_path):
+    wheel = _wheel(tmp_path / "w.whl", SHIPPED)
+
+    checked = msmpi.verify_wheel(wheel, files=STAND_IN_FILES)
+
+    assert sorted(checked) == [
+        "palace_solver/bin/mpiexec.exe",
+        "palace_solver/bin/msmpi.dll",
+        "palace_solver/bin/smpd.exe",
+    ]
+
+
+def test_verify_wheel_names_a_dll_the_repair_took_from_elsewhere(tmp_path):
+    wheel = _wheel(
+        tmp_path / "w.whl",
+        {**SHIPPED, "palace_solver/bin/msmpi.dll": X86_FILES["msmpi.dll"]},
+    )
+
+    with pytest.raises(
+        msmpi.ChecksumMismatchError, match=r"palace_solver/bin/msmpi\.dll"
+    ):
+        msmpi.verify_wheel(wheel, files=STAND_IN_FILES)
+
+
+def test_verify_wheel_refuses_a_wheel_without_the_launcher(tmp_path):
+    members = dict(SHIPPED)
+    del members["palace_solver/bin/smpd.exe"]
+    wheel = _wheel(tmp_path / "w.whl", members)
+
+    with pytest.raises(FileNotFoundError, match=r"smpd\.exe"):
+        msmpi.verify_wheel(wheel, files=STAND_IN_FILES)
+
+
+def test_verify_wheel_refuses_a_second_copy_whatever_its_case(tmp_path):
+    wheel = _wheel(
+        tmp_path / "w.whl",
+        {**SHIPPED, "palace_solver.libs/MSMPI.DLL": X64_FILES["msmpi64.dll"]},
+    )
+
+    with pytest.raises(msmpi.DuplicateRedistributableError, match="2 copies"):
+        msmpi.verify_wheel(wheel, files=STAND_IN_FILES)

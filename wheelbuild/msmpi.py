@@ -42,9 +42,10 @@ import hashlib
 import shutil
 import tempfile
 import urllib.request
+import zipfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from wheelbuild._process import check_call
 
@@ -118,6 +119,10 @@ class ChecksumMismatchError(RuntimeError):
 
 class MissingX64InstallerError(RuntimeError):
     """The installer does not hold exactly one MSI with the x64 runtime."""
+
+
+class DuplicateRedistributableError(RuntimeError):
+    """A wheel carries one of the redistributable files more than once."""
 
 
 def sha256(path: Path) -> str:
@@ -285,6 +290,58 @@ def verify_texts(tree: Path, texts: Mapping[str, str] = MICROSOFT_TEXTS) -> None
     """
     for name, expected in texts.items():
         verify(tree / name, expected)
+
+
+def verify_wheel(
+    wheel: Path, *, files: Sequence[RedistributableFile] = REDISTRIBUTABLE_FILES
+) -> list[str]:
+    """Check the MS-MPI files a finished wheel carries against their hashes.
+
+    :func:`run` verified them when they were fetched, but what ships is
+    whatever the repair copied, from whichever directory its search path
+    reached first. Reading the wheel's own members is what proves the shipped
+    bytes are Microsoft's x64 files: an ``msmpi.dll`` found in ``System32``
+    ahead of the fetched one fails here, naming the member. Each file must be
+    in the wheel exactly once, matched by name without regard to case as
+    Windows matches it, since a second copy is a second MPI a rank could load.
+
+    Args:
+        wheel: The repaired, retagged wheel.
+        files: What it must carry.
+
+    Returns:
+        The archive members checked.
+
+    Raises:
+        FileNotFoundError: If the wheel lacks one of them.
+        DuplicateRedistributableError: If it carries one twice.
+        ChecksumMismatchError: If one is not Microsoft's x64 file.
+    """
+    with zipfile.ZipFile(wheel) as archive:
+        members = [name for name in archive.namelist() if not name.endswith("/")]
+        checked = []
+        for entry in files:
+            found = [
+                name
+                for name in members
+                if PurePosixPath(name).name.lower() == entry.name.lower()
+            ]
+            if not found:
+                raise FileNotFoundError(f"{entry.name}: not in {wheel.name}")
+            if len(found) > 1:
+                raise DuplicateRedistributableError(
+                    f"{entry.name}: {len(found)} copies in {wheel.name}: "
+                    + ", ".join(found)
+                )
+            (member,) = found
+            actual = hashlib.sha256(archive.read(member)).hexdigest()
+            if actual != entry.sha256:
+                raise ChecksumMismatchError(
+                    f"{member}: SHA-256 is {actual}, expected {entry.sha256} "
+                    f"(MS-MPI {MSMPI_VERSION}, read from {wheel.name})"
+                )
+            checked.append(member)
+    return checked
 
 
 def run(
