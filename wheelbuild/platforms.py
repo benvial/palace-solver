@@ -103,20 +103,43 @@ def is_native_binary(path: Path) -> bool:
 
     Recognises ELF and Mach-O, including universal Mach-O binaries, from the
     first four bytes — the cheapest possible read, and the reason this is not a
-    call out to ``file``. Deliberately not restricted to the running platform's
-    format: the callers are asking whether a file is the compiled artefact or
-    the wrapper script beside it, which is one question on both platforms.
+    call out to ``file`` — and PE by :func:`is_pe`. Deliberately not restricted
+    to the running platform's format: the callers are asking whether a file is
+    the compiled artefact or the wrapper script beside it, which is one
+    question on every platform. Palace names its Windows binary
+    ``palace-x86_64.bin`` as it does elsewhere, so the name cannot answer it
+    there either.
 
     Args:
         path: File to inspect.
 
     Returns:
-        True for an ELF or Mach-O file, False for anything else, a wrapper
+        True for an ELF, Mach-O or PE file, False for anything else, a wrapper
         script included.
     """
     with path.open("rb") as handle:
         magic = handle.read(4)
-    return magic == _ELF_MAGIC or magic in _MACH_O_MAGICS
+    return magic == _ELF_MAGIC or magic in _MACH_O_MAGICS or is_pe(path)
+
+
+def is_pe(path: Path) -> bool:
+    """Whether ``path`` is a PE file: a DOS stub pointing at a PE signature.
+
+    Both halves, because ``MZ`` alone is two printable letters a text file can
+    begin with.
+
+    Args:
+        path: File to inspect.
+
+    Returns:
+        True for a Windows executable or DLL.
+    """
+    with path.open("rb") as handle:
+        stub = handle.read(0x40)
+        if len(stub) < 0x40 or not stub.startswith(b"MZ"):
+            return False
+        handle.seek(int.from_bytes(stub[0x3C:0x40], "little"))
+        return handle.read(4) == b"PE\0\0"
 
 
 def _shared_library_name(

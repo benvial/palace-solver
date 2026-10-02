@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from pe_files import write_pe
 
 from wheelbuild import platforms
 
@@ -254,3 +255,20 @@ def test_supported_platform_tags_lists_each_platform_once():
     tags = platforms.supported_platform_tags()
 
     assert len(tags) == len(set(tags))
+
+
+def test_is_native_binary_accepts_a_pe_binary(tmp_path):
+    """Palace names its Windows binary palace-x86_64.bin too, so only the
+    format tells it from the wrapper script beside it."""
+    path = write_pe(tmp_path / "palace-x86_64.bin", ["KERNEL32.dll"])
+
+    assert platforms.is_native_binary(path)
+    assert platforms.is_pe(path)
+
+
+def test_is_pe_rejects_a_text_file_that_starts_with_mz(tmp_path):
+    path = tmp_path / "notes.txt"
+    path.write_text("MZ is how this line starts, and it is not a program.\n" * 3)
+
+    assert not platforms.is_pe(path)
+    assert not platforms.is_native_binary(path)

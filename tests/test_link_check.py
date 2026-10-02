@@ -1,8 +1,8 @@
-import struct
 import sys
 from pathlib import Path
 
 import pytest
+from pe_files import write_pe
 
 from wheelbuild import link_check, platforms
 
@@ -281,122 +281,7 @@ def test_parse_identity_is_none_for_a_file_that_is_not_a_dylib():
 # tool, so these run on any host. The files are built here rather than
 # committed: a synthetic PE that pefile itself parses is as honest as a real
 # one for the only part the reader looks at, the two import directories, and
-# the builder shows exactly which bytes that is.
-
-#: Where the one section of a synthetic PE starts, in the file and in memory.
-_FILE_ALIGNMENT = 0x200
-_SECTION_RVA = 0x1000
-
-
-class _ImportSection:
-    """The bytes of one ``.idata`` section, laid out as they are appended.
-
-    Every structure that points at another does so by RVA, so a structure is
-    placed first and its address read back from :meth:`add`.
-    """
-
-    def __init__(self):
-        self.data = bytearray()
-
-    def add(self, blob):
-        """Append ``blob`` 8-byte aligned and return its RVA."""
-        self.data.extend(b"\0" * (-len(self.data) % 8))
-        rva = _SECTION_RVA + len(self.data)
-        self.data.extend(blob)
-        return rva
-
-    def put(self, rva, blob):
-        """Overwrite the bytes at ``rva``, to fill a table reserved earlier."""
-        offset = rva - _SECTION_RVA
-        self.data[offset : offset + len(blob)] = blob
-
-    def thunks(self, dll):
-        """Return the name, lookup table and address table for one DLL.
-
-        pefile drops a descriptor whose tables are empty, as a loader would
-        have nothing to bind, so every DLL imports one function.
-        """
-        hint_name = self.add(struct.pack("<H", 0) + b"Function\0")
-        name = self.add(dll.encode() + b"\0")
-        lookup = self.add(struct.pack("<QQ", hint_name, 0))
-        address = self.add(struct.pack("<QQ", hint_name, 0))
-        return name, lookup, address
-
-
-def _portable_executable(imports=(), delayed=()):
-    """Return a minimal x86-64 PE importing ``imports``, delay-loading ``delayed``.
-
-    One section holding both directories, and nothing a loader would need to
-    run it: no code, no entry point. The two directory entries are what any PE
-    reader goes to, and they are filled as a linker fills them.
-    """
-    section = _ImportSection()
-    import_table = section.add(b"\0" * 20 * (len(imports) + 1))
-    delay_table = section.add(b"\0" * 32 * (len(delayed) + 1))
-    for index, dll in enumerate(imports):
-        name, lookup, address = section.thunks(dll)
-        # IMAGE_IMPORT_DESCRIPTOR: OriginalFirstThunk, TimeDateStamp,
-        # ForwarderChain, Name, FirstThunk.
-        section.put(
-            import_table + 20 * index,
-            struct.pack("<IIIII", lookup, 0, 0, name, address),
-        )
-    for index, dll in enumerate(delayed):
-        name, lookup, address = section.thunks(dll)
-        handle = section.add(b"\0" * 8)
-        # IMAGE_DELAYLOAD_DESCRIPTOR: Attributes (1: the fields are RVAs),
-        # DllNameRVA, ModuleHandleRVA, ImportAddressTableRVA,
-        # ImportNameTableRVA, BoundImportAddressTableRVA,
-        # UnloadInformationTableRVA, TimeDateStamp.
-        section.put(
-            delay_table + 32 * index,
-            struct.pack("<IIIIIIII", 1, name, handle, address, lookup, 0, 0, 0),
-        )
-
-    raw = bytes(section.data) + b"\0" * (-len(section.data) % _FILE_ALIGNMENT)
-    directories = [(0, 0)] * 16
-    directories[1] = (import_table, 20 * (len(imports) + 1))  # IMPORT
-    directories[13] = (delay_table, 32 * (len(delayed) + 1))  # DELAY_IMPORT
-    optional_header = struct.pack(
-        "<HBBIIIIIQIIHHHHHHIIIIHHQQQQII",
-        0x20B,  # PE32+
-        *(0, 0, 0, len(raw), 0, 0, 0),
-        0x140000000,  # ImageBase
-        _SECTION_RVA,  # SectionAlignment
-        _FILE_ALIGNMENT,
-        *(6, 0, 0, 0, 6, 0, 0),
-        _SECTION_RVA + len(raw),  # SizeOfImage
-        _FILE_ALIGNMENT,  # SizeOfHeaders
-        0,
-        3,  # IMAGE_SUBSYSTEM_WINDOWS_CUI
-        *(0, 0x100000, 0x1000, 0x100000, 0x1000, 0),
-        len(directories),
-    ) + b"".join(struct.pack("<II", *entry) for entry in directories)
-    headers = (
-        b"MZ".ljust(0x3C, b"\0")
-        + struct.pack("<I", 0x40)  # e_lfanew
-        + b"PE\0\0"
-        # IMAGE_FILE_HEADER: AMD64, one section, an executable image.
-        + struct.pack("<HHIIIHH", 0x8664, 1, 0, 0, 0, len(optional_header), 0x22)
-        + optional_header
-        + struct.pack(
-            "<8sIIIIIIHHI",
-            b".idata",
-            len(section.data),
-            _SECTION_RVA,
-            len(raw),
-            _FILE_ALIGNMENT,
-            *(0, 0, 0, 0),
-            0xC0000040,  # initialised data, readable, writable
-        )
-    )
-    return headers.ljust(_FILE_ALIGNMENT, b"\0") + raw
-
-
-def _write_pe(path, imports=(), delayed=()):
-    path.write_bytes(_portable_executable(imports, delayed))
-    return path
-
+# the builder (tests/pe_files.py) shows exactly which bytes that is.
 
 #: What the spike measured palace-real.exe importing directly, less all but two
 #: of the UCRT contracts, which add nothing a test of the prefix does not.
@@ -421,7 +306,7 @@ PALACE_IMPORTS = (
 
 
 def test_pe_imports_reads_the_import_table(tmp_path):
-    binary = _write_pe(tmp_path / "palace-real.exe", PALACE_IMPORTS)
+    binary = write_pe(tmp_path / "palace-real.exe", PALACE_IMPORTS)
 
     assert link_check.pe_imports(binary) == PALACE_IMPORTS
 
@@ -431,7 +316,7 @@ def test_pe_imports_counts_delay_loaded_dlls(tmp_path):
     so a missing one is a crash deferred to whichever code path calls it first
     -- one a smoke run may never take. It is a dependency all the same.
     """
-    binary = _write_pe(
+    binary = write_pe(
         tmp_path / "mpiexec.exe", ["KERNEL32.dll"], delayed=["libdelayed.dll"]
     )
 
@@ -442,7 +327,7 @@ def test_pe_imports_names_each_dll_once(tmp_path):
     """Windows matches DLL names without regard to case, and a DLL both
     imported and delay-loaded is still one file.
     """
-    binary = _write_pe(
+    binary = write_pe(
         tmp_path / "smpd.exe", ["KERNEL32.dll", "msmpi.dll"], delayed=["kernel32.dll"]
     )
 
@@ -451,7 +336,7 @@ def test_pe_imports_names_each_dll_once(tmp_path):
 
 def test_a_pe_with_no_imports_has_no_dependencies(tmp_path):
     """A resource-only DLL, such as a message table, imports nothing."""
-    binary = _write_pe(tmp_path / "resources.dll")
+    binary = write_pe(tmp_path / "resources.dll")
 
     assert link_check.pe_imports(binary) == ()
 
@@ -495,13 +380,13 @@ def test_a_runtime_the_wheel_must_carry_is_not_a_system_dll(name):
 def _flat_payload(directory):
     """A repaired Windows payload: every DLL beside the executables."""
     directory.mkdir()
-    _write_pe(
+    write_pe(
         directory / "palace-real.exe",
         ["KERNEL32.dll", "msmpi.dll", "libgfortran-5.dll"],
     )
-    _write_pe(directory / "msmpi.dll", ["KERNEL32.dll", "ADVAPI32.dll"])
-    _write_pe(directory / "libgfortran-5.dll", ["KERNEL32.dll", "libquadmath-0.dll"])
-    _write_pe(directory / "libquadmath-0.dll", ["api-ms-win-crt-heap-l1-1-0.dll"])
+    write_pe(directory / "msmpi.dll", ["KERNEL32.dll", "ADVAPI32.dll"])
+    write_pe(directory / "libgfortran-5.dll", ["KERNEL32.dll", "libquadmath-0.dll"])
+    write_pe(directory / "libquadmath-0.dll", ["api-ms-win-crt-heap-l1-1-0.dll"])
     return directory
 
 
@@ -533,8 +418,8 @@ def test_a_dll_beside_the_importer_matches_without_regard_to_case(tmp_path):
     """
     payload = tmp_path / "bin"
     payload.mkdir()
-    _write_pe(payload / "palace-real.exe", ["MSMPI.DLL"])
-    _write_pe(payload / "msmpi.dll")
+    write_pe(payload / "palace-real.exe", ["MSMPI.DLL"])
+    write_pe(payload / "msmpi.dll")
 
     assert link_check.inspect_binary(payload / "palace-real.exe").unsatisfied == ()
 
@@ -542,7 +427,7 @@ def test_a_dll_beside_the_importer_matches_without_regard_to_case(tmp_path):
 def test_a_delay_loaded_dll_must_travel_with_the_wheel(tmp_path):
     payload = tmp_path / "bin"
     payload.mkdir()
-    _write_pe(payload / "mpiexec.exe", ["KERNEL32.dll"], delayed=["libdelayed.dll"])
+    write_pe(payload / "mpiexec.exe", ["KERNEL32.dll"], delayed=["libdelayed.dll"])
 
     report = link_check.inspect_binary(payload / "mpiexec.exe")
 
@@ -599,20 +484,20 @@ def _build_tree(root):
     install, toolchain, msmpi = root / "install", root / "ucrt64", root / "msmpi"
     for directory in (install, toolchain, msmpi):
         directory.mkdir(parents=True)
-    _write_pe(
+    write_pe(
         install / "palace-real.exe",
         ["KERNEL32.dll", "libceed.dll", "msmpi.dll", "libgfortran-5.dll"],
     )
-    _write_pe(install / "libceed.dll", ["KERNEL32.dll", "libxsmm.dll"])
-    _write_pe(install / "libxsmm.dll", ["api-ms-win-crt-heap-l1-1-0.dll"])
-    _write_pe(
+    write_pe(install / "libceed.dll", ["KERNEL32.dll", "libxsmm.dll"])
+    write_pe(install / "libxsmm.dll", ["api-ms-win-crt-heap-l1-1-0.dll"])
+    write_pe(
         toolchain / "libgfortran-5.dll", ["libquadmath-0.dll", "libgcc_s_seh-1.dll"]
     )
-    _write_pe(toolchain / "libquadmath-0.dll", ["libgcc_s_seh-1.dll"])
-    _write_pe(toolchain / "libgcc_s_seh-1.dll", ["KERNEL32.dll"])
-    _write_pe(msmpi / "msmpi.dll", ["KERNEL32.dll", "ADVAPI32.dll"])
-    _write_pe(msmpi / "mpiexec.exe", ["KERNEL32.dll"], delayed=["libdelayed.dll"])
-    _write_pe(msmpi / "libdelayed.dll")
+    write_pe(toolchain / "libquadmath-0.dll", ["libgcc_s_seh-1.dll"])
+    write_pe(toolchain / "libgcc_s_seh-1.dll", ["KERNEL32.dll"])
+    write_pe(msmpi / "msmpi.dll", ["KERNEL32.dll", "ADVAPI32.dll"])
+    write_pe(msmpi / "mpiexec.exe", ["KERNEL32.dll"], delayed=["libdelayed.dll"])
+    write_pe(msmpi / "libdelayed.dll")
     return install, toolchain, msmpi
 
 
@@ -640,7 +525,7 @@ def test_the_closure_of_several_roots_names_each_dll_once(tmp_path):
     the same runtimes; a flat copy wants each file once.
     """
     install, toolchain, msmpi = _build_tree(tmp_path)
-    _write_pe(msmpi / "smpd.exe", ["msmpi.dll"], delayed=["libdelayed.dll"])
+    write_pe(msmpi / "smpd.exe", ["msmpi.dll"], delayed=["libdelayed.dll"])
 
     closure = link_check.pe_import_closure(
         [install / "palace-real.exe", msmpi / "mpiexec.exe", msmpi / "smpd.exe"],
@@ -657,7 +542,7 @@ def test_the_closure_takes_the_first_directory_that_has_a_dll(tmp_path):
     install prefix built wins over a same-named one the toolchain ships.
     """
     install, toolchain, msmpi = _build_tree(tmp_path)
-    _write_pe(toolchain / "libceed.dll", ["KERNEL32.dll"])
+    write_pe(toolchain / "libceed.dll", ["KERNEL32.dll"])
 
     closure = link_check.pe_import_closure(
         [install / "palace-real.exe"], [install, toolchain, msmpi]
