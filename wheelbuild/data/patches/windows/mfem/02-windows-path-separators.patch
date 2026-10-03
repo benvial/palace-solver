@@ -1,0 +1,58 @@
+Carried patch, Windows only: MFEM's data collections split paths on '\' too.
+
+DataCollection splits a collection's path on '/' only, in two places. Palace
+builds its ParaView collection paths with std::filesystem, so on Windows they
+reach MFEM as "postpro\paraview\electrostatic".
+- The constructor finds no '/', so the whole path becomes the collection's
+  name, and the .pvd is opened at
+  "postpro\paraview\electrostatic/postpro\paraview\electrostatic.pvd". That
+  directory does not exist, and the failure is silent.
+- create_directory creates no parent, so mkdir fails with ENOENT and every
+  save warns "Error creating directory".
+Together these meant 0.18.1.post3 wrote no ParaView output at all. Under
+_WIN32 both places split on '\' as well. No effect on Linux and macOS. Still
+present on MFEM master.
+
+--- a/fem/datacollection.cpp
++++ b/fem/datacollection.cpp
+@@ -28,6 +28,14 @@
+ #define mkdir(dir, mode) _mkdir(dir)
+ #endif
+ 
++#ifdef _WIN32
++// Either separator, as Windows accepts both: Palace builds collection paths
++// with std::filesystem, whose native separator here is '\'.
++static const char path_delims[] = "/\\";
++#else
++static const char path_delims[] = "/";
++#endif
++
+ namespace mfem
+ {
+ 
+@@ -36,7 +44,6 @@
+                                      const Mesh *mesh, int myid)
+ {
+    // create directories recursively
+-   const char path_delim = '/';
+    std::string::size_type pos = 0;
+    int err_flag;
+ #ifdef MFEM_USE_MPI
+@@ -45,7 +52,7 @@
+ 
+    do
+    {
+-      pos = dir_name.find(path_delim, pos+1);
++      pos = dir_name.find_first_of(path_delims, pos+1);
+       std::string subdir = dir_name.substr(0, pos);
+ 
+ #ifndef MFEM_USE_MPI
+@@ -75,7 +82,7 @@
+ 
+ DataCollection::DataCollection(const std::string& collection_name, Mesh *mesh_)
+ {
+-   std::string::size_type pos = collection_name.find_last_of('/');
++   std::string::size_type pos = collection_name.find_last_of(path_delims);
+    if (pos == std::string::npos)
+    {
+       name = collection_name;

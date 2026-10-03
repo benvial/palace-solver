@@ -14,7 +14,7 @@ from wheelbuild import patches
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: The fixes ADR-0007 carries, one file each, plus MFEM's create_directory (the
+#: The fixes ADR-0007 carries, one file each, plus MFEM's path splitting (the
 #: missing ParaView output of 0.18.1.post3). Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
@@ -28,7 +28,7 @@ CARRIED = [
     "strumpack/01-llp64.patch",
     "mumps/01-mingw-mpi.patch",
     "mfem/01-binary-ifgzstream.patch",
-    "mfem/02-create-directory-backslash.patch",
+    "mfem/02-windows-path-separators.patch",
 ]
 
 
