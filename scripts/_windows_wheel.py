@@ -240,6 +240,45 @@ def compare_reports(first: Path, second: Path, *, labels: Iterable[str]) -> list
     return agreed
 
 
+def check_paraview(directory: Path) -> list[str]:
+    """Check a real solve wrote ParaView output: a ``.pvd`` and a cycle each.
+
+    The CSVs alone do not show it. 0.18.1.post3 wrote every CSV on Windows and
+    no ``postpro/paraview`` at all, because MFEM created the collection's
+    directories by splitting the path on ``/`` only.
+
+    Args:
+        directory: Directory the solve ran in.
+
+    Returns:
+        One line per collection, naming how many cycles it wrote.
+
+    Raises:
+        SystemExit: If there is no collection, or one has no ``.pvd`` or no
+            cycle holding a ``.vtu``.
+    """
+    root = directory / "postpro" / "paraview"
+    collections = sorted(path for path in root.glob("*") if path.is_dir())
+    if not collections:
+        fail(f"the solve wrote no ParaView output under {root}")
+    found = []
+    for collection in collections:
+        cycles = [
+            cycle for cycle in collection.glob("Cycle*") if any(cycle.glob("*.vtu"))
+        ]
+        if not (collection / f"{collection.name}.pvd").is_file() or not cycles:
+            held = sorted(
+                path.relative_to(collection).as_posix()
+                for path in collection.rglob("*")
+            )
+            fail(
+                f"ParaView collection {collection.name} is incomplete; it holds "
+                + (", ".join(held) or "nothing")
+            )
+        found.append(f"{collection.name}: {len(cycles)} cycles")
+    return found
+
+
 def running_images(image: str) -> int:
     """How many processes are running ``image``, a file name like ``a.exe``."""
     listing = subprocess.run(

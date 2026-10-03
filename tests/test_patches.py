@@ -14,7 +14,8 @@ from wheelbuild import patches
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: The ten fixes ADR-0007 carries, one file each. Adding or dropping one is a
+#: The fixes ADR-0007 carries, one file each, plus MFEM's path splitting (the
+#: missing ParaView output of 0.18.1.post3). Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
     "palace/01-memoryreporting.patch",
@@ -27,6 +28,7 @@ CARRIED = [
     "strumpack/01-llp64.patch",
     "mumps/01-mingw-mpi.patch",
     "mfem/01-binary-ifgzstream.patch",
+    "mfem/02-windows-path-separators.patch",
 ]
 
 
@@ -34,7 +36,7 @@ def _labels(found):
     return [path.relative_to(patches.PATCH_ROOT).as_posix() for path in found]
 
 
-def test_the_carried_set_is_exactly_the_ten_fixes():
+def test_the_carried_set_is_exactly_the_carried_fixes():
     assert _labels(patches.carried_patches()) == CARRIED
 
 
