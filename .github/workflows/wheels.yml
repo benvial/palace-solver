@@ -39,61 +39,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  checks:
-    name: lint and unit tests
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-      # ruff is pinned and everything else floats, because ruff is the only one
-      # of these whose *new* releases change the verdict on code nobody touched:
-      # it adds rules and changes formatting, and this gate runs both as hard
-      # checks. It has broken this repository twice from a release alone --
-      # 0.16 began formatting Python blocks inside Markdown, and 0.16.9 added
-      # ISC004 -- each time turning a branch red for a reason that had nothing
-      # to do with the branch, and each time invisible to the contributor who
-      # had just run ruff locally.
-      #
-      # The pin is exact rather than a ceiling: a ceiling still floats within
-      # itself, and a patch release is enough (0.16.9 was one). Bumping it is a
-      # commit that says so, with whatever that version newly objects to fixed
-      # in the same commit. tests/test_wheels_workflow.py ties it to the `dev`
-      # extra, which is where a contributor gets the same version from.
-      #
-      # pefile is pinned for the other reason a tool gets pinned here: it is not
-      # a test dependency but the PE reader the Windows link check and repair
-      # run, so the tests have to exercise the version the build installs
-      # (wheelbuild.link_check.PEFILE_REQUIREMENT). The same test ties all three.
-      - name: Install dev dependencies
-        run: python -m pip install --upgrade pip pytest "ruff==0.16.9" mypy packaging pyyaml "pefile==2024.8.26"
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: mypy palace_solver
-      # The build tooling runs on the container's Python, not on the 3.10 floor
-      # the wheel itself keeps, so it may use tomllib.
-      - run: mypy --python-version 3.11 wheelbuild
-      - run: python -m pytest -q
-      # Fails when the vendored MPICH leaves the major series the interop
-      # test proves the wheel against. See wheelbuild/pin_check.py.
-      - run: python -m wheelbuild.pin_check
-      # The Windows wheel's MS-MPI, downloaded from Microsoft, carved out of its
-      # installer with the runner's 7z and checked file by file against the
-      # hashes in wheelbuild/msmpi.py. Nothing in it needs Windows, so a moved
-      # or altered download fails here in seconds rather than on the Windows
-      # row. The installer is fetched on every run and never cached, which is
-      # why wheelbuild/msmpi.py is not part of the build cache key.
-      - name: Fetch and verify the MS-MPI redistributable
-        run: python -m wheelbuild.msmpi "$RUNNER_TEMP/msmpi"
-      # A tag that does not name palace_solver.__version__ would publish a
-      # release under a number nobody chose, and PyPI never lets a filename be
-      # reused. Checked here rather than in the wheel job so it fails in
-      # seconds instead of after the build.
-      - name: Check the release tag against the packaged version
-        if: startsWith(github.ref, 'refs/tags/v')
-        run: python -m wheelbuild.tag_check "$GITHUB_REF_NAME"
-
   # The matrix rows, from .github/wheel-matrix.toml, where the comments on each
   # row live too. A job of its own because a static `include` list cannot be
   # narrowed by an input; see wheelbuild/matrix.py.
@@ -381,239 +326,72 @@ jobs:
           path: ${{ matrix.build_root }}
           key: ${{ steps.build-cache.outputs.cache-primary-key }}
 
-      # The half of the TestPyPI dry run that needs no index. PyPI validates a
-      # wheel's metadata, and renders its description, more strictly than the
-      # `wheel` module that wrote the metadata does -- and at upload time that
-      # verdict arrives after the tag exists, under a version number no re-run
-      # can reuse. `twine check` is the same validation the upload step runs
-      # first, so running it here moves one class of release failure onto every
-      # pull request.
-      #
-      # --strict because the thing being checked is a warning by default: a
-      # description PyPI cannot render is served as raw markup on the project
-      # page, which is cosmetic and therefore exactly the kind of problem that
-      # ships.
-      #
-      # >=6.1 is not decoration. setuptools>=77 writes the license as an SPDX
-      # expression, which is Metadata-Version 2.4, and twine 6.0 reads a 2.4
-      # wheel as "metadata is missing required fields". A floor low enough to
-      # resolve to that version would fail every build for a reason that is not
-      # about this wheel.
-      - name: Check the wheel's metadata the way PyPI will
-        run: |
-          python -m pip install --upgrade "twine>=6.1"
-          python -m twine check --strict wheelhouse/*.whl
+      # ---- Throwaway measurement for .scratch/palace-tests ticket 03 ----
+      # Everything below runs after the cache save (skipped on the exact hit
+      # this branch gets from main's entries), so nothing it builds is cached.
+      - name: "Measure: keep the first wheel aside"
+        run: mv wheelhouse wheelhouse-before
 
-      # Run on the runner rather than back inside the build image, for the same
-      # reason a user's machine is not a manylinux container: it proves the
-      # wheel is self-contained outside the environment that produced it. It is
-      # also the shape macOS has no choice about, so that row adds no step here.
-      #
-      # Windows runs the Python twin of each script rather than the script
-      # under this job's Git bash, whose MSYS2 runtime would put its own tools
-      # on the PATH the test claims the wheel needs none of;
-      # scripts/_windows_wheel.py has the rest of the reasons. It runs before
-      # the interop step, while the runner has no MS-MPI installed: the
-      # wheel's own has to be enough.
-      - name: Smoke test in a clean virtual environment
+      - name: "Measure: Palace tests in the container"
+        if: matrix.image
+        timeout-minutes: 300
         run: |
-          wheel="$(ls wheelhouse/*.whl)"
-          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            python scripts/smoke-test-windows.py "$wheel" "$config"
-          else
-            scripts/smoke-test.sh "$wheel" "$config"
+          docker run --rm -v "$PWD:/repo" -v "${{ matrix.build_root }}:/build" -w /repo \
+            "${{ matrix.image }}" /repo/scripts/measure-palace-tests.sh /build /repo/measure
+          sudo chown -R "$(id -u):$(id -g)" "${{ matrix.build_root }}" measure
+
+      - name: "Measure: Palace tests on macOS"
+        if: ${{ !matrix.image && runner.os != 'Windows' }}
+        timeout-minutes: 300
+        run: scripts/measure-palace-tests.sh "${{ matrix.build_root }}" "$PWD/measure"
+
+      - name: "Measure: Palace tests under MSYS2"
+        if: runner.os == 'Windows'
+        timeout-minutes: 300
+        shell: msys2 {0}
+        run: scripts/measure-palace-tests.sh "${{ matrix.build_root }}" "$(cygpath -u "$GITHUB_WORKSPACE")/measure"
+
+      # The driver again, over a prefix that now holds the installed tests: the
+      # tree a later run would restore if the tests were cached.
+      - name: "Measure: rebuild the wheel in the container"
+        if: always() && matrix.image && hashFiles('measure/installed') != ''
+        run: |
+          scripts/build-in-container.sh "$PALACE_VERSION"
+          sudo chown -R "$(id -u):$(id -g)" "${{ matrix.build_root }}" wheelhouse
+        env:
+          MANYLINUX_IMAGE: ${{ matrix.image }}
+          BUILD_CACHE: ${{ matrix.build_root }}
+
+      - name: "Measure: rebuild the wheel on macOS"
+        if: always() && !matrix.image && runner.os != 'Windows' && hashFiles('measure/installed') != ''
+        run: scripts/build-macos.sh "$PALACE_VERSION"
+        env:
+          BUILD_ROOT: ${{ matrix.build_root }}
+
+      - name: "Measure: rebuild the wheel under MSYS2"
+        if: always() && runner.os == 'Windows' && hashFiles('measure/installed') != ''
+        shell: msys2 {0}
+        run: scripts/build-windows.sh "$PALACE_VERSION"
+        env:
+          BUILD_ROOT: ${{ matrix.build_root }}
+
+      - name: "Measure: compare the wheels, compress the delta, summarise"
+        if: always()
+        run: |
+          python -m pip install --quiet zstandard
+          if [[ -d wheelhouse ]]; then
+            python scripts/measure_palace_tests.py wheel-diff wheelhouse-before wheelhouse measure/wheel-diff.txt || true
           fi
-
-      # The smoke test stops at --dry-run. This solves the example for real on
-      # two ranks under both launchers, so collective communication is
-      # exercised and the two results must agree.
-      #
-      # Ungated on every row. On Linux and macOS the foreign launcher it pairs
-      # the wheel with is the PyPI `mpich` wheel, which publishes a
-      # macosx_11_0_arm64 wheel for both the `mpich<5` series the vendored
-      # MPICH belongs to and the `mpich>=5` one stage 4 reaches for -- so macOS
-      # needs no Homebrew mpiexec and no source of its own. On Windows it is
-      # the system MS-MPI 10.1.x a user installs from msmpisetup.exe, which the
-      # twin installs on this disposable runner, hash-checked, when told to
-      # with --install-msmpi.
-      - name: Launcher interoperability
-        run: |
-          wheel="$(ls wheelhouse/*.whl)"
-          config="${{ matrix.build_root }}/palace-$PALACE_VERSION/examples/spheres/spheres.json"
-          if [[ "$RUNNER_OS" == Windows ]]; then
-            python scripts/interop-test-windows.py --install-msmpi "$wheel" "$config"
-          else
-            scripts/interop-test.sh "$wheel" "$config"
-          fi
-
-      # Writes the job summary, so this is the size verdict a human reads. It
-      # also fails on an oversized wheel rather than only saying OVER: a size
-      # PyPI rejects is discovered at upload otherwise, after the tag exists and
-      # under a version number no re-run can reuse. The build step refuses the
-      # same wheel first (`wheelbuild.assemble.verify_size`), so on a normal run
-      # this never fires; it is here because this is the step that reports, and
-      # a report that prints a verdict and exits 0 is a report nothing acts on.
-      #
-      # The summary path is read from the environment rather than spliced into
-      # the source: on Windows it is a backslashed path, and `\a` in a Python
-      # string literal is a bell.
-      - name: Report wheel size
-        run: |
-          python -c "
-          import os, pathlib, sys
-          sys.path.insert(0, '.')
-          from wheelbuild.assemble import size_report
-          wheel = next(pathlib.Path('wheelhouse').glob('*.whl'))
-          report = size_report(wheel)
-          print(report.text)
-          pathlib.Path(os.environ['GITHUB_STEP_SUMMARY']).write_text(report.text + '\n')
-          sys.exit(1 if report.exceeds_pypi_limit else 0)
-          "
+          for d in delta-install delta-sweeps; do
+            if [[ -f "measure/$d-files.txt" ]]; then
+              python scripts/measure_palace_tests.py compress "${{ matrix.build_root }}" "measure/$d" || true
+            fi
+          done
+          python scripts/measure_palace_tests.py summary measure > /dev/null
+          cat measure/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v5
+        if: always()
         with:
-          name: palace-solver-${{ matrix.tag }}
-          path: wheelhouse/*.whl
-
-  # Deletes the entries a version bump or a build-script edit orphaned, so that
-  # GitHub's least-recently-*read* eviction never drops a live one instead. What
-  # is kept, what is never touched, and why this cannot be decided from the
-  # runner it happens to run on are all in scripts/prune-build-caches.sh.
-  #
-  # `needs: [wheel]` waits for the whole matrix, so every row that is going to
-  # save an entry for the current tree has already saved it by the time
-  # anything is deleted — and a failed row skips this job rather than pruning
-  # around a platform that saved nothing.
-  cache-cleanup:
-    name: delete stale build caches
-    needs: [wheel]
-    # Only after main has saved its replacement entry, and never for a pull
-    # request — see the script for why a pull request's caches are not this
-    # job's business.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    permissions:
-      actions: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Delete superbuild caches that no longer match main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
-        run: |
-          # The same two components the wheel job's key ends in, spelled the
-          # same way: the .post segment dropped, and the hash of the same file
-          # list. They are what the script matches on, so a divergence here
-          # would make every live entry look stale.
-          version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
-          scripts/prune-build-caches.sh "$version" "$INPUTS_HASH"
-
-  # The rehearsal. Everything a release does except which index it lands on,
-  # run before the tag exists so that the problems which only appear at upload
-  # time appear while they are still fixable: a platform tag the index refuses,
-  # a file over its size limit, and metadata validated more strictly than the
-  # `wheel` module validated it.
-  #
-  # The verdict is the index's acceptance of the four files, and nothing is
-  # installed back out of TestPyPI -- a wheel can only be installed on a
-  # machine of its own platform, and each platform already installs its own and
-  # solves an example on the row that built it. The trusted publisher it proves
-  # is its own: this job authenticates to TestPyPI through the `testpypi`
-  # environment, so a green dry run is evidence about the procedure and not
-  # about the credentials `publish` will use.
-  #
-  # Manual, and gated on an input rather than on a ref, because the upload is
-  # not free: TestPyPI reuses a filename no more than PyPI does, so each dry
-  # run spends the four filenames of the version it carries. It costs nothing
-  # against the PyPI quota, whose storage is separate.
-  #
-  # Everything that could differ from `publish` and does not is the point:
-  # `needs`, the artifact collection and the wheel-set check are the same, and
-  # tests/test_wheels_workflow.py ties each of them to the real job, because a
-  # rehearsal that assembles a different directory rehearses a different
-  # upload.
-  publish-testpypi:
-    name: dry-run publish to TestPyPI
-    needs: [checks, wheel]
-    if: github.event_name == 'workflow_dispatch' && inputs.testpypi
-    runs-on: ubuntu-24.04
-    # Its own environment, not `release`: these are two separate trusted
-    # publishers, and a required reviewer on the release gate should not also
-    # stand in front of a rehearsal.
-    environment: testpypi
-    permissions:
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: actions/download-artifact@v5
-        with:
-          pattern: palace-solver-*
-          merge-multiple: true
-          path: dist
-
-      - name: Check dist holds exactly one wheel per supported platform
-        run: python3 -m wheelbuild.release_check dist
-
-      # No skip-existing. It would make the rehearsal repeatable where the
-      # event it rehearses is not, and a green run over a version TestPyPI
-      # already holds says nothing about the wheels in this directory. When a
-      # dry run has to be repeated -- including after one that uploaded some of
-      # the four and then failed -- the remedy is a .postN bump, which is free
-      # before a tag exists and is the same move a half-published release on
-      # PyPI would force.
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-
-  # One release carrying every platform's wheel, uploaded once. Charting
-  # decision 1 of .scratch/platform-expansion/map.md: nothing publishes until
-  # every platform is green, because a release missing a platform is not
-  # correctable -- PyPI never lets a filename be reused, so the repair is a new
-  # version number rather than a re-run.
-  #
-  # `needs: [checks, wheel]` is what enforces that. It waits for the whole
-  # matrix, and a failed row fails the `wheel` job, which skips this one: the
-  # `if` gates on the ref alone and deliberately carries no always() or
-  # !cancelled(), either of which would let a partial matrix publish a subset.
-  publish:
-    name: publish to PyPI
-    needs: [checks, wheel]
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions:
-      # Trusted publishing: no API token stored in the repository.
-      id-token: write
-    steps:
-      # For wheelbuild.release_check below, which is stdlib-only and runs on the
-      # runner's preinstalled Python -- nothing is installed into the job that
-      # holds the publishing token.
-      - uses: actions/checkout@v5
-
-      # By pattern rather than by name: the matrix uploads one artifact per row
-      # named from the row, so naming them here is how this job came to collect
-      # the x86_64 wheel alone while the other two sat in the run's artifacts.
-      # merge-multiple puts all four wheels in one flat directory, which is
-      # what the upload step publishes; without it each artifact lands in a
-      # subdirectory of its own and the upload finds no wheel at all.
-      #
-      # tests/test_wheels_workflow.py derives this pattern from the upload
-      # step's own name, so a renamed artifact cannot be collected by one and
-      # missed by the other.
-      - uses: actions/download-artifact@v5
-        with:
-          pattern: palace-solver-*
-          merge-multiple: true
-          path: dist
-
-      # Nothing between the download and the upload would otherwise notice a
-      # missing platform: matching no artifact is a warning rather than an
-      # error, and gh-action-pypi-publish uploads whatever the directory holds.
-      # This is the last point at which a release is still repairable.
-      - name: Check dist holds exactly one wheel per supported platform
-        run: python3 -m wheelbuild.release_check dist
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
+          name: measure-${{ matrix.tag }}
+          path: measure/
