@@ -1,0 +1,155 @@
+name: verify published release
+
+# One-off, on a throwaway branch: install palace-solver from PyPI, the way a
+# user does, on a clean runner of each supported platform, and solve the
+# spheres example on two ranks under the vendored launcher. Then run the
+# release's own smoke and interop tests against the exact file PyPI serves.
+# Nothing here builds anything.
+
+on:
+  push:
+    branches: ["verify/*"]
+
+env:
+  RELEASE: "0.18.1.post3"
+  PALACE_TAG: "v0.18.1"
+
+jobs:
+  verify:
+    name: ${{ matrix.tag }} from PyPI
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, tag: manylinux_2_28_x86_64 }
+          - { runner: ubuntu-24.04-arm, tag: manylinux_2_28_aarch64 }
+          - { runner: macos-15, tag: macosx_15_0_arm64 }
+          - { runner: windows-2025, tag: win_amd64 }
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # Only the spheres example, at the Palace tag this release ships.
+      - name: Fetch the spheres example
+        run: |
+          git clone --quiet --depth 1 --branch "$PALACE_TAG" --filter=blob:none --sparse \
+            https://github.com/awslabs/palace.git upstream
+          git -C upstream sparse-checkout set examples/spheres
+          ls upstream/examples/spheres upstream/examples/spheres/mesh
+
+      # The published file itself, for the smoke and interop tests, checked
+      # against the digest the index records. pip picking this file is also
+      # the proof that the runner's pip selects this platform's wheel.
+      - name: Download the published wheel
+        run: |
+          python -m pip download --no-deps --only-binary :all: --no-cache-dir \
+            -d published "palace-solver==$RELEASE"
+          python - "$RELEASE" "${{ matrix.tag }}" <<'PYTHON'
+          import hashlib, json, pathlib, sys, urllib.request
+          release, tag = sys.argv[1:]
+          (wheel,) = pathlib.Path("published").glob("*.whl")
+          expected = f"palace_solver-{release}-py3-none-{tag}.whl"
+          if wheel.name != expected:
+              sys.exit(f"ERROR: pip chose {wheel.name}, expected {expected}")
+          index = json.load(urllib.request.urlopen(
+              f"https://pypi.org/pypi/palace-solver/{release}/json"))
+          (entry,) = [f for f in index["urls"] if f["filename"] == wheel.name]
+          digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          if digest != entry["digests"]["sha256"]:
+              sys.exit(f"ERROR: {wheel.name} does not match the index's digest")
+          print(f"{wheel.name} {wheel.stat().st_size} B sha256 {digest}")
+          PYTHON
+
+      # The README's two commands, verbatim apart from the rank count, in a
+      # fresh venv with only the venv and the OS on PATH. On Windows, that means
+      # no Git bash, no MSYS2 and no MS-MPI: native CPython runs the check, as
+      # the release's Windows twins do.
+      - name: pip install palace-solver and solve on two ranks
+        run: |
+          python - "$RELEASE" "${{ matrix.tag }}" "$PWD/upstream/examples/spheres" <<'PYTHON'
+          import os, pathlib, shutil, subprocess, sys, tempfile, venv
+          release, tag, example = sys.argv[1:]
+          windows = os.name == "nt"
+          work = pathlib.Path(tempfile.mkdtemp())
+          env_dir = work / "venv"
+          venv.create(env_dir, with_pip=True)
+          scripts = env_dir / ("Scripts" if windows else "bin")
+          if windows:
+              root = os.environ["SystemRoot"]
+              path = [str(scripts), rf"{root}\System32", root, rf"{root}\System32\Wbem"]
+              for leftover in (r"C:\Windows\System32\msmpi.dll", r"C:\Program Files\Microsoft MPI"):
+                  if os.path.exists(leftover):
+                      sys.exit(f"ERROR: MS-MPI is installed on this runner: {leftover}")
+          else:
+              path = [str(scripts), "/usr/bin", "/bin"]
+          env = {k: v for k, v in os.environ.items() if not k.startswith(("MSMPI", "I_MPI", "HYDRA", "PMI"))}
+          env["PATH"] = os.pathsep.join(path)
+          py = str(scripts / ("python.exe" if windows else "python"))
+
+          def run(*args, **kw):
+              print("+", " ".join(map(str, args)), flush=True)
+              return subprocess.run(list(map(str, args)), env=env, check=True, **kw)
+
+          log = run(py, "-m", "pip", "install", "--no-cache-dir", "palace-solver",
+                    capture_output=True, text=True).stdout
+          print(log)
+          wanted = f"palace_solver-{release}-py3-none-{tag}.whl"
+          if wanted not in log:
+              sys.exit(f"ERROR: pip install did not fetch {wanted}")
+          # Resolved against the clean PATH here: on Windows, CreateProcess
+          # searches the parent's PATH, not the one handed to the child.
+          tools = {}
+          for tool in ("palace", "palace-mpiexec"):
+              found = shutil.which(tool, path=env["PATH"])
+              print(f"{tool}: {found}")
+              if not found or not found.startswith(str(scripts)):
+                  sys.exit(f"ERROR: {tool} does not resolve into the venv")
+              tools[tool] = found
+
+          version = run(tools["palace"], "--version", capture_output=True, text=True).stdout
+          print(version)
+          if "v0.18.1" not in version:
+              sys.exit("ERROR: palace does not report v0.18.1")
+
+          case = work / "spheres"
+          shutil.copytree(example, case)
+          result = subprocess.run(
+              [tools["palace-mpiexec"], "-n", "2", "palace", "spheres.json"],
+              cwd=case, env=env, capture_output=True, text=True,
+          )
+          output = result.stdout + result.stderr
+          print(output[-4000:])
+          if result.returncode != 0:
+              sys.exit(f"ERROR: the two-rank solve exited {result.returncode}")
+          banners = output.count("Running with 2 MPI processes")
+          if banners != 1:
+              sys.exit(f"ERROR: rank-0 banner seen {banners} times, expected once")
+          print("OK: pip install palace-solver; palace-mpiexec -n 2 palace spheres.json")
+          PYTHON
+
+      - name: Smoke test the published wheel
+        run: |
+          wheel="$(ls published/*.whl)"
+          config="$PWD/upstream/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/smoke-test-windows.py "$wheel" "$config"
+          else
+            scripts/smoke-test.sh "$wheel" "$config"
+          fi
+
+      - name: Launcher interoperability on the published wheel
+        run: |
+          wheel="$(ls published/*.whl)"
+          config="$PWD/upstream/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/interop-test-windows.py --install-msmpi "$wheel" "$config"
+          else
+            scripts/interop-test.sh "$wheel" "$config"
+          fi
