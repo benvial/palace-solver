@@ -42,6 +42,7 @@ from pathlib import Path
 
 from _windows_wheel import (
     REPO_ROOT,
+    check_paraview,
     clean_environment,
     compare_reports,
     copy_example,
@@ -320,6 +321,13 @@ def ctrl_c(palace: Path, config: Path, workdir: Path, env) -> None:
     check_no_orphans("Ctrl-C")
 
 
+def report_paraview(runs: dict[str, Path]) -> None:
+    """Demand ParaView output from each named solve, and say what it wrote."""
+    for label, directory in runs.items():
+        for line in check_paraview(directory):
+            print(f"    {label} {line}")
+
+
 def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915
     """Run the interop test; exit non-zero on the first check that fails."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -374,6 +382,9 @@ def main(argv: list[str] | None = None) -> int:  # noqa: PLR0915
         vendored, system, labels=("vendored launcher", "system MS-MPI's")
     ):
         print(f"    {line}")
+
+    step("each two-rank solve wrote ParaView output")
+    report_paraview({"vendored": vendored, "system": system})
 
     step("stage 3: each rank's guard reads smpd as its parent")
     probe_exe = scripts / f"{PROBE_NAME}.exe"

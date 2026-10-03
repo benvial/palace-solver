@@ -148,6 +148,44 @@ def test_a_solve_with_no_output_fails(tmp_path):
         )
 
 
+def _paraview(directory, collection, cycles):
+    root = directory / "postpro" / "paraview" / collection
+    root.mkdir(parents=True)
+    (root / f"{collection}.pvd").write_text("<VTKFile/>\n", encoding="utf-8")
+    for cycle in range(1, cycles + 1):
+        step = root / f"Cycle{cycle:06d}"
+        step.mkdir()
+        (step / "data.pvtu").write_text("<VTKFile/>\n", encoding="utf-8")
+        (step / "proc000000.vtu").write_text("<VTKFile/>\n", encoding="utf-8")
+
+
+def test_a_solve_that_wrote_paraview_output_passes(tmp_path):
+    _paraview(tmp_path, "electrostatic", cycles=3)
+    _paraview(tmp_path, "electrostatic_boundary", cycles=2)
+
+    found = _windows_wheel.check_paraview(tmp_path)
+
+    assert found == [
+        "electrostatic: 3 cycles",
+        "electrostatic_boundary: 2 cycles",
+    ]
+
+
+def test_a_solve_with_no_paraview_output_fails(tmp_path):
+    """What 0.18.1.post3 did on Windows: CSVs written, no paraview directory."""
+    _report(tmp_path, [[1.0]])
+
+    with pytest.raises(SystemExit):
+        _windows_wheel.check_paraview(tmp_path)
+
+
+def test_a_paraview_collection_with_no_cycle_fails(tmp_path):
+    _paraview(tmp_path, "electrostatic", cycles=0)
+
+    with pytest.raises(SystemExit):
+        _windows_wheel.check_paraview(tmp_path)
+
+
 def test_the_probe_wheel_declares_its_console_script_and_records_its_files(tmp_path):
     wheel = _windows_wheel.write_console_script_wheel(
         tmp_path, name="palace-parent-probe", module="probe", source="def main(): ...\n"

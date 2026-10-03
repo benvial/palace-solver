@@ -97,6 +97,26 @@ for report in reports:
     print(f"    {report.name}: {len(left)} values agree")
 PYTHON
 
+# The CSVs above do not show it: 0.18.1.post3 wrote every CSV on Windows and no
+# ParaView output at all. The same check as scripts/_windows_wheel.py's
+# check_paraview, so every platform is held to it.
+echo "==> each two-rank solve wrote ParaView output"
+"$venv/bin/python" - "$workdir/vendored" "$workdir/foreign" <<'PYTHON'
+import pathlib
+import sys
+
+for run in map(pathlib.Path, sys.argv[1:3]):
+    root = run / "postpro" / "paraview"
+    collections = sorted(path for path in root.glob("*") if path.is_dir())
+    if not collections:
+        sys.exit(f"ERROR: the solve wrote no ParaView output under {root}")
+    for collection in collections:
+        cycles = [c for c in collection.glob("Cycle*") if any(c.glob("*.vtu"))]
+        if not (collection / f"{collection.name}.pvd").is_file() or not cycles:
+            sys.exit(f"ERROR: ParaView collection {collection.name} is incomplete")
+        print(f"    {run.name} {collection.name}: {len(cycles)} cycles")
+PYTHON
+
 echo "==> stage 3: a rank launched without an MPI rendezvous is refused"
 # Reproduce the silent failure: strip the PMI variables from an otherwise
 # normal two-rank launch. Without the guard each rank initialises as its own
