@@ -220,7 +220,7 @@ def test_windows_run_settles_every_patch_before_the_build_and_checks_after(
     tmp_path, monkeypatch
 ):
     """The carried-patch recipe's order is the point of it: nothing compiles
-    until all ten are applied, and the build is not trusted until they are
+    until all of them are applied, and the build is not trusted until they are
     proved still there."""
     events = []
     monkeypatch.setattr(

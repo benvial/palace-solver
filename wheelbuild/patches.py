@@ -1,6 +1,6 @@
 """Apply the carried patches the Windows build needs, and prove they stayed.
 
-Ten fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
+Eleven fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
 The owner is the upstream whose files a patch edits -- Palace or one of the six
 dependencies its superbuild fetches -- and ``NN`` in ``NN-<slug>.patch`` is the
 apply order within it. Linux and macOS never read this directory: only the
@@ -20,7 +20,7 @@ The recipe, decided in ``.scratch/windows-wheel/issues/02-carried-patch-hook.md`
 3. Each dependency patch then goes over its fetched tree, on top of upstream's
    own patches.
 
-All ten are therefore settled minutes into a cold build, before the first
+All of them are therefore settled minutes into a cold build, before the first
 object compiles, rather than whenever ExternalProject happens to reach each
 dependency two hours in -- so a Palace bump surfaces every stale patch at once.
 
@@ -37,7 +37,7 @@ its tree; on a mismatch the dependency's source, stamp and build directories are
 discarded (it and everything configured against it rebuild), or Palace's
 checkout is reset to the tarball commit and re-patched.
 
-After the superbuild, :func:`verify` reverse-checks all ten. That is the only
+After the superbuild, :func:`verify` reverse-checks every one. That is the only
 defence against an upstream patch step re-running -- MFEM's starts with
 ``git reset --hard`` -- and silently stripping ours.
 
