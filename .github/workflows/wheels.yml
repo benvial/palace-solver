@@ -59,7 +59,7 @@ jobs:
       - name: Select the rows
         id: rows
         env:
-          ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.windows_only && 'win_amd64' || '' }}
+          ONLY: macosx_15_0_arm64
         run: python3 -m wheelbuild.matrix --only "$ONLY"
 
   wheel:

@@ -98,6 +98,12 @@ cat "$out/facts.txt"
 
 # The two commands of upstream's `tests` step, with -j; -k so a Windows compile
 # lists every failing site rather than the first.
+# macOS: the build-tree palace-unit-tests carries no rpath to the prefix, so
+# Catch2's POST_BUILD discovery cannot load @rpath/libparpack.2.dylib and make
+# deletes the binary (run 37125409604). Give palace-build a build rpath.
+if [[ $os == macos ]]; then
+  timed reconfigure-build-rpath cmake -DCMAKE_BUILD_RPATH="$prefix/lib" "$palace_build"
+fi
 build_ok=0
 timed build-unit-tests cmake --build "$(nat "$palace_build")" --target unit-tests -j "$jobs" -- -k && build_ok=1
 installed=0
