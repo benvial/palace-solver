@@ -471,6 +471,86 @@ jobs:
           sys.exit(1 if report.exceeds_pypi_limit else 0)
           "
 
+      # The upstream test gate: Palace's own test suite, built by the superbuild
+      # and run against it, and a failing test fails the row. It tests the
+      # build, not the wheel. Windows does not build the tests yet, so it has
+      # none of these steps.
+      #
+      # It runs last, so a red row has already reported everything else, and
+      # after the build cache save, so nothing the tests write is cached.
+      # Regression takes 23-45 minutes, so it runs only when no regression run
+      # has passed for these exact binaries. The fingerprint is a content hash
+      # of the install prefix's bin, lib and test data, plus the test exclusion
+      # file. It follows the binaries rather than the build cache key, which
+      # leaves out the carried patches, and a tag run built from the same bytes
+      # reuses main's pass. See wheelbuild/upstream_gate.py.
+      - name: Fingerprint what the upstream test gate tests
+        id: gate
+        if: runner.os != 'Windows'
+        run: |
+          fingerprint=$(python -m wheelbuild.upstream_gate fingerprint "${{ matrix.build_root }}/install")
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Look for a regression pass on these binaries
+        id: gate-passed
+        if: runner.os != 'Windows'
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/gate-passed
+          key: gate-passed-${{ env.PLATFORM_TAG }}-${{ steps.gate.outputs.fingerprint }}
+          lookup-only: true
+
+      # Every run, on every event: [Serial] on one rank, [Parallel] on two.
+      # ctest's exit status is not the verdict. The judge reads its report
+      # against wheelbuild/data/test-exclusions.toml, and an excluded test
+      # that passes fails the row as surely as one that fails.
+      - name: Upstream test gate, unit tests
+        if: runner.os != 'Windows'
+        timeout-minutes: 5
+        env:
+          MANYLINUX_IMAGE: ${{ matrix.image }}
+          BUILD_CACHE: ${{ matrix.build_root }}
+          BUILD_ROOT: ${{ matrix.build_root }}
+        run: |
+          if [[ -n "$MANYLINUX_IMAGE" ]]; then
+            scripts/upstream-test-gate-in-container.sh units
+          else
+            scripts/upstream-test-gate.sh units "$BUILD_ROOT/gate"
+          fi
+          python -m wheelbuild.upstream_gate judge --platform "$PLATFORM_TAG" \
+            --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/units.xml"
+
+      # All 46 non-[Long] regression cases on two ranks, upstream's default.
+      - name: Upstream test gate, regression
+        if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        timeout-minutes: 60
+        env:
+          MANYLINUX_IMAGE: ${{ matrix.image }}
+          BUILD_CACHE: ${{ matrix.build_root }}
+          BUILD_ROOT: ${{ matrix.build_root }}
+        run: |
+          if [[ -n "$MANYLINUX_IMAGE" ]]; then
+            scripts/upstream-test-gate-in-container.sh regression
+          else
+            scripts/upstream-test-gate.sh regression "$BUILD_ROOT/gate"
+          fi
+          python -m wheelbuild.upstream_gate judge --platform "$PLATFORM_TAG" \
+            --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/regression.xml"
+
+      # An empty entry whose key is the record. A few bytes per fingerprint.
+      - name: Write the regression pass record
+        if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/gate-passed"
+          echo "${{ steps.gate.outputs.fingerprint }}" > "$RUNNER_TEMP/gate-passed/fingerprint"
+
+      - name: Save the regression pass record
+        if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/gate-passed
+          key: gate-passed-${{ env.PLATFORM_TAG }}-${{ steps.gate.outputs.fingerprint }}
+
       - uses: actions/upload-artifact@v5
         with:
           name: palace-solver-${{ matrix.tag }}

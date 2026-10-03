@@ -58,6 +58,10 @@ FEATURE_FLAGS = (
 )
 
 
+#: Palace's own CMake build tree, inside the superbuild's.
+PALACE_BUILD_DIR = "palace-build"
+
+
 #: The generator on Windows. Palace drives libCEED, GSLIB and LIBXSMM with
 #: ``${CMAKE_MAKE_PROGRAM} VAR=value install``, which needs GNU make and a
 #: POSIX shell, so it is MSYS2's make rather than anything native. The driver
@@ -209,6 +213,61 @@ def windows_cmake_arguments(
     return arguments
 
 
+def unit_test_commands(
+    *,
+    build_dir: Path,
+    install_prefix: Path,
+    jobs: int,
+    system: str | None = None,
+) -> list[list[str]]:
+    """Build the commands that compile Palace's tests and install them.
+
+    These are what the upstream test gate runs. Upstream's ``palace-tests``
+    step does the same two things, but its inner ``make`` gets no jobserver and
+    builds serially, so its two commands are run here directly, with ``-j``.
+    The install puts ``palace-unit-tests``, Catch2 and the test data into the
+    prefix. The data has to be there, because the tests have its path compiled
+    in. Nothing of it reaches the wheel: :func:`wheelbuild.assemble.find_palace_binary`
+    matches the solver by name.
+
+    On Darwin, Palace's build tree is first given a build rpath to the
+    prefix. Catch2 lists the tests by running the freshly linked binary, and
+    without one that binary cannot load ``@rpath/libparpack.2.dylib``, so the
+    listing fails and make deletes the binary. Linux needs nothing here,
+    because the driver exports ``LD_LIBRARY_PATH``.
+
+    Args:
+        build_dir: The superbuild's build directory.
+        install_prefix: The install prefix Palace is installed into.
+        jobs: Parallel build jobs.
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Returns:
+        The commands, in the order they run.
+    """
+    palace_build = build_dir / PALACE_BUILD_DIR
+    commands = []
+    if (system or platform.system()) == "Darwin":
+        commands.append(
+            [
+                "cmake",
+                f"-DCMAKE_BUILD_RPATH={install_prefix / 'lib'}",
+                str(palace_build),
+            ]
+        )
+    commands += [
+        ["cmake", "--build", str(palace_build), "--target", "unit-tests", f"-j{jobs}"],
+        [
+            "cmake",
+            "--install",
+            str(palace_build / "test" / "unit"),
+            "--prefix",
+            str(install_prefix),
+        ],
+    ]
+    return commands
+
+
 def run_windows(
     *,
     source_dir: Path,
@@ -268,6 +327,10 @@ def run(
 ) -> None:
     """Configure and build Palace, installing into ``install_prefix``.
 
+    Off Windows, Palace's tests are built and installed too, for the upstream
+    test gate (:func:`unit_test_commands`). Windows does not build them yet,
+    because its test sources do not compile without carried patches.
+
     Args:
         source_dir: Palace source tree.
         build_dir: Scratch directory for the superbuild (reuse it to benefit
@@ -296,6 +359,10 @@ def run(
     )
     check_call(configure, cwd=build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    for command in unit_test_commands(
+        build_dir=build_dir, install_prefix=install_prefix, jobs=jobs, system=system
+    ):
+        check_call(command, cwd=build_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> int:
