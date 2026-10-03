@@ -324,7 +324,14 @@ def check_paraview(directory: Path) -> list[str]:
             cycle for cycle in collection.glob("Cycle*") if any(cycle.glob("*.vtu"))
         ]
         if not (collection / f"{collection.name}.pvd").is_file() or not cycles:
-            fail(f"ParaView collection {collection.name} is incomplete")
+            held = sorted(
+                path.relative_to(collection).as_posix()
+                for path in collection.rglob("*")
+            )
+            fail(
+                f"ParaView collection {collection.name} is incomplete; it holds "
+                + (", ".join(held) or "nothing")
+            )
         found.append(f"{collection.name}: {len(cycles)} cycles")
     return found
 
