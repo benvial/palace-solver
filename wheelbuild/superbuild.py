@@ -213,12 +213,53 @@ def windows_cmake_arguments(
     return arguments
 
 
+def build_rpath_command(
+    *,
+    build_dir: Path,
+    install_prefix: Path,
+    system: str | None = None,
+) -> list[str] | None:
+    """Return the command that gives Palace's build tree an rpath, if it lacks one.
+
+    Darwin only. Catch2 lists the tests by running the freshly linked
+    ``palace-unit-tests``, and without a build rpath to the prefix that binary
+    cannot load ``@rpath/libparpack.2.dylib``, so the listing fails and make
+    deletes the binary. Linux needs nothing, because the driver exports
+    ``LD_LIBRARY_PATH``.
+
+    The superbuild does not forward ``CMAKE_BUILD_RPATH`` to Palace, so the
+    command reconfigures Palace's build tree directly. That relinks
+    ``libpalace``, and :func:`run` then builds the superbuild again so that the
+    relinked Palace is installed in the same run. Otherwise the next run would
+    install different bytes and change the upstream test gate's fingerprint.
+
+    Args:
+        build_dir: The superbuild's build directory.
+        install_prefix: The install prefix Palace is installed into.
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Returns:
+        The command, or ``None`` off Darwin or when the build tree already has
+        the rpath.
+    """
+    if (system or platform.system()) != "Darwin":
+        return None
+    palace_build = build_dir / PALACE_BUILD_DIR
+    rpath = install_prefix / "lib"
+    cache = palace_build / "CMakeCache.txt"
+    if cache.is_file() and any(
+        line.startswith("CMAKE_BUILD_RPATH:") and line.split("=", 1)[1] == str(rpath)
+        for line in cache.read_text().splitlines()
+    ):
+        return None
+    return ["cmake", f"-DCMAKE_BUILD_RPATH={rpath}", str(palace_build)]
+
+
 def unit_test_commands(
     *,
     build_dir: Path,
     install_prefix: Path,
     jobs: int,
-    system: str | None = None,
 ) -> list[list[str]]:
     """Build the commands that compile Palace's tests and install them.
 
@@ -230,32 +271,16 @@ def unit_test_commands(
     in. Nothing of it reaches the wheel: :func:`wheelbuild.assemble.find_palace_binary`
     matches the solver by name.
 
-    On Darwin, Palace's build tree is first given a build rpath to the
-    prefix. Catch2 lists the tests by running the freshly linked binary, and
-    without one that binary cannot load ``@rpath/libparpack.2.dylib``, so the
-    listing fails and make deletes the binary. Linux needs nothing here,
-    because the driver exports ``LD_LIBRARY_PATH``.
-
     Args:
         build_dir: The superbuild's build directory.
         install_prefix: The install prefix Palace is installed into.
         jobs: Parallel build jobs.
-        system: ``platform.system()`` value; defaults to the running platform.
 
     Returns:
         The commands, in the order they run.
     """
     palace_build = build_dir / PALACE_BUILD_DIR
-    commands = []
-    if (system or platform.system()) == "Darwin":
-        commands.append(
-            [
-                "cmake",
-                f"-DCMAKE_BUILD_RPATH={install_prefix / 'lib'}",
-                str(palace_build),
-            ]
-        )
-    commands += [
+    return [
         ["cmake", "--build", str(palace_build), "--target", "unit-tests", f"-j{jobs}"],
         [
             "cmake",
@@ -265,7 +290,6 @@ def unit_test_commands(
             str(install_prefix),
         ],
     ]
-    return commands
 
 
 def run_windows(
@@ -359,8 +383,14 @@ def run(
     )
     check_call(configure, cwd=build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    rpath = build_rpath_command(
+        build_dir=build_dir, install_prefix=install_prefix, system=system
+    )
+    if rpath is not None:
+        check_call(rpath, cwd=build_dir)
+        check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
     for command in unit_test_commands(
-        build_dir=build_dir, install_prefix=install_prefix, jobs=jobs, system=system
+        build_dir=build_dir, install_prefix=install_prefix, jobs=jobs
     ):
         check_call(command, cwd=build_dir)
 

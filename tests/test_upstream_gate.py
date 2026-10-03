@@ -227,10 +227,7 @@ def test_the_fingerprint_refuses_a_prefix_without_the_tests(prefix):
 
 def test_the_tests_are_built_with_jobs_and_installed_into_the_prefix(tmp_path):
     commands = superbuild.unit_test_commands(
-        build_dir=tmp_path / "superbuild",
-        install_prefix=tmp_path / "install",
-        jobs=4,
-        system="Linux",
+        build_dir=tmp_path / "superbuild", install_prefix=tmp_path / "install", jobs=4
     )
     palace_build = tmp_path / "superbuild" / "palace-build"
 
@@ -246,47 +243,88 @@ def test_the_tests_are_built_with_jobs_and_installed_into_the_prefix(tmp_path):
     ]
 
 
-def test_darwin_gives_the_build_tree_an_rpath_before_building_the_tests(tmp_path):
-    commands = superbuild.unit_test_commands(
-        build_dir=tmp_path / "superbuild",
-        install_prefix=tmp_path / "install",
-        jobs=3,
-        system="Darwin",
-    )
-
-    assert commands[0] == [
-        "cmake",
-        f"-DCMAKE_BUILD_RPATH={tmp_path / 'install' / 'lib'}",
-        str(tmp_path / "superbuild" / "palace-build"),
-    ]
-    assert commands[1:] == superbuild.unit_test_commands(
-        build_dir=tmp_path / "superbuild",
-        install_prefix=tmp_path / "install",
-        jobs=3,
-        system="Linux",
-    )
-
-
-def test_the_linux_run_builds_the_tests_after_the_superbuild(tmp_path, monkeypatch):
+def _run(tmp_path, monkeypatch, system):
     calls = []
     monkeypatch.setattr(superbuild, "mpi_home", lambda prefix: prefix)
     monkeypatch.setattr(
         superbuild, "check_call", lambda command, **_kw: calls.append(command)
     )
-
     superbuild.run(
         source_dir=tmp_path / "palace",
         build_dir=tmp_path / "superbuild",
         install_prefix=tmp_path / "install",
         prefix=tmp_path / "install",
         jobs=2,
-        system="Linux",
+        system=system,
+    )
+    return calls
+
+
+def _tests(tmp_path):
+    return superbuild.unit_test_commands(
+        build_dir=tmp_path / "superbuild", install_prefix=tmp_path / "install", jobs=2
     )
 
+
+def test_the_linux_run_builds_the_tests_after_the_superbuild(tmp_path, monkeypatch):
+    calls = _run(tmp_path, monkeypatch, "Linux")
+
     assert calls[1] == ["cmake", "--build", ".", "-j2"]
-    assert calls[2:] == superbuild.unit_test_commands(
+    assert calls[2:] == _tests(tmp_path)
+
+
+def test_darwin_gives_palace_an_rpath_and_installs_the_relinked_palace_in_the_same_run(
+    tmp_path, monkeypatch
+):
+    """The reconfigure relinks libpalace. Building the superbuild again
+    reinstalls it now, so the next run installs nothing new and the gate
+    fingerprint holds."""
+    calls = _run(tmp_path, monkeypatch, "Darwin")
+    build = ["cmake", "--build", ".", "-j2"]
+
+    assert calls[1:4] == [
+        build,
+        [
+            "cmake",
+            f"-DCMAKE_BUILD_RPATH={tmp_path / 'install' / 'lib'}",
+            str(tmp_path / "superbuild" / "palace-build"),
+        ],
+        build,
+    ]
+    assert calls[4:] == _tests(tmp_path)
+
+
+def test_darwin_leaves_a_build_tree_that_has_the_rpath_alone(tmp_path, monkeypatch):
+    cache = tmp_path / "superbuild" / "palace-build" / "CMakeCache.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text(
+        f"CMAKE_BUILD_RPATH:UNINITIALIZED={tmp_path / 'install' / 'lib'}\n"
+    )
+
+    calls = _run(tmp_path, monkeypatch, "Darwin")
+
+    assert calls[1] == ["cmake", "--build", ".", "-j2"]
+    assert calls[2:] == _tests(tmp_path)
+
+
+def test_darwin_corrects_a_build_rpath_to_another_prefix(tmp_path):
+    cache = tmp_path / "superbuild" / "palace-build" / "CMakeCache.txt"
+    cache.parent.mkdir(parents=True)
+    cache.write_text("CMAKE_BUILD_RPATH:UNINITIALIZED=/elsewhere/lib\n")
+
+    assert superbuild.build_rpath_command(
         build_dir=tmp_path / "superbuild",
         install_prefix=tmp_path / "install",
-        jobs=2,
-        system="Linux",
+        system="Darwin",
+    )
+
+
+def test_linux_needs_no_build_rpath(tmp_path):
+    assert (
+        superbuild.build_rpath_command(
+            build_dir=tmp_path / "superbuild",
+            install_prefix=tmp_path / "install",
+            system="Linux",
+        )
+        is None
     )
