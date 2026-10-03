@@ -149,10 +149,12 @@ def find_palace_binary(install_prefix: Path) -> Path:
 
     Palace installs a small ``bin/palace`` launcher script alongside the actual
     binary (``palace-<arch>.bin``); the wheel ships the binary and provides its
-    own console script. Which of the two is which is decided by the file's
-    format — ELF on Linux, Mach-O on Darwin, PE on Windows — not by its name,
-    because the name carries the architecture, and on Windows it keeps the
-    ``.bin`` it has elsewhere.
+    own console script. The binary is the one named ``palace-*.bin`` — the
+    name carries the architecture, and on Windows it keeps the ``.bin`` it has
+    elsewhere — whose format is native: ELF on Linux, Mach-O on Darwin, PE on
+    Windows. The name is what tells it from Palace's other native executable,
+    ``palace-unit-tests``, which the test step installs beside it and which
+    would sort first on x86_64.
 
     Args:
         install_prefix: Superbuild install prefix.
@@ -161,11 +163,11 @@ def find_palace_binary(install_prefix: Path) -> Path:
         Path of the Palace binary.
 
     Raises:
-        FileNotFoundError: If no ``palace*`` binary is installed.
+        FileNotFoundError: If no ``palace-*.bin`` binary is installed.
     """
     candidates = sorted(
         path
-        for path in (install_prefix / "bin").glob("palace*")
+        for path in (install_prefix / "bin").glob("palace-*.bin")
         if path.is_file() and not path.is_symlink() and platforms.is_native_binary(path)
     )
     if not candidates:

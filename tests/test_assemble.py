@@ -75,6 +75,23 @@ def test_find_palace_binary_accepts_a_mach_o_install_tree(tmp_path):
     assert assemble.find_palace_binary(install_prefix).name == "palace-arm64.bin"
 
 
+def test_find_palace_binary_skips_the_unit_test_runner(tmp_path):
+    """The test step installs ``palace-unit-tests``, which sorts first on x86_64."""
+    install_prefix = _install_tree(tmp_path / "install")
+    (install_prefix / "bin" / "palace-unit-tests").write_bytes(ELF_MAGIC + b"tests")
+
+    assert assemble.find_palace_binary(install_prefix).name == "palace-x86_64.bin"
+
+
+def test_find_palace_binary_fails_on_a_prefix_holding_only_the_test_runner(tmp_path):
+    install_prefix = tmp_path / "install"
+    (install_prefix / "bin").mkdir(parents=True)
+    (install_prefix / "bin" / "palace-unit-tests").write_bytes(ELF_MAGIC + b"tests")
+
+    with pytest.raises(FileNotFoundError, match="Palace"):
+        assemble.find_palace_binary(install_prefix)
+
+
 def test_stage_ships_the_mach_o_process_manager_binaries(tmp_path):
     install_prefix = _darwin_install_tree(tmp_path / "install")
     package_dir = tmp_path / "pkg" / "palace_solver"
@@ -513,6 +530,13 @@ def _windows_inputs(root: Path) -> dict[str, Path]:
 
 def test_find_palace_binary_accepts_a_pe_install_tree(tmp_path):
     install_prefix = _windows_install_tree(tmp_path / "install")
+
+    assert assemble.find_palace_binary(install_prefix).name == "palace-x86_64.bin"
+
+
+def test_find_palace_binary_skips_the_pe_unit_test_runner(tmp_path):
+    install_prefix = _windows_install_tree(tmp_path / "install")
+    write_pe(install_prefix / "bin" / "palace-unit-tests.exe", ["KERNEL32.dll"])
 
     assert assemble.find_palace_binary(install_prefix).name == "palace-x86_64.bin"
 
