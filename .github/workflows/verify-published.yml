@@ -134,19 +134,20 @@ jobs:
           # What the ParaView writer left behind, to compare across platforms:
           # on Windows the ranks report "Error creating directory" for some
           # cycles, and this shows whether any output is missing for it.
-          paraview = case / "postpro" / "paraview"
-          files = sorted(str(f.relative_to(paraview)).replace("\\", "/")
-                         for f in paraview.rglob("*") if f.is_file())
+          postpro = case / "postpro"
+          entries = sorted(str(f.relative_to(postpro)).replace("\\", "/") + ("/" if f.is_dir() else "")
+                           for f in postpro.rglob("*"))
+          files = [e for e in entries if e.startswith("paraview/") and not e.endswith("/")]
           print(f"PARAVIEW {len(files)} files")
-          for f in files:
-              print(f"PARAVIEW {f}")
+          for e in entries:
+              print(f"POSTPRO {e}")
           print("OK: pip install palace-solver; palace-mpiexec -n 2 palace spheres.json")
           PYTHON
 
       # The smoke tests import wheelbuild's link check, which reads PE files
       # with pefile; wheels.yml installs it in its checks job, pinned the same.
-      - name: Install the smoke tests' own dependency
-        run: python -m pip install "pefile==2024.8.26"
+      - name: Install the smoke and interop tests' own dependencies
+        run: python -m pip install "pefile==2024.8.26" packaging
 
       - name: Smoke test the published wheel
         run: |
