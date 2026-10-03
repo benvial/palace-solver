@@ -818,6 +818,24 @@ def test_the_pe_reader_the_tests_run_is_the_one_the_build_installs(workflow):
     assert f'"{PEFILE_REQUIREMENT}"' in install, install
 
 
+def test_the_published_release_check_covers_every_row_with_the_build_pefile():
+    """verify-published.yml holds the files on PyPI to the bar the rows that
+    built them cleared: every supported platform, read from the same matrix,
+    and the smoke tests run with the PE reader the build installs."""
+    path = ROOT / ".github" / "workflows" / "verify-published.yml"
+    verify = yaml.safe_load(path.read_text(encoding="utf-8"))
+    steps = verify["jobs"]["plan"]["steps"]
+    install = next(
+        step["run"]
+        for step in verify["jobs"]["verify"]["steps"]
+        if "pefile" in str(step.get("run", ""))
+    )
+
+    assert any("python3 -m wheelbuild.matrix" in str(s.get("run")) for s in steps)
+    assert "--only" not in str(steps)
+    assert f'"{PEFILE_REQUIREMENT}"' in install, install
+
+
 @pytest.mark.parametrize(
     ("name", "script", "twin"),
     [

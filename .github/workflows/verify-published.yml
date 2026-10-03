@@ -1,0 +1,189 @@
+name: verify published release
+
+# Run by hand after every release, with the version just published: install
+# palace-solver from PyPI the way a user does, on a clean runner of every
+# supported platform, and hold the files PyPI serves to the same bar as the
+# rows that built them. Nothing here builds anything.
+#
+# The release workflow tests the wheel in the directory it was built into. That
+# leaves three things only the index can answer: that pip on each platform
+# picks that platform's file, that the file it serves is the one built, and
+# that `pip install palace-solver` alone -- no MPI, no compiler runtime, and on
+# Windows no MSYS2 or Git bash on PATH -- gives a solver that runs. This is
+# also where 0.18.1.post3's missing ParaView output on Windows was first seen,
+# which is why each real solve here must have written some.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "The palace-solver version on PyPI to verify, e.g. 0.18.1.post4"
+        required: true
+        type: string
+
+jobs:
+  # The rows the release builds, so a platform added there is verified here
+  # without an edit.
+  plan:
+    name: plan the platforms
+    runs-on: ubuntu-24.04
+    outputs:
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+      - name: Select the rows
+        id: rows
+        run: python3 -m wheelbuild.matrix
+
+  verify:
+    name: ${{ matrix.tag }} from PyPI
+    needs: [plan]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.rows) }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      RELEASE: ${{ inputs.version }}
+      PLATFORM_TAG: ${{ matrix.tag }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      # The example at the Palace release this version ships: the version
+      # without its .postN, as everywhere else.
+      - name: Fetch the spheres example
+        run: |
+          git clone --quiet --depth 1 --branch "v${RELEASE%%.post*}" --filter=blob:none --sparse \
+            https://github.com/awslabs/palace.git upstream
+          git -C upstream sparse-checkout set examples/spheres
+
+      - name: Download the published wheel and check it against the index
+        run: |
+          python -m pip download --no-deps --only-binary :all: --no-cache-dir \
+            -d published "palace-solver==$RELEASE"
+          python - <<'PYTHON'
+          import hashlib, json, os, pathlib, sys, urllib.request
+          release, tag = os.environ["RELEASE"], os.environ["PLATFORM_TAG"]
+          (wheel,) = pathlib.Path("published").glob("*.whl")
+          expected = f"palace_solver-{release}-py3-none-{tag}.whl"
+          if wheel.name != expected:
+              sys.exit(f"ERROR: pip chose {wheel.name}, expected {expected}")
+          index = json.load(urllib.request.urlopen(
+              f"https://pypi.org/pypi/palace-solver/{release}/json"))
+          (entry,) = [f for f in index["urls"] if f["filename"] == wheel.name]
+          digest = hashlib.sha256(wheel.read_bytes()).hexdigest()
+          if digest != entry["digests"]["sha256"]:
+              sys.exit(f"ERROR: {wheel.name} does not match the index's digest")
+          print(f"{wheel.name} {wheel.stat().st_size} B sha256 {digest}")
+          PYTHON
+
+      # The README's commands, verbatim apart from the rank count, in a fresh
+      # venv with only the venv and the OS on PATH. Run by native CPython rather
+      # than this job's bash, whose Git-for-Windows tools would otherwise sit on
+      # the PATH the check claims the wheel needs none of.
+      - name: pip install palace-solver and solve on two ranks
+        run: |
+          python - "$PWD/upstream/examples/spheres" <<'PYTHON'
+          import os, pathlib, shutil, subprocess, sys, tempfile, venv
+
+          sys.path.insert(0, "scripts")
+          from _windows_wheel import check_paraview
+
+          release, tag = os.environ["RELEASE"], os.environ["PLATFORM_TAG"]
+          example = sys.argv[1]
+          windows = os.name == "nt"
+          work = pathlib.Path(tempfile.mkdtemp())
+          env_dir = work / "venv"
+          venv.create(env_dir, with_pip=True)
+          scripts = env_dir / ("Scripts" if windows else "bin")
+          if windows:
+              root = os.environ["SystemRoot"]
+              path = [str(scripts), rf"{root}\System32", root, rf"{root}\System32\Wbem"]
+              for leftover in (rf"{root}\System32\msmpi.dll", r"C:\Program Files\Microsoft MPI"):
+                  if os.path.exists(leftover):
+                      sys.exit(f"ERROR: MS-MPI is installed on this runner: {leftover}")
+          else:
+              path = [str(scripts), "/usr/bin", "/bin"]
+          launch = ("MSMPI", "I_MPI", "HYDRA", "PMI")
+          env = {k: v for k, v in os.environ.items() if not k.startswith(launch)}
+          env["PATH"] = os.pathsep.join(path)
+          python = scripts / ("python.exe" if windows else "python")
+
+          def run(*args, **kwargs):
+              print("+", " ".join(map(str, args)), flush=True)
+              return subprocess.run([str(a) for a in args], env=env, check=True, **kwargs)
+
+          log = run(python, "-m", "pip", "install", "--no-cache-dir",
+                    f"palace-solver=={release}", capture_output=True, text=True).stdout
+          print(log)
+          if f"palace_solver-{release}-py3-none-{tag}.whl" not in log:
+              sys.exit(f"ERROR: pip install did not fetch the {tag} wheel")
+
+          # Resolved against the clean PATH here: on Windows, CreateProcess
+          # searches the parent's PATH, not the one handed to the child.
+          tools = {}
+          for tool in ("palace", "palace-mpiexec"):
+              found = shutil.which(tool, path=env["PATH"])
+              print(f"{tool}: {found}")
+              if not found or not found.startswith(str(scripts)):
+                  sys.exit(f"ERROR: {tool} does not resolve into the venv")
+              tools[tool] = found
+
+          palace_version = "v" + release.split(".post")[0]
+          version = run(tools["palace"], "--version", capture_output=True, text=True).stdout
+          print(version)
+          if f"Palace version: {palace_version}" not in version:
+              sys.exit(f"ERROR: palace does not report {palace_version}")
+
+          case = work / "spheres"
+          shutil.copytree(example, case)
+          done = subprocess.run(
+              [tools["palace-mpiexec"], "-n", "2", "palace", "spheres.json"],
+              cwd=case, env=env, capture_output=True, text=True,
+          )
+          output = done.stdout + done.stderr
+          print(output[-4000:])
+          if done.returncode != 0:
+              sys.exit(f"ERROR: the two-rank solve exited {done.returncode}")
+          banners = output.count("Running with 2 MPI processes")
+          if banners != 1:
+              sys.exit(f"ERROR: rank-0 banner seen {banners} times, expected once")
+          if not list(case.glob("postpro/*.csv")):
+              sys.exit("ERROR: the solve wrote no postprocessing CSVs")
+          for line in check_paraview(case):
+              print(f"paraview {line}")
+          print(f"OK: pip install palace-solver=={release}; palace-mpiexec -n 2 palace spheres.json")
+          PYTHON
+
+      # The release's own tests, on the file PyPI serves. They import
+      # wheelbuild, whose PE reader is pefile, and the interop twins read
+      # versions with packaging.
+      - name: Install the smoke and interop tests' dependencies
+        run: python -m pip install "pefile==2024.8.26" packaging
+
+      - name: Smoke test the published wheel
+        run: |
+          wheel="$(ls published/*.whl)"
+          config="$PWD/upstream/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/smoke-test-windows.py "$wheel" "$config"
+          else
+            scripts/smoke-test.sh "$wheel" "$config"
+          fi
+
+      - name: Launcher interoperability on the published wheel
+        run: |
+          wheel="$(ls published/*.whl)"
+          config="$PWD/upstream/examples/spheres/spheres.json"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            python scripts/interop-test-windows.py --install-msmpi "$wheel" "$config"
+          else
+            scripts/interop-test.sh "$wheel" "$config"
+          fi
