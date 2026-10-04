@@ -58,6 +58,10 @@ FEATURE_FLAGS = (
 )
 
 
+#: Palace's own CMake build tree, inside the superbuild's.
+PALACE_BUILD_DIR = "palace-build"
+
+
 #: The generator on Windows. Palace drives libCEED, GSLIB and LIBXSMM with
 #: ``${CMAKE_MAKE_PROGRAM} VAR=value install``, which needs GNU make and a
 #: POSIX shell, so it is MSYS2's make rather than anything native. The driver
@@ -209,6 +213,85 @@ def windows_cmake_arguments(
     return arguments
 
 
+def build_rpath_command(
+    *,
+    build_dir: Path,
+    install_prefix: Path,
+    system: str | None = None,
+) -> list[str] | None:
+    """Return the command that gives Palace's build tree an rpath, if it lacks one.
+
+    Darwin only. Catch2 lists the tests by running the freshly linked
+    ``palace-unit-tests``, and without a build rpath to the prefix that binary
+    cannot load ``@rpath/libparpack.2.dylib``, so the listing fails and make
+    deletes the binary. Linux needs nothing, because the driver exports
+    ``LD_LIBRARY_PATH``.
+
+    The superbuild does not forward ``CMAKE_BUILD_RPATH`` to Palace, so the
+    command reconfigures Palace's build tree directly. That relinks
+    ``libpalace``, and :func:`run` then builds the superbuild again so that the
+    relinked Palace is installed in the same run. Otherwise the next run would
+    install different bytes and change the upstream test gate's fingerprint.
+
+    Args:
+        build_dir: The superbuild's build directory.
+        install_prefix: The install prefix Palace is installed into.
+        system: ``platform.system()`` value; defaults to the running platform.
+
+    Returns:
+        The command, or ``None`` off Darwin or when the build tree already has
+        the rpath.
+    """
+    if (system or platform.system()) != "Darwin":
+        return None
+    palace_build = build_dir / PALACE_BUILD_DIR
+    rpath = install_prefix / "lib"
+    cache = palace_build / "CMakeCache.txt"
+    if cache.is_file() and any(
+        line.startswith("CMAKE_BUILD_RPATH:") and line.split("=", 1)[1] == str(rpath)
+        for line in cache.read_text().splitlines()
+    ):
+        return None
+    return ["cmake", f"-DCMAKE_BUILD_RPATH={rpath}", str(palace_build)]
+
+
+def unit_test_commands(
+    *,
+    build_dir: Path,
+    install_prefix: Path,
+    jobs: int,
+) -> list[list[str]]:
+    """Build the commands that compile Palace's tests and install them.
+
+    These are what the upstream test gate runs. Upstream's ``palace-tests``
+    step does the same two things, but its inner ``make`` gets no jobserver and
+    builds serially, so its two commands are run here directly, with ``-j``.
+    The install puts ``palace-unit-tests``, Catch2 and the test data into the
+    prefix. The data has to be there, because the tests have its path compiled
+    in. Nothing of it reaches the wheel: :func:`wheelbuild.assemble.find_palace_binary`
+    matches the solver by name.
+
+    Args:
+        build_dir: The superbuild's build directory.
+        install_prefix: The install prefix Palace is installed into.
+        jobs: Parallel build jobs.
+
+    Returns:
+        The commands, in the order they run.
+    """
+    palace_build = build_dir / PALACE_BUILD_DIR
+    return [
+        ["cmake", "--build", str(palace_build), "--target", "unit-tests", f"-j{jobs}"],
+        [
+            "cmake",
+            "--install",
+            str(palace_build / "test" / "unit"),
+            "--prefix",
+            str(install_prefix),
+        ],
+    ]
+
+
 def run_windows(
     *,
     source_dir: Path,
@@ -268,6 +351,10 @@ def run(
 ) -> None:
     """Configure and build Palace, installing into ``install_prefix``.
 
+    Off Windows, Palace's tests are built and installed too, for the upstream
+    test gate (:func:`unit_test_commands`). Windows does not build them yet,
+    because its test sources do not compile without carried patches.
+
     Args:
         source_dir: Palace source tree.
         build_dir: Scratch directory for the superbuild (reuse it to benefit
@@ -296,6 +383,16 @@ def run(
     )
     check_call(configure, cwd=build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    rpath = build_rpath_command(
+        build_dir=build_dir, install_prefix=install_prefix, system=system
+    )
+    if rpath is not None:
+        check_call(rpath, cwd=build_dir)
+        check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    for command in unit_test_commands(
+        build_dir=build_dir, install_prefix=install_prefix, jobs=jobs
+    ):
+        check_call(command, cwd=build_dir)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

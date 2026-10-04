@@ -1,0 +1,113 @@
+# Test exclusions: the upstream test cases the upstream test gate does not
+# require to pass, each on the platforms it lists, with the reason.
+#
+# An entry names a Catch2 test case, so it covers every ctest entry the case is
+# registered as (serial-, mpi-, regression-). It is held to account on every
+# platform it lists, wherever that platform runs the gate:
+#
+# - a name the suite does not register fails the row;
+# - an excluded case that passes fails the row.
+#
+# So the list only shrinks deliberately. wheelbuild/upstream_gate.py reads it, and
+# tests/test_upstream_gate.py checks its format. It is part of the gate
+# fingerprint, so an edit here makes regression due again.
+
+# Charting decision 6 of the palace-tests effort: MFEM keeps aborting, as
+# upstream ships it, so these 18 cases cannot pass on any platform.
+
+[[exclusion]]
+test = "SurfaceCurrentOperator owns element apertures and current weights"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Config Domain Postprocessing"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Config Boundary Ports"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Config Driven Solver"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Config Magnetostatic InactivePorts"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "MaterialOperator requires materials for retained mesh domains"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "PostOperatorCSV_Restart_OneExcitation"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "PostOperatorCSV_Restart_TwoExcitation"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "MinimalRationalInterpolation"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "RomOperator-Synthesis-PortOrthogonality"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "RomOperator-UpdatePROM-LinearDependence"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "RomOperator-Synthesis-ExcludedExcitedRejected"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "RomOperator-Synthesis-WavePortExcludedExcitedRejected"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Smoother estimates reject nonpositive Jacobi diagonals"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "Automatic Jacobi rejects an invalid damping denominator"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "FarField constructor fails with anisotropic materials"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "PointFieldEvaluator Boundary Viz Fields"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+[[exclusion]]
+test = "SurfaceRationalImpedanceOperator"
+platforms = ["manylinux_2_28_x86_64", "manylinux_2_28_aarch64", "macosx_15_0_arm64", "win_amd64"]
+reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the process)"
+
+# MinGW's libstdc++ has no symlink support, and this case is about one.
+
+[[exclusion]]
+test = "RemovePreviousOutput removes a symlink without following it"
+platforms = ["win_amd64"]
+reason = "needs a symlink; MinGW's libstdc++ cannot create one"

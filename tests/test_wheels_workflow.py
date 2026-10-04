@@ -862,3 +862,71 @@ def test_the_size_summary_path_is_read_from_the_environment(named_step):
 
     assert "os.environ['GITHUB_STEP_SUMMARY']" in run
     assert "${GITHUB_STEP_SUMMARY}" not in run
+
+
+GATE_STEPS = (
+    "Fingerprint what the upstream test gate tests",
+    "Look for a regression pass on these binaries",
+    "Upstream test gate, unit tests",
+    "Upstream test gate, regression",
+    "Write the regression pass record",
+    "Save the regression pass record",
+)
+
+
+@pytest.mark.parametrize("name", GATE_STEPS)
+def test_the_upstream_test_gate_skips_only_windows(named_step, name):
+    """Windows does not build the tests yet (palace-tests ticket 08)."""
+    assert named_step(name)["if"].startswith("runner.os != 'Windows'")
+
+
+def test_the_gate_runs_after_the_cache_save_and_before_the_upload(steps):
+    names = [step.get("name") for step in steps]
+    upload = _step_index({"steps": steps}, "actions/upload-artifact")
+
+    assert names.index("Save build cache") < names.index(GATE_STEPS[0])
+    assert names.index("Report wheel size") < names.index(GATE_STEPS[0])
+    assert names.index(GATE_STEPS[-1]) < upload
+
+
+def test_the_gate_keeps_its_ceilings(named_step):
+    """Ticket 04 of the palace-tests effort. Raising one is a decision, not an edit."""
+    assert named_step("Upstream test gate, unit tests")["timeout-minutes"] == 5
+    assert named_step("Upstream test gate, regression")["timeout-minutes"] == 60
+    script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
+    assert "timeout=300" in script
+    assert "timeout=1200" in script
+
+
+def test_regression_runs_only_without_a_pass_on_these_binaries(named_step):
+    lookup = named_step("Look for a regression pass on these binaries")
+    save = named_step("Save the regression pass record")
+
+    assert lookup["with"]["lookup-only"] is True
+    assert lookup["with"]["key"] == save["with"]["key"]
+    assert lookup["with"]["path"] == save["with"]["path"]
+    assert "steps.gate.outputs.fingerprint" in save["with"]["key"]
+    assert "env.PLATFORM_TAG" in save["with"]["key"]
+    for name in (
+        "Upstream test gate, regression",
+        "Write the regression pass record",
+        "Save the regression pass record",
+    ):
+        assert "steps.gate-passed.outputs.cache-hit != 'true'" in named_step(name)["if"]
+
+
+@pytest.mark.parametrize(
+    "name", ["Upstream test gate, unit tests", "Upstream test gate, regression"]
+)
+def test_every_sweep_is_judged_against_the_exclusions(named_step, name):
+    assert "wheelbuild.upstream_gate judge" in named_step(name)["run"]
+
+
+def test_the_gate_scripts_stay_out_of_the_cache_key(build_cache):
+    """They run ctest and change nothing that is cached, so iterating on them
+    must not cost every row a rebuild."""
+    keyed = _hashed_files(build_cache["with"]["key"])
+
+    assert "upstream-test-gate" not in keyed
+    assert "upstream_gate" not in keyed
+    assert "test-exclusions" not in keyed
