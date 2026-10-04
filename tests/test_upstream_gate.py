@@ -2,12 +2,17 @@
 
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from wheelbuild import superbuild, upstream_gate
 from wheelbuild.platforms import supported_platform_tags
 from wheelbuild.upstream_gate import Exclusion
+
+ROOT = Path(__file__).resolve().parents[1]
 
 LINUX = "manylinux_2_28_x86_64"
 
@@ -160,6 +165,34 @@ def test_the_judge_reads_ctests_reports(tmp_path):
         ("serial-Skips", "notrun"),
     ]
     assert upstream_gate.registered_entries(tests) == ["serial-Aborts"]
+
+
+def test_the_gate_names_its_encoding_wherever_it_reads_text(tmp_path):
+    """Two upstream cases say "ω", and Windows' default encoding is cp1252.
+    ``-X warn_default_encoding`` turns every read that leaves it to the
+    locale into an error."""
+    tests = tmp_path / "tests.json"
+    name = "serial-WavePortData TE10 at complex \u03c9"
+    tests.write_bytes(
+        json.dumps({"tests": [{"name": name}]}, ensure_ascii=False).encode()
+    )
+    script = (
+        "import sys; from pathlib import Path; from wheelbuild import upstream_gate; "
+        "upstream_gate.load_exclusions(); "
+        "print(upstream_gate.registered_entries(Path(sys.argv[1]))[0].encode())"
+    )
+
+    strict = ["-X", "warn_default_encoding", "-W", "error::EncodingWarning"]
+
+    result = subprocess.run(
+        [sys.executable, *strict, "-c", script, str(tests)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == repr(name.encode())
 
 
 @pytest.fixture
