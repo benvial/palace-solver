@@ -529,6 +529,28 @@ def test_the_summary_names_each_case_and_the_verdict():
     assert "**Verdict:** pass" in text
 
 
+def test_only_the_failed_cases_outputs_are_collected(tmp_path):
+    work = tmp_path / "work"
+    for name in ("a", "b"):
+        (work / name / "postpro" / name).mkdir(parents=True)
+        (work / name / "postpro" / name / "x.csv").write_text("1")
+        (work / name / "palace.log").write_text("log")
+        (work / name / f"{name}.json").write_text("{}")
+    results = [_result("a", passed=True), _result("b", passed=False)]
+
+    copied = wheel_regression.collect_failures(results, work, tmp_path / "out")
+
+    assert copied == 1
+    assert sorted(
+        p.relative_to(tmp_path / "out").as_posix()
+        for p in (tmp_path / "out").rglob("*")
+        if p.is_file()
+    ) == [
+        "b/palace.log",
+        "b/postpro/b/x.csv",
+    ]
+
+
 # --------------------------------------------------------------------------
 # Inputs, environment and fingerprint
 # --------------------------------------------------------------------------
@@ -615,7 +637,7 @@ def _wheel(path, members):
     return path
 
 
-def test_the_payload_fingerprint_ignores_dist_info_and_member_order(tmp_path):
+def test_the_fingerprint_ignores_dist_info_and_member_order(tmp_path):
     payload = [("palace_solver/bin/palace", b"elf"), ("palace_solver.libs/a.so", b"so")]
     first = _wheel(
         tmp_path / "1.whl",
@@ -634,9 +656,21 @@ def test_the_payload_fingerprint_ignores_dist_info_and_member_order(tmp_path):
         [("palace_solver/bin/palace", b"elf"), ("palace_solver/lib/a.so", b"so")],
     )
 
+    exclusions = tmp_path / "exclusions.toml"
+    exclusions.write_text("")
     fingerprints = [
-        wheel_regression.payload_fingerprint(wheel)
+        wheel_regression.fingerprint(wheel, exclusions)
         for wheel in (first, second, changed, moved)
     ]
     assert fingerprints[0] == fingerprints[1]
     assert len(set(fingerprints)) == 3
+
+
+def test_the_fingerprint_follows_the_exclusions(tmp_path):
+    wheel = _wheel(tmp_path / "1.whl", [("palace_solver/bin/palace", b"elf")])
+    exclusions = tmp_path / "exclusions.toml"
+    exclusions.write_text("")
+    before = wheel_regression.fingerprint(wheel, exclusions)
+    exclusions.write_text('[[exclusion]]\nscope = "wheel"\n')
+
+    assert wheel_regression.fingerprint(wheel, exclusions) != before

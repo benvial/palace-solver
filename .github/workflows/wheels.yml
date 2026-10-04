@@ -582,6 +582,130 @@ jobs:
           name: palace-solver-${{ matrix.tag }}
           path: wheelhouse/*.whl
 
+  # The wheel regression run: Palace's regression cases solved by the `palace`
+  # the row's wheel installs, and compared against upstream's references. The
+  # gate above tests the build; this tests what ships -- the repaired payload,
+  # the console script and launcher guard, palace-mpiexec and the vendored
+  # MPI -- on a runner that has never seen the build tree. See
+  # wheelbuild/wheel_regression.py and palace-tests ticket 09.
+  #
+  # A job of its own rather than steps of the wheel job: on Windows the interop
+  # step there installs a system MS-MPI, and the wheel's own has to be enough.
+  # `needs: wheel` waits for the whole matrix, so one red build row skips every
+  # row's run, which is what `publish` does anyway.
+  wheel-regression:
+    name: wheel regression ${{ matrix.name }}
+    needs: [plan, wheel]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.rows) }}
+    runs-on: ${{ matrix.runner }}
+    # Bash on every row, Git for Windows' on Windows. The module runs `palace`
+    # with a PATH it builds from nothing, so no tool this shell puts on PATH
+    # reaches a case.
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - uses: actions/download-artifact@v5
+        with:
+          name: palace-solver-${{ matrix.tag }}
+          path: wheelhouse
+
+      # Due when this payload, under these exclusions, has no pass record. The
+      # key follows the wheel's package files rather than the gate's binaries,
+      # so a new repair, launcher or vendored runtime makes the run due while
+      # the gate reuses its own record; and it covers the exclusion file, so a
+      # new wheel-scoped exclusion is held to account on the next run.
+      - name: Fingerprint the wheel's payload
+        id: payload
+        run: |
+          fingerprint=$(python -m wheelbuild.wheel_regression fingerprint wheelhouse/*.whl | tr -d '\r')
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+
+      - name: Look for a wheel regression pass on this payload
+        id: wheel-passed
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ runner.temp }}/wheel-regression-passed
+          key: wheel-regression-passed-${{ matrix.tag }}-${{ steps.payload.outputs.fingerprint }}
+          lookup-only: true
+
+      # The README's install: a fresh virtual environment and the wheel, with
+      # nothing from the checkout on its path.
+      - name: Install the wheel in a clean virtual environment
+        if: steps.wheel-passed.outputs.cache-hit != 'true'
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          if [[ "$RUNNER_OS" == Windows ]]; then
+            bin="$RUNNER_TEMP/venv/Scripts"
+            palace="$bin/palace.exe"
+          else
+            bin="$RUNNER_TEMP/venv/bin"
+            palace="$bin/palace"
+          fi
+          "$bin/python" -m pip install wheelhouse/*.whl
+          echo "PALACE=$palace" >> "$GITHUB_ENV"
+
+      # The inputs, the references and cases.cpp at the pinned Palace, from the
+      # tarball the build compiles. Fetched only when the run is due, and never
+      # cached: the budget is the build trees'.
+      - name: Fetch Palace's regression inputs
+        if: steps.wheel-passed.outputs.cache-hit != 'true'
+        run: |
+          version=$(python -c 'from palace_solver import PALACE_VERSION; print(PALACE_VERSION)' | tr -d '\r')
+          curl -fsSL "https://github.com/awslabs/palace/archive/refs/tags/v$version.tar.gz" \
+            -o "$RUNNER_TEMP/palace.tar.gz"
+          python -m wheelbuild.wheel_regression extract "$RUNNER_TEMP/palace.tar.gz" "$RUNNER_TEMP/palace"
+
+      # 40 cases at two ranks, half the cores' worth at a time, 20 minutes
+      # each. The step's ceiling is ticket 09's: a row that breaks it is a
+      # scope decision, never a quiet raise.
+      - name: Wheel regression run
+        if: steps.wheel-passed.outputs.cache-hit != 'true'
+        timeout-minutes: 30
+        run: |
+          python -m wheelbuild.wheel_regression run \
+            --source "$RUNNER_TEMP/palace" --work "$RUNNER_TEMP/work" \
+            --platform "${{ matrix.tag }}" --palace "$PALACE" \
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --failures "$RUNNER_TEMP/wheel-regression-failures"
+
+      # Named so the publish jobs' palace-solver-* pattern never collects it.
+      - name: Upload the failed cases' outputs
+        if: failure() && steps.wheel-passed.outputs.cache-hit != 'true'
+        uses: actions/upload-artifact@v5
+        with:
+          name: wheel-regression-failures-${{ matrix.tag }}
+          path: ${{ runner.temp }}/wheel-regression-failures
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # An empty entry whose key is the record, as the gate's is.
+      - name: Write the wheel regression pass record
+        if: steps.wheel-passed.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p "$RUNNER_TEMP/wheel-regression-passed"
+          echo "${{ steps.payload.outputs.fingerprint }}" > "$RUNNER_TEMP/wheel-regression-passed/fingerprint"
+
+      - name: Save the wheel regression pass record
+        if: steps.wheel-passed.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: ${{ runner.temp }}/wheel-regression-passed
+          key: wheel-regression-passed-${{ matrix.tag }}-${{ steps.payload.outputs.fingerprint }}
+
   # Deletes the entries a version bump or a build-script edit orphaned, so that
   # GitHub's least-recently-*read* eviction never drops a live one instead. What
   # is kept, what is never touched, and why this cannot be decided from the
@@ -642,7 +766,7 @@ jobs:
   # upload.
   publish-testpypi:
     name: dry-run publish to TestPyPI
-    needs: [checks, wheel]
+    needs: [checks, wheel, wheel-regression]
     if: github.event_name == 'workflow_dispatch' && inputs.testpypi
     runs-on: ubuntu-24.04
     # Its own environment, not `release`: these are two separate trusted
@@ -680,13 +804,16 @@ jobs:
   # correctable -- PyPI never lets a filename be reused, so the repair is a new
   # version number rather than a re-run.
   #
-  # `needs: [checks, wheel]` is what enforces that. It waits for the whole
-  # matrix, and a failed row fails the `wheel` job, which skips this one: the
-  # `if` gates on the ref alone and deliberately carries no always() or
-  # !cancelled(), either of which would let a partial matrix publish a subset.
+  # `needs: [checks, wheel, wheel-regression]` is what enforces that. Each
+  # waits for the whole matrix, and a failed row fails its job, which skips
+  # this one: the `if` gates on the ref alone and deliberately carries no
+  # always() or !cancelled(), either of which would let a partial matrix
+  # publish a subset. The wheel regression run never skips at job level -- a
+  # pass record skips its solve steps, not the job -- so a tag that reuses
+  # main's record still publishes.
   publish:
     name: publish to PyPI
-    needs: [checks, wheel]
+    needs: [checks, wheel, wheel-regression]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     environment: release

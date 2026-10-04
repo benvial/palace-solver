@@ -27,7 +27,8 @@ rules (:func:`wheelbuild.upstream_gate.judge`), with the exclusions scoped to
 the wheel run. The cases in :data:`SKIPPED` are not exclusions: nothing is
 wrong with them, they are left to the gate for cost.
 
-What the run is due on is the wheel's payload: :func:`payload_fingerprint`.
+What the run is due on is the wheel's payload and the exclusions:
+:func:`fingerprint`.
 """
 
 from __future__ import annotations
@@ -1168,29 +1169,68 @@ def summary(
     return "\n".join(lines) + "\n"
 
 
+def collect_failures(results: Iterable[Result], work: Path, destination: Path) -> int:
+    """Copy each failed case's ``postpro`` and ``palace.log`` to ``destination``.
+
+    This is the evidence a red row uploads. Passing cases are left behind,
+    and so is everything a failed case was staged with: the inputs are in
+    the Palace release, and its outputs are what a reader has to look at.
+
+    Returns:
+        How many cases were copied.
+    """
+    copied = 0
+    for result in results:
+        if result.passed:
+            continue
+        stage, target = work / result.case.name, destination / result.case.name
+        target.mkdir(parents=True, exist_ok=True)
+        if (stage / "postpro").is_dir():
+            shutil.copytree(stage / "postpro", target / "postpro", dirs_exist_ok=True)
+        if (stage / "palace.log").is_file():
+            shutil.copy2(stage / "palace.log", target / "palace.log")
+        copied += 1
+    return copied
+
+
 # --------------------------------------------------------------------------
 # The wheel's payload
 # --------------------------------------------------------------------------
 
 
-def payload_fingerprint(wheel: Path) -> str:
-    """Return a content hash of the wheel's package files.
+def fingerprint(wheel: Path, exclusions: Path = upstream_gate.EXCLUSIONS) -> str:
+    """Return what the run's pass record is keyed on.
 
+    It is a content hash of the wheel's package files and the exclusion file.
     Every member counts by its path and content, vendored libraries included,
     except the ``.dist-info`` directory: a rebuild that changes only the
     record or the metadata leaves the payload, and so its pass record, alone.
-    Member order and timestamps are not hashed.
+    Member order and timestamps are not hashed. The exclusion file counts as
+    it does in the gate's fingerprint, so a new wheel-scoped exclusion makes
+    the run due and is held to account at once.
+
+    Args:
+        wheel: The wheel under test.
+        exclusions: The exclusion file.
+
+    Returns:
+        A hex digest.
     """
     digest = hashlib.sha256()
+
+    def add(part: bytes) -> None:
+        digest.update(len(part).to_bytes(8, "little"))
+        digest.update(part)
+
     with zipfile.ZipFile(wheel) as archive:
         for info in sorted(archive.infolist(), key=lambda info: info.filename):
             top = info.filename.split("/", 1)[0]
             if info.is_dir() or top.endswith(".dist-info"):
                 continue
-            content = hashlib.sha256(archive.read(info)).digest()
-            for part in (info.filename.encode(), content):
-                digest.update(len(part).to_bytes(8, "little"))
-                digest.update(part)
+            add(info.filename.encode())
+            add(hashlib.sha256(archive.read(info)).digest())
+    add(b"exclusions")
+    add(exclusions.read_bytes())
     return digest.hexdigest()
 
 
@@ -1271,7 +1311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Command-line entry point: ``fingerprint``, ``extract`` or ``run``."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
-    stamp = commands.add_parser("fingerprint", help="print the payload fingerprint")
+    stamp = commands.add_parser("fingerprint", help="print the pass-record key")
     stamp.add_argument("wheel", type=Path)
     unpack = commands.add_parser("extract", help="write the inputs out of a tarball")
     unpack.add_argument("tarball", type=Path)
@@ -1289,19 +1329,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     solve_parser.add_argument("--jobs", type=int)
     solve_parser.add_argument("--timeout", type=float, default=CASE_TIMEOUT)
     solve_parser.add_argument("--summary", type=Path, help="append the summary here")
+    solve_parser.add_argument(
+        "--failures", type=Path, help="copy the failed cases' outputs here"
+    )
     args = parser.parse_args(argv)
     if isinstance(sys.stdout, io.TextIOWrapper):
         sys.stdout.reconfigure(encoding="utf-8")
 
     if args.command == "fingerprint":
-        print(payload_fingerprint(args.wheel))
+        print(fingerprint(args.wheel))
         return 0
     if args.command == "extract":
         extract_inputs(args.tarball, args.destination)
         return 0
 
     started = time.monotonic()
-    _results, problems, text = run(
+    results, problems, text = run(
         source=args.source,
         work=args.work,
         platform=args.platform,
@@ -1313,6 +1356,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.summary:
         with args.summary.open("a", encoding="utf-8") as sink:
             sink.write(text)
+    if args.failures:
+        collect_failures(results, args.work, args.failures)
     print(text)
     print(f"total {time.monotonic() - started:.0f} s")
     for problem in problems:
