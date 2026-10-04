@@ -232,8 +232,9 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git -C "$source_dir" tag "upstream-v$palace_version"
 fi
 
-# The installed binary, by its name rather than by wheelbuild.assemble, whose
-# lookup recognises ELF and Mach-O. Palace names it palace-<arch>.bin here too.
+# The installed binary, by the name wheelbuild.assemble.find_palace_binary
+# matches too: palace-<arch>.bin, which palace-unit-tests.exe beside it in the
+# same bin does not.
 installed_palace() {
   find "$install_prefix/bin" -maxdepth 1 -name 'palace-*.bin' 2>/dev/null | head -1
 }
@@ -253,7 +254,8 @@ fi
 echo "==> superbuild (dependency tree cached in $superbuild_dir)"
 # The carried patches go in inside this step: Palace's are committed onto the
 # checkout, every dependency is fetched before anything compiles, its patches
-# are applied, and after the build all ten are proved still there. See
+# are applied, and after the build every one is proved still there. Palace's
+# tests are built last, for the upstream test gate. See
 # wheelbuild/patches.py.
 wheelbuild -m wheelbuild.patches list
 ccache_flag=()

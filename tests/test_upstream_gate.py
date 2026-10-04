@@ -273,6 +273,32 @@ def test_the_linux_run_builds_the_tests_after_the_superbuild(tmp_path, monkeypat
     assert calls[2:] == _tests(tmp_path)
 
 
+def test_the_windows_run_builds_the_tests_once_the_patches_are_proved(
+    tmp_path, monkeypatch
+):
+    for name in ("prepare_palace", "discard_stale_dependencies", "apply_dependencies"):
+        monkeypatch.setattr(superbuild.patches, name, lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(
+        superbuild.patches, "verify", lambda *_args: calls.append("verify")
+    )
+    monkeypatch.setattr(
+        superbuild, "check_call", lambda command, **_kw: calls.append(command)
+    )
+    superbuild.run(
+        source_dir=tmp_path / "palace",
+        build_dir=tmp_path / "superbuild",
+        install_prefix=tmp_path / "install",
+        prefix=tmp_path / "install",
+        jobs=2,
+        system="Windows",
+    )
+
+    verified = calls.index("verify")
+    assert calls[verified - 1] == ["cmake", "--build", ".", "-j2"]
+    assert calls[verified + 1 :] == _tests(tmp_path)
+
+
 def test_darwin_gives_palace_an_rpath_and_installs_the_relinked_palace_in_the_same_run(
     tmp_path, monkeypatch
 ):

@@ -868,16 +868,47 @@ GATE_STEPS = (
     "Fingerprint what the upstream test gate tests",
     "Look for a regression pass on these binaries",
     "Upstream test gate, unit tests",
+    "Upstream test gate, unit tests on Windows",
     "Upstream test gate, regression",
+    "Upstream test gate, regression on Windows",
     "Write the regression pass record",
     "Save the regression pass record",
 )
 
+#: Each sweep, as the step that runs it on Linux and macOS and the one that runs
+#: it on Windows.
+SWEEPS = {
+    "Upstream test gate, unit tests": "Upstream test gate, unit tests on Windows",
+    "Upstream test gate, regression": "Upstream test gate, regression on Windows",
+}
 
-@pytest.mark.parametrize("name", GATE_STEPS)
-def test_the_upstream_test_gate_skips_only_windows(named_step, name):
-    """Windows does not build the tests yet (palace-tests ticket 08)."""
-    assert named_step(name)["if"].startswith("runner.os != 'Windows'")
+
+@pytest.mark.parametrize(
+    "name",
+    [name for name in GATE_STEPS if name not in SWEEPS and name not in SWEEPS.values()],
+)
+def test_the_shared_gate_steps_run_on_every_row(named_step, name):
+    """All four rows run the gate (palace-tests ticket 08)."""
+    assert "runner.os" not in named_step(name).get("if", "")
+
+
+@pytest.mark.parametrize(("other", "windows"), SWEEPS.items())
+def test_each_sweep_runs_on_windows_under_msys2_and_elsewhere_under_bash(
+    named_step, other, windows
+):
+    """Windows runs ctest under MSYS2's bash, as its build did."""
+    assert named_step(other)["if"].startswith("runner.os != 'Windows'")
+    assert named_step(windows)["if"].startswith("runner.os == 'Windows'")
+    assert named_step(windows)["shell"] == "msys2 {0}"
+    assert (
+        named_step(other)["timeout-minutes"] == named_step(windows)["timeout-minutes"]
+    )
+
+
+def test_windows_judges_on_the_setup_python_interpreter(named_step):
+    """MSYS2's own python names another platform than win_amd64."""
+    for name in SWEEPS.values():
+        assert '"$(cygpath -u "$pythonLocation")/python.exe"' in named_step(name)["run"]
 
 
 def test_the_gate_runs_after_the_cache_save_and_before_the_upload(steps):
@@ -886,16 +917,30 @@ def test_the_gate_runs_after_the_cache_save_and_before_the_upload(steps):
 
     assert names.index("Save build cache") < names.index(GATE_STEPS[0])
     assert names.index("Report wheel size") < names.index(GATE_STEPS[0])
+    assert [names.index(name) for name in GATE_STEPS] == sorted(
+        names.index(name) for name in GATE_STEPS
+    )
     assert names.index(GATE_STEPS[-1]) < upload
 
 
 def test_the_gate_keeps_its_ceilings(named_step):
     """Ticket 04 of the palace-tests effort. Raising one is a decision, not an edit."""
-    assert named_step("Upstream test gate, unit tests")["timeout-minutes"] == 5
-    assert named_step("Upstream test gate, regression")["timeout-minutes"] == 60
+    for other, windows in SWEEPS.items():
+        ceiling = 5 if "unit tests" in other else 60
+        assert named_step(other)["timeout-minutes"] == ceiling
+        assert named_step(windows)["timeout-minutes"] == ceiling
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
     assert "timeout=300" in script
     assert "timeout=1200" in script
+
+
+def test_the_windows_gate_runs_the_ctest_the_build_pinned():
+    """The gate script finds ctest in the CMake directory the driver unpacked."""
+    driver = (ROOT / "scripts" / "build-windows.sh").read_text()
+    version = re.search(r"^cmake_version=(\S+)$", driver, re.MULTILINE).group(1)
+    script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
+
+    assert f"cmake-{version}-windows-x86_64/bin" in script
 
 
 def test_regression_runs_only_without_a_pass_on_these_binaries(named_step):
@@ -909,15 +954,14 @@ def test_regression_runs_only_without_a_pass_on_these_binaries(named_step):
     assert "env.PLATFORM_TAG" in save["with"]["key"]
     for name in (
         "Upstream test gate, regression",
+        "Upstream test gate, regression on Windows",
         "Write the regression pass record",
         "Save the regression pass record",
     ):
         assert "steps.gate-passed.outputs.cache-hit != 'true'" in named_step(name)["if"]
 
 
-@pytest.mark.parametrize(
-    "name", ["Upstream test gate, unit tests", "Upstream test gate, regression"]
-)
+@pytest.mark.parametrize("name", [*SWEEPS, *SWEEPS.values()])
 def test_every_sweep_is_judged_against_the_exclusions(named_step, name):
     assert "wheelbuild.upstream_gate judge" in named_step(name)["run"]
 
