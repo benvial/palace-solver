@@ -25,8 +25,9 @@ def test_the_exclusion_file_is_well_formed():
         assert set(exclusion.platforms) <= set(supported_platform_tags())
 
 
-def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windows():
-    """Ticket 04 of the palace-tests effort: 18 cases everywhere, one on Windows."""
+def test_the_mfem_exclusions_cover_every_platform_and_the_rest_only_windows():
+    """Ticket 04 of the palace-tests effort: 18 cases everywhere. On Windows,
+    the symlink case (ticket 06) and the LIBXSMM defect (ticket 08)."""
     exclusions = upstream_gate.load_exclusions()
     everywhere = [
         e for e in exclusions if set(e.platforms) == set(supported_platform_tags())
@@ -36,9 +37,11 @@ def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windo
     assert len(everywhere) == 18
     assert all("MFEM_USE_EXCEPTIONS" in e.reason for e in everywhere)
     assert [e.test for e in windows] == [
-        "RemovePreviousOutput removes a symlink without following it"
+        "RemovePreviousOutput removes a symlink without following it",
+        "MFEM fixed arbitrary-rule bases",
     ]
-    assert len(exclusions) == 19
+    assert "issue 19" in windows[1].reason
+    assert len(exclusions) == 20
 
 
 def _write(tmp_path, text):
