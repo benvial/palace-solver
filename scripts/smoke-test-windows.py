@@ -14,7 +14,8 @@ payload imports only what sits beside it or ships with Windows; and, with a
 PATH holding nothing but the venv and Windows, Palace reports its version and
 runs PALACE_CONFIG as a dry run and a real solve on one rank, then as a dry
 run on two ranks under the vendored palace-mpiexec and through the wrapper's
-own --np.
+own --np. Last, one adaptive refinement on one rank must save its first
+iteration, where Palace leaves symlinks on other platforms.
 
 scripts/interop-test-windows.py carries this further, into real two-rank solves
 under a launcher that did not ship with the wheel.
@@ -40,6 +41,7 @@ from _windows_wheel import (
     make_wheel_venv,
     run,
     step,
+    write_adaptive_config,
 )
 
 #: What the wheel has to carry for nothing else to be needed: the solver, MS-MPI
@@ -189,6 +191,19 @@ def check_runs(scripts: Path, palace_version: str, config: Path, workdir: Path) 
     directory = copy_example(config, workdir / "np")
     done = run([palace, "--np", "2", "--dry-run", config.name], cwd=directory, env=env)
     expect(done, "--np 2 did not form one MPI_COMM_WORLD of 2 ranks", dry_runs=1)
+
+    step("single rank, adaptive refinement that saves its iterations")
+    # Saving an iteration moves each output into iteration1/ and, on other
+    # platforms, leaves a symlink in its place, which MinGW's libstdc++ cannot
+    # make: without the carried copy fallback, Palace aborts here.
+    directory = copy_example(config, workdir / "adaptive")
+    adaptive = write_adaptive_config(directory / config.name, max_iterations=1)
+    done = run([palace, adaptive.name], cwd=directory, env=env)
+    expect(done, "the adaptive solve failed")
+    if not list(directory.glob("postpro/iteration1/*.csv")):
+        fail("the adaptive solve archived nothing in iteration1", done.stdout)
+    if not list(directory.glob("postpro/*.csv")):
+        fail("the adaptive solve left no output after its iteration", done.stdout)
 
 
 def main(argv: list[str] | None = None) -> int:

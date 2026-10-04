@@ -7,6 +7,7 @@ the Windows row; these hold the parts of them that are plain Python.
 import base64
 import hashlib
 import importlib.util
+import json
 import sys
 import zipfile
 from pathlib import Path
@@ -76,6 +77,35 @@ def test_lines_are_counted_whatever_their_ending():
 
     assert _windows_wheel.count_lines(output, "Dry-run:") == 2
     assert _windows_wheel.count_occurrences(output, "Dry-run:") == 3
+
+
+def test_comments_go_and_strings_keep_their_markers():
+    text = '{\n  "a": "x//y /* z */", // line\n  /* block\n */ "b": "q\\"//"\n}\n'
+
+    assert json.loads(_windows_wheel.strip_comments(text)) == {
+        "a": "x//y /* z */",
+        "b": 'q"//',
+    }
+
+
+def test_the_adaptive_config_refines_and_saves_each_iteration(tmp_path):
+    config = tmp_path / "spheres.json"
+    config.write_text(
+        '{\n  "Problem": {"Output": "postpro"},\n'
+        '  "Model": {"Mesh": "mesh/spheres.msh", "L0": 1.0e-2  // cm\n  }\n}\n',
+        encoding="utf-8",
+    )
+
+    adaptive = _windows_wheel.write_adaptive_config(config, max_iterations=1)
+
+    assert adaptive == tmp_path / "spheres-adaptive.json"
+    model = json.loads(adaptive.read_text(encoding="utf-8"))["Model"]
+    assert model["Mesh"] == "mesh/spheres.msh"
+    assert model["Refinement"] == {
+        "MaxIts": 1,
+        "Tol": 1e-12,
+        "SaveAdaptIterations": True,
+    }
 
 
 def _report(directory, values):

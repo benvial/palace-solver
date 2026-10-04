@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import json
 import os
 import shutil
 import stat
@@ -148,6 +149,62 @@ def copy_example(config: Path, destination: Path) -> Path:
     for path in destination.rglob("*"):
         path.chmod(path.stat().st_mode | stat.S_IWRITE)
     return destination
+
+
+def strip_comments(text: str) -> str:
+    """Drop the ``//`` and ``/* */`` comments Palace allows in its JSON configs.
+
+    A comment marker inside a string is part of the string and stays.
+    """
+    kept = []
+    index = 0
+    in_string = False
+    while index < len(text):
+        character = text[index]
+        if in_string:
+            kept.append(character)
+            if character == "\\":
+                kept.append(text[index + 1 : index + 2])
+                index += 1
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+            kept.append(character)
+        elif text.startswith("//", index):
+            end = text.find("\n", index)
+            index = len(text) if end == -1 else end
+            continue
+        elif text.startswith("/*", index):
+            end = text.find("*/", index + 2)
+            index = len(text) if end == -1 else end + 2
+            continue
+        else:
+            kept.append(character)
+        index += 1
+    return "".join(kept)
+
+
+def write_adaptive_config(config: Path, max_iterations: int) -> Path:
+    """Write a copy of ``config`` that refines its mesh adaptively.
+
+    Each refinement saves the iteration before it into ``iterationN/``, which
+    is where Palace leaves a symlink behind on other platforms (``SaveIteration``
+    in ``palace/drivers/basesolver.cpp``). The tolerance is set low enough that
+    every iteration asked for runs.
+
+    Returns:
+        The new config, beside ``config``.
+    """
+    settings = json.loads(strip_comments(config.read_text(encoding="utf-8")))
+    settings["Model"]["Refinement"] = {
+        "MaxIts": max_iterations,
+        "Tol": 1e-12,
+        "SaveAdaptIterations": True,
+    }
+    adaptive = config.with_name(f"{config.stem}-adaptive.json")
+    adaptive.write_text(json.dumps(settings, indent=2), encoding="utf-8")
+    return adaptive
 
 
 def run(
