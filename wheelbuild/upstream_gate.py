@@ -11,6 +11,10 @@ report. The row fails when:
 - an excluded test passes, so its exclusion has to go;
 - an exclusion names a test case the suite does not register.
 
+An exclusion has a scope: the gate, the **wheel regression run**
+(``wheelbuild/wheel_regression.py``) or both. The gate honours only the
+entries scoped to it; the wheel run holds its own to the same rules.
+
 Running the excluded cases rather than filtering them out is safe because
 ctest gives each entry a process of its own. An MFEM abort in one ends that
 entry and nothing else.
@@ -55,6 +59,11 @@ FINGERPRINTED = ("bin", "lib", "share/palace")
 #: test. Anything else that is not ``run`` is a failure.
 NOT_RUN = frozenset({"notrun", "disabled"})
 
+#: What an exclusion can apply to: the upstream test gate, the wheel
+#: regression run, or both. An entry that names none applies to the gate.
+SCOPES = ("gate", "wheel", "both")
+EXCLUSION_KEYS = frozenset({"test", "platforms", "reason", "scope"})
+
 
 @dataclass(frozen=True)
 class Exclusion:
@@ -63,6 +72,11 @@ class Exclusion:
     test: str
     platforms: tuple[str, ...]
     reason: str
+    scope: str = "gate"
+
+    def applies_to(self, run: str) -> bool:
+        """Whether the exclusion excuses this run: ``"gate"`` or ``"wheel"``."""
+        return self.scope in {run, "both"}
 
 
 def load_exclusions(path: Path = EXCLUSIONS) -> tuple[Exclusion, ...]:
@@ -76,47 +90,62 @@ def load_exclusions(path: Path = EXCLUSIONS) -> tuple[Exclusion, ...]:
 
     Raises:
         ValueError: If an entry is malformed, names a platform no wheel is
-            built for, or repeats a test case.
+            built for or a scope that does not exist, or repeats a test case.
     """
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     unknown = set(data) - {"exclusion"}
     if unknown:
         raise ValueError(f"{path}: unexpected top-level keys {sorted(unknown)}")
-    supported = set(supported_platform_tags())
+    supported = frozenset(supported_platform_tags())
     exclusions: list[Exclusion] = []
     seen: set[str] = set()
     for index, entry in enumerate(data.get("exclusion", [])):
         where = f"{path}: exclusion {index + 1}"
-        if set(entry) != {"test", "platforms", "reason"}:
-            raise ValueError(f"{where}: needs exactly test, platforms and reason")
-        test, platforms, reason = entry["test"], entry["platforms"], entry["reason"]
-        if not isinstance(test, str) or not test.strip():
-            raise ValueError(f"{where}: test must be a test case name")
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError(f"{where} ({test}): reason must say why")
-        if (
-            not isinstance(platforms, list)
-            or not platforms
-            or not all(isinstance(tag, str) for tag in platforms)
-        ):
-            raise ValueError(f"{where} ({test}): platforms must list platform tags")
-        if len(set(platforms)) != len(platforms):
-            raise ValueError(f"{where} ({test}): a platform is listed twice")
-        if not set(platforms) <= supported:
-            raise ValueError(
-                f"{where} ({test}): no wheel is built for "
-                f"{sorted(set(platforms) - supported)}"
-            )
-        if test in seen:
-            raise ValueError(f"{where}: {test!r} is excluded twice")
-        seen.add(test)
-        exclusions.append(Exclusion(test, tuple(platforms), reason))
+        exclusion = _exclusion(entry, where, supported)
+        if exclusion.test in seen:
+            raise ValueError(f"{where}: {exclusion.test!r} is excluded twice")
+        seen.add(exclusion.test)
+        exclusions.append(exclusion)
     return tuple(exclusions)
 
 
-def excluded_on(platform: str, exclusions: Iterable[Exclusion]) -> frozenset[str]:
-    """Return the test cases excluded on ``platform``."""
-    return frozenset(e.test for e in exclusions if platform in e.platforms)
+def _exclusion(entry: dict, where: str, supported: frozenset[str]) -> Exclusion:
+    """Validate one ``[[exclusion]]`` table."""
+    if not {"test", "platforms", "reason"} <= set(entry) <= EXCLUSION_KEYS:
+        raise ValueError(
+            f"{where}: needs exactly test, platforms and reason, and may have scope"
+        )
+    test, platforms, reason = entry["test"], entry["platforms"], entry["reason"]
+    scope = entry.get("scope", "gate")
+    if not isinstance(test, str) or not test.strip():
+        raise ValueError(f"{where}: test must be a test case name")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError(f"{where} ({test}): reason must say why")
+    if (
+        not isinstance(platforms, list)
+        or not platforms
+        or not all(isinstance(tag, str) for tag in platforms)
+    ):
+        raise ValueError(f"{where} ({test}): platforms must list platform tags")
+    if len(set(platforms)) != len(platforms):
+        raise ValueError(f"{where} ({test}): a platform is listed twice")
+    if not set(platforms) <= supported:
+        raise ValueError(
+            f"{where} ({test}): no wheel is built for "
+            f"{sorted(set(platforms) - supported)}"
+        )
+    if scope not in SCOPES:
+        raise ValueError(f"{where} ({test}): scope must be one of {SCOPES}")
+    return Exclusion(test, tuple(platforms), reason, scope)
+
+
+def excluded_on(
+    platform: str, exclusions: Iterable[Exclusion], run: str = "gate"
+) -> frozenset[str]:
+    """Return the test cases ``run`` excludes on ``platform``."""
+    return frozenset(
+        e.test for e in exclusions if platform in e.platforms and e.applies_to(run)
+    )
 
 
 def case_of(entry: str) -> str:
@@ -155,16 +184,20 @@ def judge(
     exclusions: Iterable[Exclusion],
     registered: Iterable[str],
     results: Sequence[tuple[str, str]],
+    run: str = "gate",
 ) -> list[str]:
     """Return every reason the gate fails this sweep; empty when it passes.
 
     Args:
         platform: The row's platform tag.
-        exclusions: Every exclusion; those not listing ``platform`` are ignored.
+        exclusions: Every exclusion; those not listing ``platform``, or not
+            scoped to ``run``, are ignored.
         registered: Every ctest entry the suite registers on this row.
         results: ``(entry, status)`` for each entry this sweep ran.
+        run: ``"gate"``, or ``"wheel"`` for the wheel regression run, which
+            is held to the same rules.
     """
-    excluded = excluded_on(platform, exclusions)
+    excluded = excluded_on(platform, exclusions, run)
     cases = {case_of(entry) for entry in registered}
     problems = [
         f"excluded test case {test!r} is not registered by the suite"
