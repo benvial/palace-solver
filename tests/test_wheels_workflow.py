@@ -930,8 +930,17 @@ def test_the_gate_keeps_its_ceilings(named_step):
         assert named_step(other)["timeout-minutes"] == ceiling
         assert named_step(windows)["timeout-minutes"] == ceiling
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
-    assert "timeout=300" in script
+    assert "unit_timeout=300" in script
     assert "timeout=1200" in script
+
+
+def test_windows_cuts_a_hung_unit_entry_short():
+    """The excluded symlink case hangs on two ranks under MS-MPI (palace-tests
+    ticket 08); left to the 300 s entry timeout it spends the whole step."""
+    script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
+    windows = script[script.index("MINGW* | MSYS*)\n    jobs=") :]
+
+    assert "unit_timeout=60" in windows[: windows.index(";;")]
 
 
 def test_the_windows_gate_runs_the_ctest_the_build_pinned():

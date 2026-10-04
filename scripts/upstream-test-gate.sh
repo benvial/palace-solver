@@ -39,6 +39,8 @@ test_dir="$build_root/superbuild/palace-build/test/unit"
 # ctest is native on Windows, and the forward-slash form is the one both it
 # and the MSYS2 tools read. Elsewhere a path is already native.
 native() { printf '%s\n' "$1"; }
+# The longest any one unit entry may run; see the sweeps below.
+unit_timeout=300
 
 case "$(uname -s)" in
   Linux)
@@ -65,6 +67,11 @@ case "$(uname -s)" in
     # MS-MPI's mpiexec, which the [Parallel] and regression entries run under,
     # then starts its ranks on this machine only.
     export MSMPI_LOCAL_ONLY=1
+    # The excluded symlink case cannot set itself up here, and on two ranks
+    # rank 0 throws before a barrier rank 1 then waits at forever. It counts
+    # as not passing either way, so it is cut short rather than left to spend
+    # 300 of the step's 300 seconds. No unit entry takes more than about 5 s.
+    unit_timeout=60
     ;;
   *)
     echo "the upstream test gate does not run on $(uname -s)" >&2
@@ -77,7 +84,7 @@ export PATH="$prefix/bin:$PATH"
 # sets the sweep's own (5 and 60 minutes); these stop one hung entry from
 # spending all of it, and name the entry that hung.
 case "$sweep" in
-  units) selection=(-LE '^(regression|long)$') timeout=300 ;;
+  units) selection=(-LE '^(regression|long)$') timeout="$unit_timeout" ;;
   regression) selection=(-L '^regression$') timeout=1200 ;;
   *)
     echo "unknown sweep $sweep" >&2
