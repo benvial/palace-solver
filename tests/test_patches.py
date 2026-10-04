@@ -15,7 +15,8 @@ from wheelbuild import patches
 ROOT = Path(__file__).resolve().parents[1]
 
 #: The fixes ADR-0007 carries, one file each, plus SaveIteration's copy fallback
-#: (adaptive runs aborting on 0.18.1.post3) and the three the upstream test gate
+#: (adaptive runs aborting on 0.18.1.post3), MFEM's path splitting (the missing
+#: ParaView output of 0.18.1.post3), and the three the upstream test gate
 #: needs to build, link and stage Palace's tests. Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
@@ -33,6 +34,7 @@ CARRIED = [
     "strumpack/01-llp64.patch",
     "mumps/01-mingw-mpi.patch",
     "mfem/01-binary-ifgzstream.patch",
+    "mfem/02-windows-path-separators.patch",
 ]
 
 
