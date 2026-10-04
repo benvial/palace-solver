@@ -25,8 +25,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import os
+import sys
 import tomllib
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Sequence
@@ -76,7 +78,7 @@ def load_exclusions(path: Path = EXCLUSIONS) -> tuple[Exclusion, ...]:
         ValueError: If an entry is malformed, names a platform no wheel is
             built for, or repeats a test case.
     """
-    data = tomllib.loads(path.read_text())
+    data = tomllib.loads(path.read_text(encoding="utf-8"))
     unknown = set(data) - {"exclusion"}
     if unknown:
         raise ValueError(f"{path}: unexpected top-level keys {sorted(unknown)}")
@@ -127,7 +129,10 @@ def case_of(entry: str) -> str:
 
 def registered_entries(ctest_json: Path) -> list[str]:
     """Return the name of every entry in ``ctest --show-only=json-v1`` output."""
-    return [test["name"] for test in json.loads(ctest_json.read_text())["tests"]]
+    # UTF-8 whatever the locale: some upstream test names are not ASCII ("ω"),
+    # and on Windows the default encoding is the ANSI code page.
+    text = ctest_json.read_text(encoding="utf-8")
+    return [test["name"] for test in json.loads(text)["tests"]]
 
 
 def junit_results(report: Path) -> list[tuple[str, str]]:
@@ -233,6 +238,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     verdict.add_argument("--tests", type=Path, required=True, help="ctest json-v1")
     verdict.add_argument("--junit", type=Path, required=True)
     args = parser.parse_args(argv)
+    # The problems name test cases, and a Windows console's code page cannot
+    # print every one of them; the Actions log reads UTF-8.
+    if isinstance(sys.stdout, io.TextIOWrapper):
+        sys.stdout.reconfigure(encoding="utf-8")
 
     if args.command == "fingerprint":
         print(fingerprint(args.prefix))

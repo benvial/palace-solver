@@ -221,7 +221,8 @@ def test_windows_run_settles_every_patch_before_the_build_and_checks_after(
 ):
     """The carried-patch recipe's order is the point of it: nothing compiles
     until all of them are applied, and the build is not trusted until they are
-    proved still there."""
+    proved still there. Palace's tests, whose sources need Palace's patches,
+    come after that proof."""
     events = []
     monkeypatch.setattr(
         superbuild.patches,
@@ -245,7 +246,11 @@ def test_windows_run_settles_every_patch_before_the_build_and_checks_after(
     )
 
     def record(command, **_kwargs):
-        if "--target" in command:
+        if "unit-tests" in command:
+            events.append("build tests")
+        elif command[:2] == ["cmake", "--install"]:
+            events.append("install tests")
+        elif "--target" in command:
             events.append(
                 "pre-pass " + " ".join(command[command.index("--target") + 1 :])
             )
@@ -273,6 +278,8 @@ def test_windows_run_settles_every_patch_before_the_build_and_checks_after(
         "apply dependencies",
         "build",
         "verify",
+        "build tests",
+        "install tests",
     ]
     include = tmp_path / "superbuild" / superbuild.WINDOWS_PROJECT_INCLUDE
     assert include.read_text() == superbuild.patches.PROJECT_INCLUDE

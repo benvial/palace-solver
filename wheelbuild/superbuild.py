@@ -300,12 +300,14 @@ def run_windows(
     jobs: int,
     ccache: bool = True,
 ) -> None:
-    """Patch, configure and build Palace on Windows.
+    """Patch, configure and build Palace on Windows, and its tests.
 
     The order is the carried-patch recipe of :mod:`wheelbuild.patches`: Palace's
     patches committed and stale dependency trees discarded before the configure;
     a pre-pass that only fetches; the dependency patches; then the build; then
-    proof that every patch survived it.
+    proof that every patch survived it. The tests are built last, as on the
+    other platforms (:func:`unit_test_commands`). Their sources compile only
+    with Palace's carried patches, which is why they wait for that proof.
 
     Args:
         source_dir: Palace's checkout, tagged ``upstream-v<version>`` on its
@@ -337,6 +339,10 @@ def run_windows(
     patches.apply_dependencies(build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
     patches.verify(source_dir, build_dir)
+    for command in unit_test_commands(
+        build_dir=build_dir, install_prefix=install_prefix, jobs=jobs
+    ):
+        check_call(command, cwd=build_dir)
 
 
 def run(
@@ -351,9 +357,8 @@ def run(
 ) -> None:
     """Configure and build Palace, installing into ``install_prefix``.
 
-    Off Windows, Palace's tests are built and installed too, for the upstream
-    test gate (:func:`unit_test_commands`). Windows does not build them yet,
-    because its test sources do not compile without carried patches.
+    Palace's tests are built and installed too, for the upstream test gate
+    (:func:`unit_test_commands`).
 
     Args:
         source_dir: Palace source tree.

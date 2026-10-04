@@ -473,8 +473,9 @@ jobs:
 
       # The upstream test gate: Palace's own test suite, built by the superbuild
       # and run against it, and a failing test fails the row. It tests the
-      # build, not the wheel. Windows does not build the tests yet, so it has
-      # none of these steps.
+      # build, not the wheel. Each sweep is two steps, because Windows runs
+      # ctest under MSYS2's bash, as its build did, and the other rows under
+      # this job's; everything else is shared.
       #
       # It runs last, so a red row has already reported everything else, and
       # after the build cache save, so nothing the tests write is cached.
@@ -486,14 +487,12 @@ jobs:
       # reuses main's pass. See wheelbuild/upstream_gate.py.
       - name: Fingerprint what the upstream test gate tests
         id: gate
-        if: runner.os != 'Windows'
         run: |
           fingerprint=$(python -m wheelbuild.upstream_gate fingerprint "${{ matrix.build_root }}/install")
           echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
 
       - name: Look for a regression pass on these binaries
         id: gate-passed
-        if: runner.os != 'Windows'
         uses: actions/cache/restore@v5
         with:
           path: ${{ runner.temp }}/gate-passed
@@ -520,6 +519,21 @@ jobs:
           python -m wheelbuild.upstream_gate judge --platform "$PLATFORM_TAG" \
             --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/units.xml"
 
+      # The judge runs on the setup-python interpreter, as every wheelbuild
+      # step of the Windows build does; MSYS2's own python names another
+      # platform.
+      - name: Upstream test gate, unit tests on Windows
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        shell: msys2 {0}
+        env:
+          BUILD_ROOT: ${{ matrix.build_root }}
+        run: |
+          scripts/upstream-test-gate.sh units "$BUILD_ROOT/gate"
+          "$(cygpath -u "$pythonLocation")/python.exe" -m wheelbuild.upstream_gate judge \
+            --platform "$PLATFORM_TAG" \
+            --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/units.xml"
+
       # All 46 non-[Long] regression cases on two ranks, upstream's default.
       - name: Upstream test gate, regression
         if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
@@ -537,15 +551,27 @@ jobs:
           python -m wheelbuild.upstream_gate judge --platform "$PLATFORM_TAG" \
             --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/regression.xml"
 
+      - name: Upstream test gate, regression on Windows
+        if: runner.os == 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        timeout-minutes: 60
+        shell: msys2 {0}
+        env:
+          BUILD_ROOT: ${{ matrix.build_root }}
+        run: |
+          scripts/upstream-test-gate.sh regression "$BUILD_ROOT/gate"
+          "$(cygpath -u "$pythonLocation")/python.exe" -m wheelbuild.upstream_gate judge \
+            --platform "$PLATFORM_TAG" \
+            --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/regression.xml"
+
       # An empty entry whose key is the record. A few bytes per fingerprint.
       - name: Write the regression pass record
-        if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        if: steps.gate-passed.outputs.cache-hit != 'true'
         run: |
           mkdir -p "$RUNNER_TEMP/gate-passed"
           echo "${{ steps.gate.outputs.fingerprint }}" > "$RUNNER_TEMP/gate-passed/fingerprint"
 
       - name: Save the regression pass record
-        if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
+        if: steps.gate-passed.outputs.cache-hit != 'true'
         uses: actions/cache/save@v5
         with:
           path: ${{ runner.temp }}/gate-passed

@@ -2,12 +2,17 @@
 
 import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 
 from wheelbuild import superbuild, upstream_gate
 from wheelbuild.platforms import supported_platform_tags
 from wheelbuild.upstream_gate import Exclusion
+
+ROOT = Path(__file__).resolve().parents[1]
 
 LINUX = "manylinux_2_28_x86_64"
 
@@ -20,8 +25,9 @@ def test_the_exclusion_file_is_well_formed():
         assert set(exclusion.platforms) <= set(supported_platform_tags())
 
 
-def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windows():
-    """Ticket 04 of the palace-tests effort: 18 cases everywhere, one on Windows."""
+def test_the_mfem_exclusions_cover_every_platform_and_the_rest_only_windows():
+    """Ticket 04 of the palace-tests effort: 18 cases everywhere. On Windows,
+    the symlink case (ticket 06) and the LIBXSMM defect (ticket 08)."""
     exclusions = upstream_gate.load_exclusions()
     everywhere = [
         e for e in exclusions if set(e.platforms) == set(supported_platform_tags())
@@ -31,9 +37,11 @@ def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windo
     assert len(everywhere) == 18
     assert all("MFEM_USE_EXCEPTIONS" in e.reason for e in everywhere)
     assert [e.test for e in windows] == [
-        "RemovePreviousOutput removes a symlink without following it"
+        "RemovePreviousOutput removes a symlink without following it",
+        "MFEM fixed arbitrary-rule bases",
     ]
-    assert len(exclusions) == 19
+    assert "issue 19" in windows[1].reason
+    assert len(exclusions) == 20
 
 
 def _write(tmp_path, text):
@@ -162,6 +170,34 @@ def test_the_judge_reads_ctests_reports(tmp_path):
     assert upstream_gate.registered_entries(tests) == ["serial-Aborts"]
 
 
+def test_the_gate_names_its_encoding_wherever_it_reads_text(tmp_path):
+    """Two upstream cases say "ω", and Windows' default encoding is cp1252.
+    ``-X warn_default_encoding`` turns every read that leaves it to the
+    locale into an error."""
+    tests = tmp_path / "tests.json"
+    name = "serial-WavePortData TE10 at complex \u03c9"
+    tests.write_bytes(
+        json.dumps({"tests": [{"name": name}]}, ensure_ascii=False).encode()
+    )
+    script = (
+        "import sys; from pathlib import Path; from wheelbuild import upstream_gate; "
+        "upstream_gate.load_exclusions(); "
+        "print(upstream_gate.registered_entries(Path(sys.argv[1]))[0].encode())"
+    )
+
+    strict = ["-X", "warn_default_encoding", "-W", "error::EncodingWarning"]
+
+    result = subprocess.run(
+        [sys.executable, *strict, "-c", script, str(tests)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+    assert result.stdout.strip() == repr(name.encode())
+
+
 @pytest.fixture
 def prefix(tmp_path):
     root = tmp_path / "install"
@@ -271,6 +307,32 @@ def test_the_linux_run_builds_the_tests_after_the_superbuild(tmp_path, monkeypat
 
     assert calls[1] == ["cmake", "--build", ".", "-j2"]
     assert calls[2:] == _tests(tmp_path)
+
+
+def test_the_windows_run_builds_the_tests_once_the_patches_are_proved(
+    tmp_path, monkeypatch
+):
+    for name in ("prepare_palace", "discard_stale_dependencies", "apply_dependencies"):
+        monkeypatch.setattr(superbuild.patches, name, lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(
+        superbuild.patches, "verify", lambda *_args: calls.append("verify")
+    )
+    monkeypatch.setattr(
+        superbuild, "check_call", lambda command, **_kw: calls.append(command)
+    )
+    superbuild.run(
+        source_dir=tmp_path / "palace",
+        build_dir=tmp_path / "superbuild",
+        install_prefix=tmp_path / "install",
+        prefix=tmp_path / "install",
+        jobs=2,
+        system="Windows",
+    )
+
+    verified = calls.index("verify")
+    assert calls[verified - 1] == ["cmake", "--build", ".", "-j2"]
+    assert calls[verified + 1 :] == _tests(tmp_path)
 
 
 def test_darwin_gives_palace_an_rpath_and_installs_the_relinked_palace_in_the_same_run(

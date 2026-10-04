@@ -1,0 +1,28 @@
+Carried patch, Windows only: regression cases stage copies, not symlinks.
+
+ScopedExampleStage in test/unit/regression_helpers.cpp stages each regression
+case by symlinking every entry of its input directory into a fresh directory
+and running Palace there. MinGW's libstdc++ has no symlink() and always fails,
+so every regression case would fail to stage on Windows. On _WIN32 each entry
+is copied instead (recursively, for the mesh/ directories). The inputs are the
+installed test data, where upstream's install already dereferences the source
+tree's symlinks, so the copy is of real files. Linux and macOS stage as before.
+
+diff --git a/test/unit/regression_helpers.cpp b/test/unit/regression_helpers.cpp
+index 2ebc3e7..2378b38 100644
+--- a/test/unit/regression_helpers.cpp
++++ b/test/unit/regression_helpers.cpp
+@@ -342,7 +342,13 @@ public:
+         {
+           continue;
+         }
++#if defined(_WIN32)
++        // MinGW's libstdc++ cannot create symlinks, so stage a copy.
++        std::filesystem::copy(entry.path(), stage_ / name,
++                              std::filesystem::copy_options::recursive, ec);
++#else
+         std::filesystem::create_symlink(entry.path(), stage_ / name, ec);
++#endif
+         if (ec)
+         {
+           ok = 0;
