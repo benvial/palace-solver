@@ -592,7 +592,7 @@ def test_publish_waits_for_every_platform(publish):
     override is then skipped -- which is the only thing standing between a
     partial matrix and an unrepairable release.
     """
-    assert set(publish["needs"]) == {"checks", "wheel"}
+    assert set(publish["needs"]) == {"checks", "wheel", "wheel-regression"}
     assert publish["if"] == "startsWith(github.ref, 'refs/tags/v')"
 
 
@@ -983,3 +983,86 @@ def test_the_gate_scripts_stay_out_of_the_cache_key(build_cache):
     assert "upstream-test-gate" not in keyed
     assert "upstream_gate" not in keyed
     assert "test-exclusions" not in keyed
+
+
+# --------------------------------------------------------------------------
+# The wheel regression run (palace-tests tickets 09 and 11)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def wheel_run(workflow):
+    return workflow["jobs"]["wheel-regression"]
+
+
+@pytest.fixture(scope="module")
+def wheel_run_step(wheel_run):
+    def find(name):
+        return next(step for step in wheel_run["steps"] if step.get("name") == name)
+
+    return find
+
+
+WHEEL_RUN_DUE = "steps.wheel-passed.outputs.cache-hit != 'true'"
+
+
+def test_the_wheel_run_is_a_job_per_row_after_the_wheels(workflow, wheel_run):
+    """Its own job, on a fresh runner of each row the plan selected."""
+    assert set(wheel_run["needs"]) == {"plan", "wheel"}
+    assert (
+        wheel_run["strategy"]["matrix"]
+        == workflow["jobs"]["wheel"]["strategy"]["matrix"]
+    )
+    assert wheel_run["strategy"]["fail-fast"] is False
+    assert wheel_run["runs-on"] == "${{ matrix.runner }}"
+
+
+def test_the_wheel_run_tests_the_rows_own_artifact(wheel_run, upload):
+    download = next(
+        step
+        for step in wheel_run["steps"]
+        if str(step.get("uses", "")).startswith("actions/download-artifact")
+    )
+
+    assert download["with"]["name"] == upload["with"]["name"]
+
+
+def test_the_wheel_run_never_skips_at_job_level(wheel_run, publish):
+    """A pass record skips the solve steps, not the job, so `publish` needs no
+    always() to go ahead on a tag that reuses main's record."""
+    assert "if" not in wheel_run
+    assert "always()" not in publish["if"]
+
+
+def test_the_wheel_run_solves_only_without_a_pass_on_this_payload(wheel_run_step):
+    lookup = wheel_run_step("Look for a wheel regression pass on this payload")
+    save = wheel_run_step("Save the wheel regression pass record")
+
+    assert lookup["with"]["lookup-only"] is True
+    assert lookup["with"]["key"] == save["with"]["key"]
+    assert lookup["with"]["path"] == save["with"]["path"]
+    assert save["with"]["key"].startswith("wheel-regression-passed-${{ matrix.tag }}-")
+    assert "steps.payload.outputs.fingerprint" in save["with"]["key"]
+    for name in (
+        "Install the wheel in a clean virtual environment",
+        "Fetch Palace's regression inputs",
+        "Wheel regression run",
+        "Write the wheel regression pass record",
+        "Save the wheel regression pass record",
+    ):
+        assert WHEEL_RUN_DUE in wheel_run_step(name)["if"]
+
+
+def test_the_wheel_run_keeps_its_ceiling(wheel_run_step):
+    """Ticket 09: raising it is a scope decision, not an edit."""
+    assert wheel_run_step("Wheel regression run")["timeout-minutes"] == 30
+
+
+def test_the_wheel_runs_evidence_is_never_published(wheel_run_step, download):
+    """The failed cases' outputs must not match the pattern `publish` collects."""
+    evidence = wheel_run_step("Upload the failed cases' outputs")
+    pattern = download["with"]["pattern"].rstrip("*")
+
+    assert not evidence["with"]["name"].startswith(pattern)
+    assert evidence["with"]["retention-days"] == 7
+    assert evidence["if"].startswith("failure()")
