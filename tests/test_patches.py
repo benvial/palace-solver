@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 #: The fixes ADR-0007 carries, one file each, plus SaveIteration's copy fallback
 #: (adaptive runs aborting on 0.18.1.post3), MFEM's path splitting (the missing
-#: ParaView output of 0.18.1.post3), and the four the upstream test gate
+#: ParaView output of 0.18.1.post3), LIBXSMM's transposed-A GEMM (wrong
+#: libCEED basis values on Windows), and the four the upstream test gate
 #: needs to build, link, run and stage Palace's tests. Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
@@ -31,6 +32,7 @@ CARRIED = [
     "palace/09-windows-test-utf8-arguments.patch",
     "hypre/01-mingw-ffs.patch",
     "libxsmm/01-llp64.patch",
+    "libxsmm/02-win64-trans-a.patch",
     "libceed/01-windows.patch",
     "strumpack/01-llp64.patch",
     "mumps/01-mingw-mpi.patch",

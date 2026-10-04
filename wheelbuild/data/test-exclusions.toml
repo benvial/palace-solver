@@ -111,10 +111,3 @@ reason = "needs MFEM_USE_EXCEPTIONS (a throw-check; without it MFEM aborts the p
 test = "RemovePreviousOutput removes a symlink without following it"
 platforms = ["win_amd64"]
 reason = "needs a symlink; MinGW's libstdc++ cannot create one"
-
-# A product defect the gate found on Windows; .scratch/windows-wheel issue 19.
-
-[[exclusion]]
-test = "MFEM fixed arbitrary-rule bases"
-platforms = ["win_amd64"]
-reason = "libCEED's LIBXSMM backends give wrong non-tensor basis values on Windows (windows-wheel issue 19)"
