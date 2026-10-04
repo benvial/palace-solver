@@ -1,0 +1,36 @@
+Carried patch, Windows only: link Palace's tests against zlib after MFEM.
+
+test/unit/CMakeLists.txt links unit-tests to ZLIB::ZLIB directly, for the
+boundary-viz test that decodes MFEM's compressed VTU output. libpalace already
+links ZLIB::ZLIB PUBLIC, after MFEM, and the test target is in a subdirectory
+of libpalace's, so it inherits both the headers and the library. The direct
+link only moves zlib earlier: CMake emits it before libpalace's interface,
+and so before libmfem.a. With a static MFEM (BUILD_SHARED_LIBS=OFF, as on
+Windows), found by find_library as a bare archive that records nothing it
+needs, the test link then fails with undefined compress2 and compressBound
+from MFEM's vtk.cpp. palace.exe links in libpalace's order and never noticed.
+Here the test links zlib itself only when libpalace has not. Shared builds
+link as before; not specific to Windows.
+
+diff --git a/test/unit/CMakeLists.txt b/test/unit/CMakeLists.txt
+index 5ff5ad5..59b5e0a 100644
+--- a/test/unit/CMakeLists.txt
++++ b/test/unit/CMakeLists.txt
+@@ -81,10 +81,13 @@ target_link_libraries(unit-tests
+           )
+ 
+ # The PostOperator boundary-viz regression decodes MFEM's compressed binary VTU output
+-# when MFEM is built with zlib support.
+-find_package(ZLIB QUIET)
+-if(ZLIB_FOUND)
+-  target_link_libraries(unit-tests PRIVATE ZLIB::ZLIB)
++# when MFEM is built with zlib support. libpalace already links ZLIB::ZLIB PUBLIC, after
++# MFEM. A direct link here would put zlib before a static libmfem.a on the link line.
++if(NOT TARGET ZLIB::ZLIB)
++  find_package(ZLIB QUIET)
++  if(ZLIB_FOUND)
++    target_link_libraries(unit-tests PRIVATE ZLIB::ZLIB)
++  endif()
+ endif()
+ 
+ # Handle device source code

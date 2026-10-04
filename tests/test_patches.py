@@ -15,8 +15,8 @@ from wheelbuild import patches
 ROOT = Path(__file__).resolve().parents[1]
 
 #: The fixes ADR-0007 carries, one file each, plus SaveIteration's copy fallback
-#: (adaptive runs aborting on 0.18.1.post3) and the two the upstream test gate
-#: needs to build and stage Palace's tests. Adding or dropping one is a
+#: (adaptive runs aborting on 0.18.1.post3) and the three the upstream test gate
+#: needs to build, link and stage Palace's tests. Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
     "palace/01-memoryreporting.patch",
@@ -26,6 +26,7 @@ CARRIED = [
     "palace/05-saveiteration-copy.patch",
     "palace/06-windows-test-cxx.patch",
     "palace/07-windows-regression-staging.patch",
+    "palace/08-windows-test-zlib-order.patch",
     "hypre/01-mingw-ffs.patch",
     "libxsmm/01-llp64.patch",
     "libceed/01-windows.patch",
