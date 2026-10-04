@@ -1,0 +1,159 @@
+Carried patch, Windows only: adaptive iterations leave copies, not symlinks.
+
+SaveIteration in palace/drivers/basesolver.cpp moves each output of an
+adaptive iteration into iterationN/ and leaves a relative symlink in its
+place. MinGW's libstdc++ has no symlink() and always throws there, and
+ApplyOnceOnEachNodeFilesystem turns the throw into a collective MFEM_ABORT,
+so without this every adaptive run with SaveAdaptIterations (the default)
+aborts after its first iteration. On _WIN32 the moved output is copied back
+instead, so the output directory still holds the latest results. The cost:
+directories such as paraview/ are duplicated per iteration, and outputs the
+solver does not rewrite are archived again in each later iteration.
+
+test/unit/test-basesolver.cpp checks the new behaviour: on _WIN32 a
+SaveIteration test that expects a symlink expects a copy whose content
+matches the archive (LeftBehind), and the read_symlink checks are skipped.
+Linux and macOS compile the same code and run the same assertions as before.
+
+diff --git a/palace/drivers/basesolver.cpp b/palace/drivers/basesolver.cpp
+index e80cf91e..b3c69008 100644
+--- a/palace/drivers/basesolver.cpp
++++ b/palace/drivers/basesolver.cpp
+@@ -104,7 +104,12 @@ void SaveIteration(MPI_Comm comm, const fs::path &output_dir, int step, int widt
+             // any existing destination first (e.g. from a previous run).
+             fs::remove_all(dest);
+             fs::rename(path, dest);
++#if defined(_WIN32)
++            // MinGW's libstdc++ cannot create symlinks, so leave a copy behind.
++            fs::copy(dest, path, fs::copy_options::recursive);
++#else
+             fs::create_symlink(rel_step / path.filename(), path);
++#endif
+           }
+         }
+       });
+diff --git a/test/unit/test-basesolver.cpp b/test/unit/test-basesolver.cpp
+index 617ad125..66d5f2ca 100644
+--- a/test/unit/test-basesolver.cpp
++++ b/test/unit/test-basesolver.cpp
+@@ -32,6 +32,18 @@ std::string ReadFile(const fs::path &path)
+   return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+ }
+ 
++// Whether SaveIteration left an accessible result behind at `path`: a symlink into the
++// iteration subfolder, or on Windows, where MinGW's libstdc++ cannot create symlinks, a
++// copy of what was archived. Callers check the content separately.
++bool LeftBehind(const fs::path &path)
++{
++#if defined(_WIN32)
++  return fs::exists(path) && !fs::is_symlink(path);
++#else
++  return fs::is_symlink(path);
++#endif
++}
++
+ // Minimal concrete BaseSolver so BaseSolver::SaveMetadata can be exercised directly; the
+ // Solve override is never invoked by these tests.
+ class TestSolver : public BaseSolver
+@@ -163,19 +175,21 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+ 
+   SECTION("Symlinks are left behind for moved files")
+   {
+-    CHECK(fs::is_symlink(temp_dir / "domain-E.csv"));
+-    CHECK(fs::is_symlink(temp_dir / "port-S.csv"));
++    CHECK(LeftBehind(temp_dir / "domain-E.csv"));
++    CHECK(LeftBehind(temp_dir / "port-S.csv"));
+     // Symlinks should resolve to the moved files.
+     CHECK(ReadFile(temp_dir / "domain-E.csv") == "f,E\n1.0,2.0\n");
+     CHECK(ReadFile(temp_dir / "port-S.csv") == "f,S11\n1.0,0.5\n");
+   }
+ 
++#if !defined(_WIN32)
+   SECTION("Symlinks are relative")
+   {
+     auto target = fs::read_symlink(temp_dir / "domain-E.csv");
+     CHECK(target.is_relative());
+     CHECK(target == fs::path("iteration01") / "domain-E.csv");
+   }
++#endif
+ 
+   SECTION("palace.json is copied, not moved or symlinked")
+   {
+@@ -208,8 +222,9 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "SaveIteration handles directories
+ 
+   SECTION("Symlink is left behind for directory")
+   {
+-    CHECK(fs::is_symlink(temp_dir / "paraview"));
++    CHECK(LeftBehind(temp_dir / "paraview"));
+     CHECK(fs::is_directory(temp_dir / "paraview" / "driven"));
++    CHECK(ReadFile(temp_dir / "paraview" / "driven" / "fields.vtu") == "<VTK/>");
+   }
+ }
+ 
+@@ -225,7 +240,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+   SaveIteration(comm, temp_dir, 1, 1);
+ 
+   // After first save: domain-E.csv is a symlink to iteration1/domain-E.csv.
+-  CHECK(fs::is_symlink(temp_dir / "domain-E.csv"));
++  CHECK(LeftBehind(temp_dir / "domain-E.csv"));
+   CHECK(ReadFile(temp_dir / "domain-E.csv") == "iter1");
+ 
+   // Simulate second iteration: solver overwrites symlink with a real file.
+@@ -247,9 +262,11 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+ 
+   SECTION("Symlink now points to second iteration")
+   {
+-    CHECK(fs::is_symlink(temp_dir / "domain-E.csv"));
++    CHECK(LeftBehind(temp_dir / "domain-E.csv"));
++#if !defined(_WIN32)
+     CHECK(fs::read_symlink(temp_dir / "domain-E.csv") ==
+           fs::path("iteration2") / "domain-E.csv");
++#endif
+     CHECK(ReadFile(temp_dir / "domain-E.csv") == "iter2");
+   }
+ }
+@@ -272,13 +289,13 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+   CreateFile(temp_dir / "domain-E.csv", "iter2");
+ 
+   // extra.csv is still a symlink from iteration 1.
+-  CHECK(fs::is_symlink(temp_dir / "extra.csv"));
++  CHECK(LeftBehind(temp_dir / "extra.csv"));
+ 
+   SaveIteration(comm, temp_dir, 2, 1);
+ 
+   SECTION("Old symlink is preserved, still accessible")
+   {
+-    CHECK(fs::is_symlink(temp_dir / "extra.csv"));
++    CHECK(LeftBehind(temp_dir / "extra.csv"));
+     CHECK(ReadFile(temp_dir / "extra.csv") == "extra_data");
+   }
+ 
+@@ -320,7 +337,8 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+ 
+   // Archive the first mesh, leaving a top-level symlink to it.
+   SaveIteration(comm, temp_dir, 1, 1);
+-  REQUIRE(fs::is_symlink(mesh_file));
++  REQUIRE(LeftBehind(mesh_file));
++  REQUIRE(ReadFile(mesh_file) == first_mesh);
+   REQUIRE(ReadFile(temp_dir / "iteration1" / saved_mesh) == first_mesh);
+ 
+   // Simulate the next AMR iteration with a changed mesh.
+@@ -861,7 +879,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+ 
+   SECTION("Symlinks point to new data")
+   {
+-    CHECK(fs::is_symlink(temp_dir / "domain-E.csv"));
++    CHECK(LeftBehind(temp_dir / "domain-E.csv"));
+     CHECK(ReadFile(temp_dir / "domain-E.csv") == "new_data");
+   }
+ 
+@@ -917,7 +935,8 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "SaveIteration is MPI collective",
+ 
+   SaveIteration(comm, temp_dir, 1, 1);
+ 
+-  CHECK(fs::is_symlink(temp_dir / "gridfunction"));
++  CHECK(LeftBehind(temp_dir / "gridfunction"));
++  CHECK(ReadFile(temp_dir / "gridfunction" / "electrostatic" / "V.gf.000000") == "field");
+   CHECK(fs::is_regular_file(temp_dir / "iteration1" / "gridfunction" / "electrostatic" /
+                             "V.gf.000000"));
+ }
