@@ -940,7 +940,7 @@ def test_windows_cuts_a_hung_unit_entry_short():
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
     windows = script[script.index("MINGW* | MSYS*)\n    jobs=") :]
 
-    assert "unit_timeout=60" in windows[: windows.index(";;")]
+    assert "unit_timeout=150" in windows[: windows.index(";;")]
 
 
 def test_the_windows_gate_runs_the_ctest_the_build_pinned():

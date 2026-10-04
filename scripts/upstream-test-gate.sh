@@ -70,8 +70,9 @@ case "$(uname -s)" in
     # The excluded symlink case cannot set itself up here, and on two ranks
     # rank 0 throws before a barrier rank 1 then waits at forever. It counts
     # as not passing either way, so it is cut short rather than left to spend
-    # 300 of the step's 300 seconds. No unit entry takes more than about 5 s.
-    unit_timeout=60
+    # 300 of the step's 300 seconds. The slowest unit entry, "3D libCEED
+    # Operators" on one rank, takes about 70 s here.
+    unit_timeout=150
     ;;
   *)
     echo "the upstream test gate does not run on $(uname -s)" >&2
