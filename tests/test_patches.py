@@ -14,13 +14,15 @@ from wheelbuild import patches
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: The ten fixes ADR-0007 carries, one file each. Adding or dropping one is a
+#: The fixes ADR-0007 carries, one file each, plus SaveIteration's copy fallback
+#: (adaptive runs aborting on 0.18.1.post3). Adding or dropping one is a
 #: decision, so it is a visible edit here.
 CARRIED = [
     "palace/01-memoryreporting.patch",
     "palace/02-static-scalapack.patch",
     "palace/03-slepc-msys-petsc-dir.patch",
     "palace/04-windows-cxx.patch",
+    "palace/05-saveiteration-copy.patch",
     "hypre/01-mingw-ffs.patch",
     "libxsmm/01-llp64.patch",
     "libceed/01-windows.patch",
@@ -34,7 +36,7 @@ def _labels(found):
     return [path.relative_to(patches.PATCH_ROOT).as_posix() for path in found]
 
 
-def test_the_carried_set_is_exactly_the_ten_fixes():
+def test_the_carried_set_is_exactly_the_carried_fixes():
     assert _labels(patches.carried_patches()) == CARRIED
 
 
