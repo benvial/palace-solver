@@ -1,0 +1,62 @@
+Carried patch, Windows only: Palace's test runner reads its arguments as UTF-8.
+
+Two upstream test cases have a non-ASCII name: "WavePortData TE10 at complex
+ω" and "WavePortData lossy fill at real and complex ω". ctest passes each
+name on the command line, and on Windows main()'s argv comes through the ANSI
+code page, where ω becomes '?', so Catch2 matched no test and the entry
+failed with "No tests ran". On _WIN32 test/unit/main.cpp hands Catch2 the
+UTF-8 of GetCommandLineW() instead. Only how the runner reads its arguments
+changes; Linux and macOS read argv as before.
+
+diff --git a/test/unit/main.cpp b/test/unit/main.cpp
+index 6b765db..848a939 100644
+--- a/test/unit/main.cpp
++++ b/test/unit/main.cpp
+@@ -17,6 +17,15 @@
+ #include <StrumpackConfig.hpp>
+ #endif
+ 
++#if defined(_WIN32)
++#include <vector>
++#define NOMINMAX
++#define WIN32_LEAN_AND_MEAN
++#include <windows.h>
++// After <windows.h>, which it needs.
++#include <shellapi.h>
++#endif
++
+ using namespace palace;
+ 
+ // Global test options configurable from command line.
+@@ -85,7 +94,31 @@ int main(int argc, char *argv[])
+   session.cli(cli);
+ 
+   // Let Catch2 (using Clara) parse the command line.
++#if defined(_WIN32)
++  // argv comes through the ANSI code page, where a test name such as "... complex ω"
++  // becomes "... complex ?" and matches nothing. Catch2 gets the UTF-8 of the wide
++  // command line instead.
++  int wargc = 0;
++  LPWSTR *wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
++  std::vector<std::string> utf8_args;
++  for (int i = 0; i < wargc; i++)
++  {
++    const int n =
++        WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, nullptr, 0, nullptr, nullptr);
++    std::string arg(n > 0 ? n - 1 : 0, '\0');
++    WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, arg.data(), n, nullptr, nullptr);
++    utf8_args.push_back(std::move(arg));
++  }
++  LocalFree(wargv);
++  std::vector<const char *> utf8_argv;
++  for (const auto &arg : utf8_args)
++  {
++    utf8_argv.push_back(arg.c_str());
++  }
++  int result = session.applyCommandLine(wargc, utf8_argv.data());
++#else
+   int result = session.applyCommandLine(argc, argv);
++#endif
+   if (result != 0)
+   {
+     return result;

@@ -1,6 +1,6 @@
 """Apply the carried patches the Windows build needs, and prove they stayed.
 
-Fifteen fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
+Sixteen fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
 The owner is the upstream whose files a patch edits -- Palace or one of the six
 dependencies its superbuild fetches -- and ``NN`` in ``NN-<slug>.patch`` is the
 apply order within it. Linux and macOS never read this directory: only the
