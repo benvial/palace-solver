@@ -6,9 +6,9 @@
 # dispatch can narrow them: GitHub cannot filter a static `include` list by an
 # input (`exclude` never removes an `include` row, and a job-level `if` cannot
 # see `matrix`), while a matrix computed by an earlier job can be anything. The
-# `windows_only` input uses that to iterate on the Windows row without sending
-# the other three cold. tests/test_wheels_workflow.py reads this file, and ties
-# its tags to wheelbuild.platforms.
+# `windows_only` input uses that to iterate on the Windows row without
+# rebuilding the other three. tests/test_wheels_workflow.py and the cache
+# keep-alive read this file, and the tests tie its tags to wheelbuild.platforms.
 #
 # Everything that names a platform comes from the row rather than from the step
 # that uses it, so a further platform is one entry here and as few other edits

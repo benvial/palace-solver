@@ -1,0 +1,100 @@
+name: superbuild cache key
+description: >-
+  The key a platform's superbuild tree is cached under, and the hashes it is
+  built from. Computed here once for every job that names it: the wheel job
+  that restores and saves the tree, the keep-alive that reads it, and main's
+  cleanup that deletes the entries no current tree can restore.
+
+# The build compiles MPICH, OpenBLAS and the Palace superbuild. Everything in
+# that tree is pinned by the Palace version and by the files hashed below, so
+# the key is `superbuild-<platform tag>-<version>-<hash of those files>`, plus
+# one more component on Windows.
+#
+# The key deliberately carries no `github.sha`: with it, the exact key could
+# never hit, so every run -- warm or cold -- wrote another 2.4 GiB entry and the
+# repository sat at 9.6 GiB against GitHub's 10 GB cap on one platform alone.
+# The first build of a given key claims the entry and later builds of the same
+# key are exact hits that skip the save.
+#
+# scripts/build-in-container.sh is keyed along with the scripts it drives
+# because it chooses the image the tree is compiled in, and a tree built in a
+# different image is a different tree.
+#
+# The test for membership is whether editing the file changes the bytes in the
+# tree, not whether the build imports it. wheelbuild/platforms.py is
+# deliberately absent on that test: it decides which filenames the MPICH and
+# OpenBLAS validators look for, and nothing about how either is compiled.
+# Keying it would orphan every entry each time a new platform is taught to it,
+# buying a rebuild for a file that cannot change what was built.
+#
+# The Windows key carries one more component, the hash of the carried patches,
+# on that same test: a patch edit changes the bytes in the tree. The driver
+# notices on its own and rebuilds what the edit touched (wheelbuild/patches.py),
+# but on an exact hit the save is skipped, so without the component every later
+# run restored the pre-edit tree and rebuilt the same thing again -- and,
+# relinking, missed the gate and wheel regression records too. With it a patch
+# edit misses the primary key, restores the previous entry through
+# restore-keys, rebuilds only what changed and saves the result. It is
+# Windows-only because only Windows carries patches; the other rows' keys stay
+# as they were.
+
+inputs:
+  platform-tag:
+    description: >-
+      The tag the row's wheel carries. With palace-version, asks for the key;
+      main's cleanup, which matches every platform's, passes neither.
+    required: false
+    default: ""
+  palace-version:
+    description: The Palace release, __version__ minus any .postN segment.
+    required: false
+    default: ""
+
+outputs:
+  key:
+    description: The exact key, when platform-tag and palace-version are given.
+    value: ${{ steps.key.outputs.key }}
+  restore-keys:
+    description: The fallbacks, newest tree first, one per line.
+    value: ${{ steps.key.outputs.restore-keys }}
+  inputs-hash:
+    description: The hash of the keyed build files, every row's last component.
+    value: ${{ steps.key.outputs.inputs-hash }}
+  windows-patches-hash:
+    description: The hash of the carried patches, the Windows key's extra one.
+    value: ${{ steps.key.outputs.windows-patches-hash }}
+
+runs:
+  using: composite
+  steps:
+    - id: key
+      shell: bash
+      env:
+        PLATFORM_TAG: ${{ inputs.platform-tag }}
+        PALACE_VERSION: ${{ inputs.palace-version }}
+        INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+        WINDOWS_PATCHES_HASH: ${{ hashFiles('wheelbuild/data/patches/windows/**') }}
+      # hashFiles returns an empty string when it matches no file, which would
+      # give a key every tree's fallback matches and a pruner suffix no live
+      # entry ends in.
+      run: |
+        if [[ -z "$INPUTS_HASH" || -z "$WINDOWS_PATCHES_HASH" ]]; then
+          echo "::error::hashFiles matched no file; is the repository checked out?"
+          exit 1
+        fi
+        echo "inputs-hash=$INPUTS_HASH" >> "$GITHUB_OUTPUT"
+        echo "windows-patches-hash=$WINDOWS_PATCHES_HASH" >> "$GITHUB_OUTPUT"
+        if [[ -z "$PLATFORM_TAG" || -z "$PALACE_VERSION" ]]; then
+          exit 0
+        fi
+        key="superbuild-$PLATFORM_TAG-$PALACE_VERSION-$INPUTS_HASH"
+        if [[ "$RUNNER_OS" == Windows ]]; then
+          key="$key-$WINDOWS_PATCHES_HASH"
+        fi
+        echo "key=$key" >> "$GITHUB_OUTPUT"
+        {
+          echo "restore-keys<<EOF"
+          echo "superbuild-$PLATFORM_TAG-$PALACE_VERSION-"
+          echo "superbuild-$PLATFORM_TAG-"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
