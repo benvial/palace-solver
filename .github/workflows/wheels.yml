@@ -187,7 +187,6 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc-fortran
             mingw-w64-ucrt-x86_64-libgomp
             mingw-w64-ucrt-x86_64-python
-            mingw-w64-ucrt-x86_64-ccache
             mingw-w64-ucrt-x86_64-pkgconf
             mingw-w64-ucrt-x86_64-msmpi
 
@@ -344,9 +343,9 @@ jobs:
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
 
-      # The container needs root — the build installs ccache and patchelf with
-      # dnf — so everything it writes is owned by root, and the runner user is
-      # the one that then saves the cache, reads the wheel and uploads it.
+      # The container needs root — the build installs patchelf with dnf — so
+      # everything it writes is owned by root, and the runner user is the one
+      # that then saves the cache, reads the wheel and uploads it.
       # Handing both trees over explicitly is cheaper than the alternatives: a
       # `--user` that keeps them readable cannot run dnf, and relying on the
       # build's umask leaving every directory world-readable is a silent

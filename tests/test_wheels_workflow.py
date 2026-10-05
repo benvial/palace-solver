@@ -276,7 +276,7 @@ def test_msys2_is_provisioned_as_adr_0007_fixes_it(named_step):
     for key in ("release", "update", "cache"):
         assert setup["with"][key] is False
     packages = setup["with"]["install"].split()
-    for package in ("gcc", "gcc-fortran", "libgomp", "ccache", "pkgconf", "msmpi"):
+    for package in ("gcc", "gcc-fortran", "libgomp", "pkgconf", "msmpi"):
         assert f"mingw-w64-ucrt-x86_64-{package}" in packages
     for package in ("make", "git", "patch", "python"):
         assert package in packages
