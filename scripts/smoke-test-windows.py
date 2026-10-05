@@ -34,6 +34,7 @@ from pathlib import Path
 
 from _windows_wheel import (
     REPO_ROOT,
+    check_paraview,
     clean_environment,
     copy_example,
     count_lines,
@@ -177,6 +178,8 @@ def check_runs(scripts: Path, palace_version: str, config: Path, workdir: Path) 
     expect(done, "the single-rank solve failed")
     if not list(directory.glob("postpro/*.csv")):
         fail("the single-rank solve wrote no postprocessing output", done.stdout)
+    for line in check_paraview(directory):
+        print(f"    paraview {line}")
 
     step("two ranks, under the vendored process manager")
     directory = copy_example(config, workdir / "mpiexec")

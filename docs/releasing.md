@@ -28,6 +28,13 @@ Per release:
 3. Tag and push the tag. The tag runs the checks, builds every platform's wheel
    and, on its own runner, smoke-tests it and solves a real example under both
    launchers, then publishes to PyPI.
+4. Verify what PyPI serves: `gh workflow run verify-published.yml -f
+   version=<version>`. On a clean runner of every platform it runs
+   `pip install palace-solver==<version>`, checks that pip chose that platform's
+   file and that its digest is the index's, solves the spheres example on two
+   ranks under `palace-mpiexec` and requires ParaView output from it. It then
+   reruns the smoke and interop tests on the downloaded file. This is how
+   0.18.1.post3's missing ParaView output on Windows was found.
 
 A tag lands best on a commit `main` has already built: the four rows then
 restore a warm superbuild cache and finish in minutes, where a tag on an
