@@ -30,11 +30,6 @@
 #                <BUILD_ROOT>-payload). Outside the build root for the same
 #                reason: it is rebuilt from the closure on every run.
 #   OUTPUT_DIR   wheel output directory (default: <repo>/wheelhouse)
-#   CCACHE_DIR   ccache directory (default $BUILD_ROOT/ccache)
-#   CCACHE_MAXSIZE
-#                ccache size bound (default 2G), because this directory sits
-#                inside a build tree that has to fit the 10 GB GitHub Actions
-#                cache budget shared with three other platforms
 #   JOBS         parallel build jobs (default: the machine's core count)
 set -euo pipefail
 
@@ -73,9 +68,6 @@ msmpi_dir="$(cygpath -u "${MSMPI_DIR:-$(cygpath -w "$build_root")-msmpi}")"
 payload_dir="$(cygpath -u "${PAYLOAD_DIR:-$(cygpath -w "$build_root")-payload}")"
 output_dir="$(cygpath -u "${OUTPUT_DIR:-$(cygpath -w "$repo_root")/wheelhouse}")"
 jobs="${JOBS:-$(nproc)}"
-CCACHE_DIR="$(win "${CCACHE_DIR:-$build_root/ccache}")"
-export CCACHE_DIR
-export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 
 # Palace's CMake runs `git describe` in the source tree at configure time to
 # stamp `palace --version`, and that tree comes back from a build cache that
@@ -88,7 +80,7 @@ source_dir="$build_root/palace-$palace_version"
 superbuild_dir="$build_root/superbuild"
 install_prefix="$build_root/install"
 
-mkdir -p "$build_root" "$CCACHE_DIR" "$msmpi_dir"
+mkdir -p "$build_root" "$msmpi_dir"
 
 # No wheelbuild.prefix here: GNUInstallDirs installs into lib on Windows, so
 # there is no lib64 to alias, and a directory symlink needs a privilege a
@@ -258,15 +250,11 @@ echo "==> superbuild (dependency tree cached in $superbuild_dir)"
 # tests are built last, for the upstream test gate. See
 # wheelbuild/patches.py.
 wheelbuild -m wheelbuild.patches list
-ccache_flag=()
-command -v ccache >/dev/null || ccache_flag=(--no-ccache)
 wheelbuild -m wheelbuild.superbuild \
   --source-dir "$(win "$source_dir")" \
   --build-dir "$(win "$superbuild_dir")" \
   --install-prefix "$(win "$install_prefix")" \
-  --jobs "$jobs" \
-  ${ccache_flag[@]+"${ccache_flag[@]}"}
-ccache --show-stats 2>/dev/null || true
+  --jobs "$jobs"
 
 binary="$(installed_palace)"
 if [[ -z "$binary" ]]; then

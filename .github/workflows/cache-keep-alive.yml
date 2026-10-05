@@ -1,0 +1,79 @@
+name: cache keep-alive
+
+# GitHub deletes a cache entry that goes seven days without a read. Only main
+# writes build caches (see "Save build cache" in wheels.yml), and every other
+# ref rebuilds from main's entry, so a quiet week on main would leave the next
+# pull request to build every row cold on every push. Once a week this reads
+# each platform's live entry, which is all it takes to keep it.
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # The rows the wheel job builds, from the same file and module, so a new
+  # platform's entry is kept alive without a second list.
+  plan:
+    name: plan the wheel matrix
+    runs-on: ubuntu-24.04
+    outputs:
+      rows: ${{ steps.rows.outputs.rows }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Select the rows
+        id: rows
+        run: python3 -m wheelbuild.matrix
+
+  # One job per platform, on that platform's runner: an entry's version covers
+  # its path and the runner's OS and compression, so a read from anywhere else
+  # looks up a different entry.
+  keep-alive:
+    name: keep ${{ matrix.name }}'s build cache alive
+    needs: [plan]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.rows) }}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Resolve Palace version
+        run: |
+          version=$(python -c 'from palace_solver import PALACE_VERSION; print(PALACE_VERSION)' | tr -d '\r')
+          echo "PALACE_VERSION=$version" >> "$GITHUB_ENV"
+
+      # The row's tag rather than one derived from this runner: the wheel job
+      # already refuses a row whose tag the runner would not derive.
+      - name: Compute the build cache key
+        id: cache-key
+        uses: ./.github/actions/superbuild-cache-key
+        with:
+          platform-tag: ${{ matrix.tag }}
+          palace-version: ${{ env.PALACE_VERSION }}
+
+      # The exact key and no fallback: the entry to keep is the one main's next
+      # run would hit. A miss fails the job, because it means main holds no
+      # live entry for this platform and its next pull request builds cold.
+      # lookup-only reads the entry without downloading it.
+      - name: Read the live build cache
+        uses: actions/cache/restore@v5
+        with:
+          path: ${{ matrix.build_root }}
+          key: ${{ steps.cache-key.outputs.key }}
+          lookup-only: true
+          fail-on-cache-miss: true

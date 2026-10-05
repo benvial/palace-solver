@@ -16,11 +16,6 @@
 #                records absolute install names, so a tree that moves is a tree
 #                that no longer resolves, which is a failure the Linux
 #                platforms never see.
-#   CCACHE_DIR   ccache directory (default $BUILD_ROOT/ccache)
-#   CCACHE_MAXSIZE
-#                ccache size bound (default 2G), because this directory sits
-#                inside a build tree that has to fit the 10 GB GitHub Actions
-#                cache budget shared with two other platforms
 #   JOBS         parallel build jobs (default: the machine's core count)
 #   CC, CXX, FC  override the toolchain chosen below
 set -euo pipefail
@@ -36,8 +31,6 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"__version__ = \"([^\"]+)\"", pathlib.Path("'"$repo_root"'/palace_solver/__init__.py").read_text()).group(1).split(".post")[0])')}"
 build_root="${BUILD_ROOT:-$HOME/palace-build}"
 jobs="${JOBS:-$(sysctl -n hw.logicalcpu)}"
-export CCACHE_DIR="${CCACHE_DIR:-$build_root/ccache}"
-export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 
 # The floor the wheel claims, and the reason it is set at all: with no
 # deployment target clang infers one from the SDK, capped at the running
@@ -68,7 +61,7 @@ toolchain_bin="$build_root/toolchain-bin"
 # though this one had produced it.
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 
-mkdir -p "$build_root" "$CCACHE_DIR" "$toolchain_bin" "$output_dir"
+mkdir -p "$build_root" "$toolchain_bin" "$output_dir"
 
 PYTHONPATH="$repo_root" python3 -m wheelbuild.prefix --prefix "$install_prefix"
 
@@ -142,14 +135,6 @@ python3 -m venv --clear "$venv"
   "$(PYTHONPATH="$repo_root" python3 -c 'from wheelbuild.assemble import DELOCATE_REQUIREMENT; print(DELOCATE_REQUIREMENT)')"
 export PATH="$toolchain_bin:$venv/bin:$PATH"
 cmake --version | head -1
-
-ccache_flag=()
-if ! command -v ccache >/dev/null; then
-  # Not fatal, and not worth a `brew install`: ccache earns its place on a
-  # fallback cache restore, not on a cold build.
-  echo "==> ccache is not installed; building without it"
-  ccache_flag=(--no-ccache)
-fi
 
 echo "==> MPICH (vendored into the wheel)"
 mpich_version="$(PYTHONPATH="$repo_root" python3 -c 'from palace_solver import MPICH_VERSION; print(MPICH_VERSION)')"
@@ -268,8 +253,7 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.superbuild \
   --build-dir "$superbuild_dir" \
   --install-prefix "$install_prefix" \
   --prefix "$install_prefix" \
-  --jobs "$jobs" \
-  ${ccache_flag[@]+"${ccache_flag[@]}"}
+  --jobs "$jobs"
 
 echo "==> Palace is installed in $install_prefix"
 

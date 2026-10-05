@@ -24,6 +24,8 @@ from wheelbuild.platforms import (
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "wheels.yml"
+KEEP_ALIVE = ROOT / ".github" / "workflows" / "cache-keep-alive.yml"
+CACHE_KEY_ACTION = ROOT / ".github" / "actions" / "superbuild-cache-key" / "action.yml"
 
 
 def _step_index(job, needle):
@@ -85,6 +87,26 @@ def build_cache(workflow):
     return next(step for step in steps if step.get("id") == "build-cache")
 
 
+@pytest.fixture(scope="module")
+def key_step():
+    """The one step that computes the superbuild cache key, for every job."""
+    action = yaml.safe_load(CACHE_KEY_ACTION.read_text())
+    (step,) = action["runs"]["steps"]
+    return step
+
+
+@pytest.fixture(scope="module")
+def keyed(key_step):
+    """The hashFiles() expressions the key is built from, common one first."""
+    env = key_step["env"]
+    return env["INPUTS_HASH"] + env["WINDOWS_PATCHES_HASH"]
+
+
+@pytest.fixture(scope="module")
+def keep_alive():
+    return yaml.safe_load(KEEP_ALIVE.read_text())
+
+
 def test_both_linux_platforms_have_a_row(rows):
     tags = {row["tag"] for row in rows}
 
@@ -129,9 +151,34 @@ def test_the_artifact_name_carries_the_platform(workflow):
     assert "matrix.tag" in upload["with"]["name"]
 
 
-def test_the_cache_key_is_namespaced_by_platform(build_cache):
+def test_the_cache_key_is_namespaced_by_platform(key_step, named_step):
     """Without the tag component the two platforms restore each other's tree."""
-    assert "PLATFORM_TAG" in build_cache["with"]["key"]
+    compute = named_step("Compute the build cache key")
+
+    assert compute["with"]["platform-tag"] == "${{ env.PLATFORM_TAG }}"
+    assert (
+        'key="superbuild-$PLATFORM_TAG-$PALACE_VERSION-$INPUTS_HASH"'
+        in (key_step["run"])
+    )
+
+
+def test_the_wheel_job_restores_the_key_the_action_computes(build_cache, steps):
+    names = [step.get("name") for step in steps]
+
+    assert build_cache["with"]["key"] == "${{ steps.cache-key.outputs.key }}"
+    assert build_cache["with"]["restore-keys"] == (
+        "${{ steps.cache-key.outputs.restore-keys }}"
+    )
+    assert names.index("Compute the build cache key") < names.index(
+        "Restore build cache"
+    )
+
+
+@pytest.mark.parametrize("path", [WORKFLOW, KEEP_ALIVE])
+def test_no_workflow_spells_the_key_out_for_itself(path):
+    """A second spelling is a second key: the keep-alive would read an entry
+    nobody saves, and the pruner would delete every live one."""
+    assert "hashFiles" not in path.read_text()
 
 
 def test_cache_cleanup_does_not_derive_a_tag_from_its_own_runner(workflow):
@@ -143,22 +190,22 @@ def test_cache_cleanup_does_not_derive_a_tag_from_its_own_runner(workflow):
     assert "scripts/prune-build-caches.sh" in script
 
 
-def test_the_cache_key_covers_the_openblas_build_module(build_cache):
+def test_the_cache_key_covers_the_openblas_build_module(keyed):
     """A tree is only as reusable as the key admits.
 
     wheelbuild/openblas.py decides the CPU baseline the vendored library is
     compiled for, so an edit to it has to orphan the entries built before it.
     """
-    assert "wheelbuild/openblas.py" in build_cache["with"]["key"]
+    assert "wheelbuild/openblas.py" in keyed
 
 
-def test_the_msmpi_fetch_stays_out_of_the_cache_key(build_cache):
+def test_the_msmpi_fetch_stays_out_of_the_cache_key(keyed):
     """The MS-MPI installer is fetched on every run, its bytes pinned by hash,
     and the build tree links against MSYS2's import library rather than these
     files. Keying the module would send every row cold for an edit that cannot
     change what was built.
     """
-    assert "wheelbuild/msmpi.py" not in build_cache["with"]["key"]
+    assert "wheelbuild/msmpi.py" not in keyed
 
 
 def test_the_checks_job_fetches_and_verifies_msmpi(workflow):
@@ -168,36 +215,42 @@ def test_the_checks_job_fetches_and_verifies_msmpi(workflow):
     assert any("python -m wheelbuild.msmpi" in run for run in runs)
 
 
-def test_the_cleanup_job_hashes_exactly_what_the_cache_key_hashes(
-    workflow, build_cache
-):
-    """The pruner matches on the trailing hash, so a divergent file list here
-    makes every live entry look stale and deletes it.
-    """
+def test_the_cleanup_job_prunes_on_the_hashes_the_key_ends_in(workflow):
+    """The pruner matches on the trailing hashes, so a divergent file list
+    there makes every live entry look stale and deletes it."""
     cleanup = workflow["jobs"]["cache-cleanup"]["steps"]
-    env = next(step["env"] for step in cleanup if "env" in step)
-    keyed = _hashed_files(build_cache["with"]["key"])
-    pruned = [
-        *_hashed_files(env["INPUTS_HASH"]),
-        *_hashed_files(env["WINDOWS_PATCHES_HASH"]),
-    ]
+    names = [step.get("name") for step in cleanup]
+    compute = next(step for step in cleanup if step.get("id") == "cache-key")
+    env = next(step["env"] for step in cleanup if "GH_TOKEN" in step.get("env", {}))
 
-    assert len(keyed) == 2
-    assert keyed == pruned
+    assert compute["uses"] == "./.github/actions/superbuild-cache-key"
+    assert "with" not in compute
+    assert names.index(compute["name"]) < names.index(
+        "Delete superbuild caches that no longer match main"
+    )
+    assert env["INPUTS_HASH"] == "${{ steps.cache-key.outputs.inputs-hash }}"
+    assert env["WINDOWS_PATCHES_HASH"] == (
+        "${{ steps.cache-key.outputs.windows-patches-hash }}"
+    )
 
 
-def test_only_the_windows_key_hashes_the_carried_patches(build_cache):
+def test_the_key_refuses_a_hash_that_matched_no_file(key_step):
+    """hashFiles is empty on no match, and a key ending in nothing is a prefix
+    of every tree's key."""
+    assert '-z "$INPUTS_HASH" || -z "$WINDOWS_PATCHES_HASH"' in key_step["run"]
+    assert "exit 1" in key_step["run"]
+
+
+def test_only_the_windows_key_hashes_the_carried_patches(key_step, keyed):
     """Only Windows carries patches; keying them anywhere else would roll the
     other rows' keys on every patch edit for a tree it cannot change."""
-    key = build_cache["with"]["key"]
-    common, patches = _hashed_files(key)
+    common, patches = _hashed_files(keyed)
 
     assert "patches" not in common
     assert patches == "'wheelbuild/data/patches/windows/**'"
     assert (
-        "${{ runner.os == 'Windows' && format('-{0}', hashFiles("
-        "'wheelbuild/data/patches/windows/**')) || '' }}"
-    ) in key
+        'if [[ "$RUNNER_OS" == Windows ]]; then\n  key="$key-$WINDOWS_PATCHES_HASH"\nfi'
+    ) in key_step["run"]
 
 
 def _hashed_files(expression):
@@ -276,7 +329,7 @@ def test_msys2_is_provisioned_as_adr_0007_fixes_it(named_step):
     for key in ("release", "update", "cache"):
         assert setup["with"][key] is False
     packages = setup["with"]["install"].split()
-    for package in ("gcc", "gcc-fortran", "libgomp", "ccache", "pkgconf", "msmpi"):
+    for package in ("gcc", "gcc-fortran", "libgomp", "pkgconf", "msmpi"):
         assert f"mingw-w64-ucrt-x86_64-{package}" in packages
     for package in ("make", "git", "patch", "python"):
         assert package in packages
@@ -313,26 +366,26 @@ def test_the_windows_build_root_is_short_and_on_d(rows):
     assert row["build_root"] == "D:\\b"
 
 
-def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(build_cache):
+def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(keyed):
     """hashFiles hashes the checkout's bytes. A CRLF checkout on Windows gave
     that row's key a different hash from the one the Linux pruner computes, so
     main's cleanup would have deleted the live Windows entry on every push.
     The carried patches, the Windows key's other hash, are checked out byte for
     byte instead (`-text`), which tests/test_patches.py asserts."""
-    keyed = re.findall(r"'([^']+)'", _hashed_files(build_cache["with"]["key"])[0])
+    paths = re.findall(r"'([^']+)'", _hashed_files(keyed)[0])
     result = subprocess.run(
-        ["git", "check-attr", "eol", "--", *keyed],
+        ["git", "check-attr", "eol", "--", *paths],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     )
 
-    assert result.stdout.splitlines() == [f"{path}: eol: lf" for path in keyed]
+    assert result.stdout.splitlines() == [f"{path}: eol: lf" for path in paths]
 
 
-def test_the_cache_key_covers_the_windows_build_driver(build_cache):
-    assert "scripts/build-windows.sh" in build_cache["with"]["key"]
+def test_the_cache_key_covers_the_windows_build_driver(keyed):
+    assert "scripts/build-windows.sh" in keyed
 
 
 # -- the matrix is computed, so a dispatch can narrow it ---------------------
@@ -399,49 +452,75 @@ def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, ro
     assert value == json.dumps(matrix.select(rows, "win_amd64"))
 
 
-def _replacement(named_step):
-    return named_step("Drop the superseded Windows entry this iteration run restored")
+def test_only_main_saves_a_build_cache(named_step):
+    """Four entries fill the 10 GB budget, so a save from any other ref evicts
+    one of main's (windows-wheel ticket 22)."""
+    save = named_step("Save build cache")
+
+    assert "github.ref == 'refs/heads/main'" in save["if"]
 
 
-def test_an_iteration_run_replaces_its_entry_before_it_builds(steps, named_step):
-    """Deleting after the save is too late: for the length of the build the
-    branch holds two Windows entries, and with main's three that is over the
-    cap, where eviction takes one of main's."""
-    names = [step.get("name") for step in steps]
-    replace = names.index(_replacement(named_step)["name"])
-
-    assert names.index("Restore build cache") < replace
-    assert replace < names.index("Build wheel under MSYS2")
+def test_the_pass_records_save_on_every_ref(named_step):
+    """A few bytes each, and what lets a tag reuse main's regression pass."""
+    assert "github.ref" not in named_step("Save the regression pass record")["if"]
 
 
-def test_the_replacement_deletes_only_this_branchs_superseded_key(named_step):
-    replace = _replacement(named_step)
-
-    assert "inputs.windows_only" in replace["if"]
-    assert "github.ref != 'refs/heads/main'" in replace["if"]
-    assert (
-        "steps.build-cache.outputs.cache-matched-key != "
-        "steps.build-cache.outputs.cache-primary-key"
-    ) in replace["if"]
-    assert replace["env"]["MATCHED"] == (
-        "${{ steps.build-cache.outputs.cache-matched-key }}"
-    )
-    assert 'gh cache delete "$MATCHED"' in replace["run"]
-    assert '--ref "$GITHUB_REF"' in replace["run"]
-    assert "--all" not in replace["run"]
-
-
-def test_only_the_replacement_step_is_handed_the_token(workflow, steps, named_step):
-    """The job needs actions: write for that step alone; the build runs code it
-    downloads, so the token is neither in its environment nor in .git/config."""
+def test_the_wheel_job_holds_no_token_that_can_write(workflow, steps):
+    """The build runs code it downloads, and no step deletes a cache any more,
+    so the token is read-only and neither in a step's environment nor in
+    .git/config."""
     wheel = workflow["jobs"]["wheel"]
     holders = [step for step in steps if "github.token" in str(step.get("env", {}))]
 
-    assert wheel["permissions"] == {"contents": "read", "actions": "write"}
-    assert holders == [_replacement(named_step)]
+    assert wheel["permissions"] == {"contents": "read"}
+    assert holders == []
     checkout = steps[0]
     assert checkout["uses"].startswith("actions/checkout@")
     assert checkout["with"]["persist-credentials"] is False
+
+
+# -- the keep-alive reads main's live entries ------------------------------
+
+
+def test_the_keep_alive_runs_weekly_and_on_request(keep_alive):
+    # PyYAML reads the bare `on` key as True.
+    triggers = keep_alive[True]
+
+    assert set(triggers) == {"schedule", "workflow_dispatch"}
+    assert len(triggers["schedule"]) == 1
+    assert keep_alive["permissions"] == {"contents": "read"}
+
+
+def test_the_keep_alive_covers_the_wheel_jobs_rows(keep_alive, workflow):
+    plan = keep_alive["jobs"]["plan"]
+    job = keep_alive["jobs"]["keep-alive"]
+
+    assert plan["steps"][-1]["run"] == "python3 -m wheelbuild.matrix"
+    assert job["strategy"]["matrix"] == workflow["jobs"]["wheel"]["strategy"]["matrix"]
+    assert job["runs-on"] == "${{ matrix.runner }}"
+
+
+def test_the_keep_alive_reads_exactly_the_entry_the_wheel_job_saves(
+    keep_alive, named_step
+):
+    """Same action, same path and the exact key only: a fallback would keep an
+    entry alive that main's next run never hits."""
+    job_steps = keep_alive["jobs"]["keep-alive"]["steps"]
+    compute = next(step for step in job_steps if step.get("id") == "cache-key")
+    read = next(
+        step
+        for step in job_steps
+        if str(step.get("uses", "")).startswith("actions/cache/restore@")
+    )
+    save = named_step("Save build cache")
+
+    assert compute["uses"] == named_step("Compute the build cache key")["uses"]
+    assert compute["with"]["platform-tag"] == "${{ matrix.tag }}"
+    assert read["with"]["path"] == save["with"]["path"]
+    assert read["with"]["key"] == "${{ steps.cache-key.outputs.key }}"
+    assert "restore-keys" not in read["with"]
+    assert read["with"]["lookup-only"] is True
+    assert read["with"]["fail-on-cache-miss"] is True
 
 
 def test_both_build_steps_write_their_wheel_where_the_shared_steps_look(named_step):
@@ -539,11 +618,11 @@ def test_the_row_shape_differs_only_by_whether_there_is_a_container(rows):
     assert len(keys) == 1
 
 
-def test_the_cache_key_covers_the_macos_build_driver(build_cache):
+def test_the_cache_key_covers_the_macos_build_driver(keyed):
     """It is the whole macOS recipe — toolchain, deployment target, CMake pin —
     so an edit to it changes the bytes in that platform's tree.
     """
-    assert "scripts/build-macos.sh" in build_cache["with"]["key"]
+    assert "scripts/build-macos.sh" in keyed
 
 
 @pytest.fixture(scope="module")
@@ -1002,11 +1081,9 @@ def test_every_sweep_is_judged_against_the_exclusions(named_step, name):
     assert "wheelbuild.upstream_gate judge" in named_step(name)["run"]
 
 
-def test_the_gate_scripts_stay_out_of_the_cache_key(build_cache):
+def test_the_gate_scripts_stay_out_of_the_cache_key(keyed):
     """They run ctest and change nothing that is cached, so iterating on them
     must not cost every row a rebuild."""
-    keyed = _hashed_files(build_cache["with"]["key"])
-
     assert "upstream-test-gate" not in keyed
     assert "upstream_gate" not in keyed
     assert "test-exclusions" not in keyed

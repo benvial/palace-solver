@@ -27,11 +27,12 @@
 # deletes a Windows entry saved before the patches were keyed, which no current
 # run can restore exactly and which would otherwise never be replaced.
 #
-# Caches for a pull request live on refs/pull/N/merge and GitHub deletes them
-# when the pull request closes, so they are never this script's business:
-# deleting one would make a pull request that edits the build scripts rebuild
-# cold on every push, which is exactly what dropping github.sha from the key
-# avoided. Only refs/heads/main is listed.
+# Only main saves superbuild caches (see "Save build cache" in
+# .github/workflows/wheels.yml). A pull request, a branch dispatch or a tag
+# restores main's entry, rebuilds from it what its own tree changed, and saves
+# nothing, so a pull request that edits the build scripts rebuilds from main's
+# fallback on every push rather than cold, and leaves nothing here to prune.
+# Only refs/heads/main is listed.
 #
 # Run it with --dry-run to see what a push to main would delete. Needs a
 # GH_TOKEN with `actions: write` for anything else.

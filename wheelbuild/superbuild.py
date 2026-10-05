@@ -122,7 +122,6 @@ def cmake_arguments(
     source_dir: Path,
     install_prefix: Path,
     mpi_home: Path,
-    ccache: bool = True,
     system: str | None = None,
 ) -> list[str]:
     """Build the CMake configure command for the superbuild.
@@ -131,7 +130,6 @@ def cmake_arguments(
         source_dir: Palace source tree (the superbuild's top-level CMake dir).
         install_prefix: Where the built Palace tree is installed.
         mpi_home: MPICH install prefix to compile against.
-        ccache: Route the compilers through ccache.
         system: ``platform.system()`` value; defaults to the running platform.
 
     Returns:
@@ -158,12 +156,6 @@ def cmake_arguments(
             f"-DCMAKE_EXE_LINKER_FLAGS={library_dir}",
             f"-DCMAKE_SHARED_LINKER_FLAGS={library_dir}",
         ]
-    if ccache:
-        arguments += [
-            "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-            "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-            "-DCMAKE_Fortran_COMPILER_LAUNCHER=ccache",
-        ]
     arguments.append(str(source_dir))
     return arguments
 
@@ -173,7 +165,6 @@ def windows_cmake_arguments(
     source_dir: Path,
     install_prefix: Path,
     project_include: Path,
-    ccache: bool = True,
 ) -> list[str]:
     """Build the CMake configure command for the superbuild on Windows.
 
@@ -190,7 +181,6 @@ def windows_cmake_arguments(
         install_prefix: Where the built Palace tree is installed.
         project_include: The file :func:`run_windows` writes, giving every
             ExternalProject a ``<name>-patch`` step target.
-        ccache: Route the compilers through ccache.
 
     Returns:
         The full ``cmake`` argument vector, source directory last.
@@ -214,12 +204,6 @@ def windows_cmake_arguments(
         f"-DCMAKE_EXE_LINKER_FLAGS={linker_flags}",
         f"-DCMAKE_SHARED_LINKER_FLAGS={linker_flags}",
     ]
-    if ccache:
-        arguments += [
-            "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-            "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-            "-DCMAKE_Fortran_COMPILER_LAUNCHER=ccache",
-        ]
     arguments.append(source_dir.as_posix())
     return arguments
 
@@ -309,7 +293,6 @@ def run_windows(
     build_dir: Path,
     install_prefix: Path,
     jobs: int,
-    ccache: bool = True,
 ) -> None:
     """Patch, configure and build Palace on Windows, and its tests.
 
@@ -326,7 +309,6 @@ def run_windows(
         build_dir: Scratch directory for the superbuild.
         install_prefix: Install destination for the Palace tree.
         jobs: Parallel build jobs.
-        ccache: Route the compilers through ccache.
     """
     build_dir.mkdir(parents=True, exist_ok=True)
     patches.prepare_palace(source_dir)
@@ -340,7 +322,6 @@ def run_windows(
         source_dir=source_dir,
         install_prefix=install_prefix,
         project_include=include,
-        ccache=ccache,
     )
     check_call(configure, cwd=build_dir)
     check_call(
@@ -371,7 +352,6 @@ def run(
     install_prefix: Path,
     prefix: Path,
     jobs: int,
-    ccache: bool = True,
     system: str | None = None,
 ) -> None:
     """Configure and build Palace, installing into ``install_prefix``.
@@ -386,7 +366,6 @@ def run(
         install_prefix: Install destination for the Palace tree.
         prefix: MPICH install prefix. Unused on Windows, which has no MPICH.
         jobs: Parallel build jobs.
-        ccache: Route the compilers through ccache.
         system: ``platform.system()`` value; defaults to the running platform.
     """
     if (system or platform.system()) == "Windows":
@@ -395,7 +374,6 @@ def run(
             build_dir=build_dir,
             install_prefix=install_prefix,
             jobs=jobs,
-            ccache=ccache,
         )
         return
     build_dir.mkdir(parents=True, exist_ok=True)
@@ -403,7 +381,6 @@ def run(
         source_dir=source_dir,
         install_prefix=install_prefix,
         mpi_home=mpi_home(prefix),
-        ccache=ccache,
     )
     check_call(configure, cwd=build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
@@ -432,7 +409,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="MPICH install prefix (default: sys.prefix); unused on Windows",
     )
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1)
-    parser.add_argument("--no-ccache", action="store_true")
     args = parser.parse_args(argv)
     run(
         source_dir=args.source_dir,
@@ -440,7 +416,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         install_prefix=args.install_prefix,
         prefix=args.prefix,
         jobs=args.jobs,
-        ccache=not args.no_ccache,
     )
     return 0
 

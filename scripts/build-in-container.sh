@@ -3,8 +3,8 @@
 #
 #   scripts/build-in-container.sh [PALACE_VERSION]
 #
-# The build cache (sources, superbuild tree, ccache) lives in ./.build-cache so
-# a second run skips the 30-60 minute dependency compile.
+# The build cache (sources, superbuild tree, install prefix) lives in
+# ./.build-cache so a second run skips the 30-60 minute dependency compile.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

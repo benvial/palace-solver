@@ -6,11 +6,6 @@
 # Environment:
 #   BUILD_ROOT   scratch root for sources and the superbuild (default /build);
 #                keep it on a cached volume to reuse the dependency tree
-#   CCACHE_DIR   ccache directory (default /build/ccache)
-#   CCACHE_MAXSIZE
-#                ccache size bound (default 2G); ccache's own default is
-#                unbounded growth, and this directory sits inside a build tree
-#                that has to fit the 10 GB GitHub Actions cache budget
 #   JOBS         parallel build jobs (default: nproc)
 #   OUTPUT_DIR   where the repaired wheel is written (default <repo>/wheelhouse)
 set -euo pipefail
@@ -23,11 +18,6 @@ palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"__versio
 build_root="${BUILD_ROOT:-/build}"
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 jobs="${JOBS:-$(nproc)}"
-export CCACHE_DIR="${CCACHE_DIR:-$build_root/ccache}"
-# ccache earns its place on the fallback restore, where a changed cache key
-# lands on an older tree and ccache is what keeps the partial rebuild cheap.
-# Bounded so the cached tree is a size chosen rather than observed.
-export CCACHE_MAXSIZE="${CCACHE_MAXSIZE:-2G}"
 # The Palace source tree below is a git repository, and Palace's CMake runs
 # `git describe` in it at configure time to stamp `palace --version`. It is
 # created once and then restored from a cache — or, locally, from a directory
@@ -47,14 +37,14 @@ superbuild_dir="$build_root/superbuild"
 install_prefix="$build_root/install"
 venv="$build_root/venv"
 
-mkdir -p "$build_root" "$CCACHE_DIR" "$output_dir"
+mkdir -p "$build_root" "$output_dir"
 
 # ZFP and friends install into lib64 on RHEL-family systems while Palace links
 # <prefix>/lib, so the two spellings are made the same directory up front.
 PYTHONPATH="$repo_root" python3 -m wheelbuild.prefix --prefix "$install_prefix"
 
 echo "==> toolchain"
-dnf install -y ccache patchelf >/dev/null
+dnf install -y patchelf >/dev/null
 
 echo "==> build environment (python tooling)"
 python3 -m venv "$venv"

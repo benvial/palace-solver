@@ -61,25 +61,6 @@ def test_cmake_arguments_point_at_the_mpich_wheel_prefix():
     assert "-DMPI_HOME=/venv" in arguments
 
 
-def test_cmake_arguments_enable_ccache_when_requested():
-    with_ccache = superbuild.cmake_arguments(
-        source_dir=Path("/src"),
-        install_prefix=Path("/opt"),
-        mpi_home=Path("/venv"),
-        ccache=True,
-    )
-    without_ccache = superbuild.cmake_arguments(
-        source_dir=Path("/src"),
-        install_prefix=Path("/opt"),
-        mpi_home=Path("/venv"),
-        ccache=False,
-    )
-
-    assert "-DCMAKE_C_COMPILER_LAUNCHER=ccache" in with_ccache
-    assert "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache" in with_ccache
-    assert not [flag for flag in without_ccache if "COMPILER_LAUNCHER" in flag]
-
-
 def test_mpi_home_is_the_prefix_of_the_vendored_mpich_build(tmp_path):
     for relative in mpich.required_artefacts():
         path = tmp_path / relative
@@ -132,9 +113,6 @@ LINUX_VECTOR = [
     "-DCMAKE_PREFIX_PATH=/build/install",
     "-DMPI_HOME=/build/install",
     *SPEC_FEATURE_FLAGS,
-    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
-    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
-    "-DCMAKE_Fortran_COMPILER_LAUNCHER=ccache",
     "/build/palace-0.18.1",
 ]
 
@@ -159,10 +137,10 @@ def test_the_darwin_vector_is_the_linux_one_plus_the_link_path():
     )
 
     assert arguments == [
-        *LINUX_VECTOR[:-4],
+        *LINUX_VECTOR[:-1],
         "-DCMAKE_EXE_LINKER_FLAGS=-L/build/install/lib",
         "-DCMAKE_SHARED_LINKER_FLAGS=-L/build/install/lib",
-        *LINUX_VECTOR[-4:],
+        LINUX_VECTOR[-1],
     ]
 
 
@@ -245,9 +223,21 @@ def test_windows_leaves_mpi_to_findmpi():
     assert not [flag for flag in _windows_arguments() if flag.startswith("-DMPI_HOME")]
 
 
-def test_windows_routes_through_ccache_only_when_asked():
-    assert "-DCMAKE_C_COMPILER_LAUNCHER=ccache" in _windows_arguments()
-    assert not [flag for flag in _windows_arguments(ccache=False) if "LAUNCHER" in flag]
+def test_no_platform_passes_a_compiler_launcher():
+    """Palace 0.18.1 forwards no CMAKE_<LANG>_COMPILER_LAUNCHER to any
+    sub-project, and the superbuild's own project compiles nothing, so a
+    launcher here wraps no compile."""
+    for arguments in (
+        LINUX_VECTOR,
+        superbuild.cmake_arguments(
+            source_dir=Path("/src"),
+            install_prefix=Path("/opt"),
+            mpi_home=Path("/opt"),
+            system="Darwin",
+        ),
+        _windows_arguments(),
+    ):
+        assert not [flag for flag in arguments if "LAUNCHER" in flag]
 
 
 def test_windows_run_settles_every_patch_before_the_build_and_checks_after(
