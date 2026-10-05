@@ -17,10 +17,12 @@ SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "prune-build-caches.s
 
 VERSION = "0.18.1"
 INPUTS_HASH = "abc123"
+WINDOWS_PATCHES_HASH = "fed987"
 
 X86 = f"superbuild-manylinux_2_28_x86_64-{VERSION}-{INPUTS_HASH}"
 AARCH64 = f"superbuild-manylinux_2_28_aarch64-{VERSION}-{INPUTS_HASH}"
 MACOS = f"superbuild-macosx_15_0_arm64-{VERSION}-{INPUTS_HASH}"
+WINDOWS = f"superbuild-win_amd64-{VERSION}-{INPUTS_HASH}-{WINDOWS_PATCHES_HASH}"
 
 
 @pytest.fixture
@@ -69,7 +71,9 @@ def fake_gh(tmp_path):
             )
 
         def run(self, *args, check=True):
-            return self.invoke(VERSION, INPUTS_HASH, *args, check=check)
+            return self.invoke(
+                VERSION, INPUTS_HASH, WINDOWS_PATCHES_HASH, *args, check=check
+            )
 
         @property
         def deleted(self):
@@ -80,10 +84,61 @@ def fake_gh(tmp_path):
 
 def test_every_platform_built_from_the_current_tree_survives(fake_gh):
     """The regression the second matrix row introduced: one current key per row."""
-    fake_gh.caches(("1", X86), ("2", AARCH64), ("3", MACOS))
+    fake_gh.caches(("1", X86), ("2", AARCH64), ("3", MACOS), ("4", WINDOWS))
 
     fake_gh.run()
 
+    assert fake_gh.deleted == []
+
+
+def test_a_windows_entry_from_older_patches_is_deleted(fake_gh):
+    """Windows keys its carried patches, so a patch edit orphans its entry."""
+    fake_gh.caches(
+        ("1", X86),
+        ("2", WINDOWS),
+        ("3", f"superbuild-win_amd64-{VERSION}-{INPUTS_HASH}-000000"),
+    )
+
+    fake_gh.run()
+
+    assert fake_gh.deleted == ["3"]
+
+
+def test_a_windows_entry_saved_before_the_patches_were_keyed_is_deleted(fake_gh):
+    """It ends in the other rows' suffix, but no Windows run can restore it
+    exactly any more, so nothing would ever replace it."""
+    fake_gh.caches(
+        ("1", X86),
+        ("2", WINDOWS),
+        ("3", f"superbuild-win_amd64-{VERSION}-{INPUTS_HASH}"),
+    )
+
+    fake_gh.run()
+
+    assert fake_gh.deleted == ["3"]
+
+
+def test_only_a_windows_entry_carries_the_patches_hash(fake_gh):
+    """The extra component is the Windows form; on another row it is stale."""
+    fake_gh.caches(("1", X86), ("2", f"{AARCH64}-{WINDOWS_PATCHES_HASH}"))
+
+    fake_gh.run()
+
+    assert fake_gh.deleted == ["2"]
+
+
+def test_nothing_is_deleted_when_no_windows_entry_matches_the_patches_hash(fake_gh):
+    """A wrong patches hash would leave the other rows matching and delete only
+    the live Windows entry, the one that costs most to rebuild."""
+    fake_gh.caches(
+        ("1", X86),
+        ("2", f"superbuild-win_amd64-{VERSION}-{INPUTS_HASH}-000000"),
+        ("3", f"superbuild-manylinux_2_28_x86_64-0.18.0-{INPUTS_HASH}"),
+    )
+
+    result = fake_gh.run(check=False)
+
+    assert result.returncode != 0
     assert fake_gh.deleted == []
 
 
@@ -142,7 +197,7 @@ def test_a_missing_inputs_hash_deletes_nothing(fake_gh):
     """hashFiles returning empty would otherwise make every entry stale at once."""
     fake_gh.caches(("1", X86))
 
-    result = fake_gh.invoke(VERSION, "", check=False)
+    result = fake_gh.invoke(VERSION, "", WINDOWS_PATCHES_HASH, check=False)
 
     assert result.returncode != 0
     assert fake_gh.deleted == []
@@ -181,9 +236,11 @@ def test_one_failed_deletion_does_not_abandon_the_rest(fake_gh):
 @pytest.mark.parametrize(
     "argv",
     [
-        ("--dry-run", VERSION, INPUTS_HASH),
-        (VERSION, INPUTS_HASH, "--dryrun"),
-        (VERSION, INPUTS_HASH, "--dry-run", "extra"),
+        ("--dry-run", VERSION, INPUTS_HASH, WINDOWS_PATCHES_HASH),
+        (VERSION, INPUTS_HASH, WINDOWS_PATCHES_HASH, "--dryrun"),
+        (VERSION, INPUTS_HASH, WINDOWS_PATCHES_HASH, "--dry-run", "extra"),
+        (VERSION, INPUTS_HASH, "--dry-run"),
+        (VERSION, INPUTS_HASH, ""),
         (VERSION,),
     ],
 )

@@ -258,12 +258,23 @@ jobs:
       # compiled. Keying it would orphan every entry each time a new platform is
       # taught to it, buying a rebuild for a file that cannot change what was
       # built.
+      #
+      # The Windows key carries one more component, the hash of the carried
+      # patches, on that same test: a patch edit changes the bytes in the tree.
+      # The driver notices on its own and rebuilds what the edit touched
+      # (wheelbuild/patches.py), but on an exact hit the save below is skipped,
+      # so without the component every later run restored the pre-edit tree
+      # and rebuilt the same thing again -- and, relinking, missed the gate and
+      # wheel regression records too. With it a patch edit misses the primary
+      # key, restores the previous entry through restore-keys, rebuilds only
+      # what changed and saves the result. It is Windows-only because only
+      # Windows carries patches; the other rows' keys stay as they were.
       - name: Restore build cache
         id: build-cache
         uses: actions/cache/restore@v5
         with:
           path: ${{ matrix.build_root }}
-          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          key: superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}${{ runner.os == 'Windows' && format('-{0}', hashFiles('wheelbuild/data/patches/windows/**')) || '' }}
           restore-keys: |
             superbuild-${{ env.PLATFORM_TAG }}-${{ env.PALACE_VERSION }}-
             superbuild-${{ env.PLATFORM_TAG }}-
@@ -732,13 +743,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+          WINDOWS_PATCHES_HASH: ${{ hashFiles('wheelbuild/data/patches/windows/**') }}
         run: |
-          # The same two components the wheel job's key ends in, spelled the
-          # same way: the .post segment dropped, and the hash of the same file
-          # list. They are what the script matches on, so a divergence here
-          # would make every live entry look stale.
+          # The same components the wheel job's key ends in, spelled the same
+          # way: the .post segment dropped, the hash of the same file list, and
+          # the Windows key's hash of the carried patches. They are what the
+          # script matches on, so a divergence here would make every live entry
+          # look stale. The patches are checked out byte for byte on every
+          # runner (.gitattributes), so this Linux hash is the Windows row's.
           version=$(python3 -c "from palace_solver import __version__; print(__version__.split('.post')[0])")
-          scripts/prune-build-caches.sh "$version" "$INPUTS_HASH"
+          scripts/prune-build-caches.sh "$version" "$INPUTS_HASH" "$WINDOWS_PATCHES_HASH"
 
   # The rehearsal. Everything a release does except which index it lands on,
   # run before the tag exists so that the problems which only appear at upload

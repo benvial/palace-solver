@@ -74,6 +74,14 @@ WINDOWS_GENERATOR = "MSYS Makefiles"
 #: ``CMAKE_PROJECT_INCLUDE``; see :data:`wheelbuild.patches.PROJECT_INCLUDE`.
 WINDOWS_PROJECT_INCLUDE = "carried-patch-steps.cmake"
 
+#: Every PE the Windows build links leaves out its link time. MinGW-w64's ld
+#: otherwise stamps it into the COFF header (which moves the optional header's
+#: checksum with it) and, in a DLL, into the export directory, so two links of
+#: the same objects give different bytes. The upstream test gate and the wheel
+#: regression run are both skipped on a fingerprint of the binaries' bytes, and
+#: a timestamp makes every relink a miss.
+WINDOWS_LINK_FLAGS = "-Wl,--no-insert-timestamp"
+
 
 def windows_feature_flags() -> tuple[str, ...]:
     """:data:`FEATURE_FLAGS` with the one change Windows makes: a static stack.
@@ -190,8 +198,11 @@ def windows_cmake_arguments(
     prefix = install_prefix.as_posix()
     # The Darwin flags, for the Darwin reason: Palace links STRUMPACK's
     # companions by bare name (`-lzfp`) and MinGW's ld searches no path that
-    # reaches the prefix either.
-    library_dir = f"-L{prefix}/lib"
+    # reaches the prefix either. The superbuild hands both to every CMake
+    # sub-project and to Palace, and libCEED's and GSLIB's makes take the
+    # executable flags as their LDFLAGS, so WINDOWS_LINK_FLAGS reaches every
+    # link but LIBXSMM's; see run_windows for that one.
+    linker_flags = f"-L{prefix}/lib {WINDOWS_LINK_FLAGS}"
     arguments = [
         "cmake",
         "-G",
@@ -200,8 +211,8 @@ def windows_cmake_arguments(
         f"-DCMAKE_PREFIX_PATH={prefix}",
         *windows_feature_flags(),
         f"-DCMAKE_PROJECT_INCLUDE={project_include.as_posix()}",
-        f"-DCMAKE_EXE_LINKER_FLAGS={library_dir}",
-        f"-DCMAKE_SHARED_LINKER_FLAGS={library_dir}",
+        f"-DCMAKE_EXE_LINKER_FLAGS={linker_flags}",
+        f"-DCMAKE_SHARED_LINKER_FLAGS={linker_flags}",
     ]
     if ccache:
         arguments += [
@@ -337,7 +348,15 @@ def run_windows(
         cwd=build_dir,
     )
     patches.apply_dependencies(build_dir)
-    check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
+    # Palace drives LIBXSMM's make with no linker flags off Darwin, so the
+    # superbuild's never reach libxsmm.dll. Its Makefile.inc appends ELDFLAGS,
+    # which nothing else reads, to its LDFLAGS, and make takes it from the
+    # environment.
+    check_call(
+        ["cmake", "--build", ".", f"-j{jobs}"],
+        cwd=build_dir,
+        env={"ELDFLAGS": WINDOWS_LINK_FLAGS},
+    )
     patches.verify(source_dir, build_dir)
     for command in unit_test_commands(
         build_dir=build_dir, install_prefix=install_prefix, jobs=jobs

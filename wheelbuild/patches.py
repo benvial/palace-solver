@@ -31,11 +31,14 @@ would hide genuine upstream drift. Line endings are ruled out separately:
 ``.gitattributes`` marks the patches ``-text``, so a Windows checkout cannot
 give them CRLF, which is how the spike's first runs skipped every patch.
 
-The patch files are not part of the build cache key, so editing one never sends
-the Windows row cold. Instead a digest of each owner's patches is stamped beside
-its tree; on a mismatch the dependency's source, stamp and build directories are
-discarded (it and everything configured against it rebuild), or Palace's
-checkout is reset to the tarball commit and re-patched.
+Editing a patch never sends the Windows row cold. The Windows build cache key
+carries a hash of the patch files, so an edit misses the exact key and restores
+the previous entry instead, and a digest of each owner's patches is stamped
+beside its tree; on a mismatch the dependency's source, stamp and build
+directories are discarded (it and everything configured against it rebuild), or
+Palace's checkout is reset to the tarball commit and re-patched. The key is what
+makes the run save the result: on an exact hit the save is skipped, and every
+later run would restore the pre-edit tree and rebuild the same trees again.
 
 After the superbuild, :func:`verify` reverse-checks every one. That is the only
 defence against an upstream patch step re-running -- MFEM's starts with

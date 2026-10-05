@@ -175,19 +175,34 @@ def test_the_cleanup_job_hashes_exactly_what_the_cache_key_hashes(
     makes every live entry look stale and deletes it.
     """
     cleanup = workflow["jobs"]["cache-cleanup"]["steps"]
+    env = next(step["env"] for step in cleanup if "env" in step)
     keyed = _hashed_files(build_cache["with"]["key"])
-    pruned = _hashed_files(
-        next(step["env"]["INPUTS_HASH"] for step in cleanup if "env" in step)
-    )
+    pruned = [
+        *_hashed_files(env["INPUTS_HASH"]),
+        *_hashed_files(env["WINDOWS_PATCHES_HASH"]),
+    ]
 
-    assert keyed is not None
+    assert len(keyed) == 2
     assert keyed == pruned
 
 
+def test_only_the_windows_key_hashes_the_carried_patches(build_cache):
+    """Only Windows carries patches; keying them anywhere else would roll the
+    other rows' keys on every patch edit for a tree it cannot change."""
+    key = build_cache["with"]["key"]
+    common, patches = _hashed_files(key)
+
+    assert "patches" not in common
+    assert patches == "'wheelbuild/data/patches/windows/**'"
+    assert (
+        "${{ runner.os == 'Windows' && format('-{0}', hashFiles("
+        "'wheelbuild/data/patches/windows/**')) || '' }}"
+    ) in key
+
+
 def _hashed_files(expression):
-    """The argument list of the hashFiles() call in one workflow expression."""
-    found = re.search(r"hashFiles\((.*?)\)", expression, re.DOTALL)
-    return None if found is None else found.group(1)
+    """The argument lists of the hashFiles() calls in one workflow expression."""
+    return re.findall(r"hashFiles\((.*?)\)", expression, re.DOTALL)
 
 
 def test_the_macos_row_claims_the_tag_the_build_would_derive(rows):
@@ -301,8 +316,10 @@ def test_the_windows_build_root_is_short_and_on_d(rows):
 def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(build_cache):
     """hashFiles hashes the checkout's bytes. A CRLF checkout on Windows gave
     that row's key a different hash from the one the Linux pruner computes, so
-    main's cleanup would have deleted the live Windows entry on every push."""
-    keyed = re.findall(r"'([^']+)'", _hashed_files(build_cache["with"]["key"]))
+    main's cleanup would have deleted the live Windows entry on every push.
+    The carried patches, the Windows key's other hash, are checked out byte for
+    byte instead (`-text`), which tests/test_patches.py asserts."""
+    keyed = re.findall(r"'([^']+)'", _hashed_files(build_cache["with"]["key"])[0])
     result = subprocess.run(
         ["git", "check-attr", "eol", "--", *keyed],
         cwd=ROOT,
@@ -316,14 +333,6 @@ def test_every_keyed_file_is_checked_out_with_lf_on_every_runner(build_cache):
 
 def test_the_cache_key_covers_the_windows_build_driver(build_cache):
     assert "scripts/build-windows.sh" in build_cache["with"]["key"]
-
-
-def test_the_carried_patches_stay_out_of_the_cache_key(build_cache):
-    """An edited patch resets only its own tree (wheelbuild/patches.py); keying
-    the directory would send the whole Windows row cold instead."""
-    key = build_cache["with"]["key"]
-
-    assert "patches" not in key
 
 
 # -- the matrix is computed, so a dispatch can narrow it ---------------------
