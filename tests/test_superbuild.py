@@ -200,10 +200,44 @@ def test_windows_writes_every_path_with_forward_slashes():
     assert "-DCMAKE_INSTALL_PREFIX=D:/b/install" in arguments
     assert "-DCMAKE_PREFIX_PATH=D:/b/install" in arguments
     assert "-DCMAKE_PROJECT_INCLUDE=D:/b/superbuild/steps.cmake" in arguments
-    assert "-DCMAKE_EXE_LINKER_FLAGS=-LD:/b/install/lib" in arguments
-    assert "-DCMAKE_SHARED_LINKER_FLAGS=-LD:/b/install/lib" in arguments
     assert arguments[-1] == "D:/b/palace-0.18.1"
     assert not [argument for argument in arguments if "\\" in argument]
+
+
+def test_windows_links_against_the_prefix_without_a_link_time():
+    """A link time in the PE makes every relink new bytes, and the gate and the
+    wheel regression run are skipped on a fingerprint of those bytes."""
+    arguments = _windows_arguments()
+    flags = "-LD:/b/install/lib -Wl,--no-insert-timestamp"
+
+    assert f"-DCMAKE_EXE_LINKER_FLAGS={flags}" in arguments
+    assert f"-DCMAKE_SHARED_LINKER_FLAGS={flags}" in arguments
+
+
+def test_windows_build_hands_libxsmm_the_link_flags(tmp_path, monkeypatch):
+    """Palace drives LIBXSMM's make with no linker flags off Darwin, so
+    libxsmm.dll is reached only through the environment of the build."""
+    for name in ("prepare_palace", "discard_stale_dependencies", "apply_dependencies"):
+        monkeypatch.setattr(superbuild.patches, name, lambda *_args: None)
+    monkeypatch.setattr(superbuild.patches, "verify", lambda *_args: None)
+    calls = []
+    monkeypatch.setattr(
+        superbuild,
+        "check_call",
+        lambda command, **kwargs: calls.append((command, kwargs.get("env"))),
+    )
+
+    superbuild.run_windows(
+        source_dir=tmp_path / "palace",
+        build_dir=tmp_path / "superbuild",
+        install_prefix=tmp_path / "install",
+        jobs=4,
+    )
+
+    build = next(
+        env for command, env in calls if command == ["cmake", "--build", ".", "-j4"]
+    )
+    assert build == {"ELDFLAGS": "-Wl,--no-insert-timestamp"}
 
 
 def test_windows_leaves_mpi_to_findmpi():
