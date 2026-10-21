@@ -67,6 +67,8 @@ def test_build_arguments_select_a_portable_multi_architecture_library():
     assert "USE_OPENMP=1" in arguments
     assert "INTERFACE64=0" in arguments
     assert "-j8" in arguments
+    # The thread ceiling must not be the build runner's core count.
+    assert "NUM_THREADS=64" in arguments
 
 
 def test_install_arguments_install_shared_libraries_into_the_prefix():
@@ -134,14 +136,15 @@ def test_build_arguments_pin_the_cpu_baseline_on_darwin_arm64():
 
 
 def test_build_arguments_are_unchanged_on_x86_64():
-    """x86_64 needs no TARGET and keeps the vector that has shipped every wheel
-    so far, so this change cannot have altered the one platform that ships.
+    """x86_64 needs no TARGET: the baseline pin cannot have altered the one
+    platform whose wheels shipped before it.
     """
     assert openblas.build_arguments(jobs=8, system="Linux", machine="x86_64") == [
         "make",
         "-j8",
         "DYNAMIC_ARCH=1",
         "USE_OPENMP=1",
+        "NUM_THREADS=64",
         "INTERFACE64=0",
         "NO_STATIC=1",
     ]

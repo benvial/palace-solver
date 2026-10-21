@@ -26,6 +26,11 @@ from wheelbuild._process import check_call
 #: OpenBLAS release vendored into the wheel.
 OPENBLAS_VERSION = "0.3.34"
 
+#: Most threads the vendored OpenBLAS can use, fixed at build time. How many it
+#: does use is ``OPENBLAS_NUM_THREADS``, which the ``palace`` wrapper holds to
+#: ``OMP_NUM_THREADS``.
+NUM_THREADS = 64
+
 #: The oldest CPU each architecture's build is compiled for, as an OpenBLAS
 #: ``TARGET`` from its ``TargetList.txt``.
 #:
@@ -253,6 +258,10 @@ def build_arguments(
         "DYNAMIC_ARCH=1",
         # Match Palace's threading model rather than mixing pthreads with it.
         "USE_OPENMP=1",
+        # Left unset, the thread ceiling (and the buffers sized by it) is the
+        # build runner's core count, so it moves between releases with the CI
+        # hardware. 64 is what NumPy's wheels use.
+        f"NUM_THREADS={NUM_THREADS}",
         # Palace is built with PALACE_WITH_64BIT_INT=OFF, so LP64 it is.
         "INTERFACE64=0",
         "NO_STATIC=1",
