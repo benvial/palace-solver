@@ -89,7 +89,10 @@ Two differences from upstream's wrapper: the default launcher is the `mpiexec`
 vendored here rather than a `mpirun` found on `PATH`, and the ranks are started
 as the `palace` console script rather than as the raw binary, so each of them
 runs the launcher check. `--nt` sets `OMP_NUM_THREADS`, and leaving it unset
-means one thread rather than one per core, as upstream.
+means one thread rather than one per core, as upstream. `OPENBLAS_NUM_THREADS`
+is always set to the same count, overriding the environment: the vendored
+OpenBLAS threads through OpenMP and hangs when asked for more threads than the
+OpenMP team has.
 
 ## MPI
 

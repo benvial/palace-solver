@@ -227,6 +227,36 @@ def test_an_unset_thread_count_means_one_thread_not_one_per_core(tmp_path, monke
     assert os.environ["OMP_NUM_THREADS"] == "1"
 
 
+@pytest.mark.parametrize(
+    ("argv", "omp_env", "expected"),
+    [
+        (["config.json"], None, "1"),
+        (["config.json"], "3", "3"),
+        (["--nt", "4", "config.json"], "2", "4"),
+    ],
+)
+def test_openblas_threads_follow_the_openmp_count_not_the_environment(
+    tmp_path, monkeypatch, argv, omp_env, expected
+):
+    """An inherited OPENBLAS_NUM_THREADS above the OpenMP count hangs the
+    OpenMP-built OpenBLAS in its first threaded dgemm (issue #24), so the
+    wrapper overrides it rather than deferring to it.
+    """
+    _fake_binary(tmp_path)
+    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
+    monkeypatch.setattr(_exec.os, "execv", lambda *_: None)
+    if omp_env is None:
+        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    else:
+        monkeypatch.setenv("OMP_NUM_THREADS", omp_env)
+    monkeypatch.setenv("OPENBLAS_NUM_THREADS", "16")
+
+    _exec.main(argv)
+
+    assert os.environ["OMP_NUM_THREADS"] == expected
+    assert os.environ["OPENBLAS_NUM_THREADS"] == expected
+
+
 def test_help_prints_the_wrapper_options(capsys):
     with pytest.raises(SystemExit) as excinfo:
         _exec.main(["--help"])
