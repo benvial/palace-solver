@@ -69,6 +69,10 @@ WINDOWS_FLOOR_NAME = "Windows 10 or Windows Server 2016"
 #: ranks it starts locally; a singleton has no ``mpiexec`` to set it.
 MSMPI_LOCAL_ONLY_ENV = "MSMPI_LOCAL_ONLY"
 
+#: Thread count of the vendored OpenBLAS, held to ``OMP_NUM_THREADS``; see
+#: :func:`_apply_thread_count`.
+OPENBLAS_THREADS_ENV = "OPENBLAS_NUM_THREADS"
+
 
 @dataclass(frozen=True)
 class Invocation:
@@ -272,6 +276,14 @@ def _apply_thread_count(num_threads: int | None) -> None:
     which oversubscribes a multi-rank run, so an unset variable means one
     thread rather than "as many as there are".
 
+    ``OPENBLAS_NUM_THREADS`` is then set to the same count, whatever the
+    environment says. The vendored OpenBLAS is built with ``USE_OPENMP=1`` and
+    runs its threaded kernels inside an OpenMP team; asked for more threads
+    than that team has, its ``dgemm`` waits forever for workers that do not
+    exist, which hangs the first factorization of a run. Platforms that export
+    ``OPENBLAS_NUM_THREADS`` per core, as Modal does, hit this on every
+    ``--nt 1`` launch.
+
     Args:
         num_threads: Thread count from ``--nt``, or ``None`` to keep whatever
             the environment already says.
@@ -280,6 +292,7 @@ def _apply_thread_count(num_threads: int | None) -> None:
         os.environ["OMP_NUM_THREADS"] = str(num_threads)
     else:
         os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ[OPENBLAS_THREADS_ENV] = os.environ["OMP_NUM_THREADS"]
 
 
 def _run_rank(palace_args: list[str], *, system: str | None = None) -> None:
