@@ -369,3 +369,65 @@ def test_no_superbuild_command_inherits_cflags(tmp_path, monkeypatch, system):
 
     assert seen
     assert set(seen) == {None}
+
+
+def test_compile_flags_reach_every_language():
+    arguments = superbuild.cmake_arguments(
+        source_dir=Path("/src/palace"),
+        install_prefix=Path("/opt/palace"),
+        mpi_home=Path("/opt/mpi"),
+        compile_flags="-O3 -march=x86-64-v3",
+    )
+
+    for language in ("C", "CXX", "Fortran"):
+        assert f"-DCMAKE_{language}_FLAGS=-O3 -march=x86-64-v3" in arguments
+    assert arguments[-1] == "/src/palace"
+
+
+def test_the_baseline_names_no_compile_flags():
+    """The published baseline is Release's flags alone; see wheelbuild.hwcaps."""
+    arguments = superbuild.cmake_arguments(
+        source_dir=Path("/src/palace"),
+        install_prefix=Path("/opt/palace"),
+        mpi_home=Path("/opt/mpi"),
+        system="Linux",
+    )
+
+    assert not [flag for flag in arguments if "_FLAGS=" in flag]
+
+
+def test_a_build_without_tests_stops_after_installing_palace(tmp_path, monkeypatch):
+    monkeypatch.setattr(superbuild, "mpi_home", lambda prefix: prefix)
+    calls = []
+    monkeypatch.setattr(
+        superbuild, "check_call", lambda command, **_kwargs: calls.append(command)
+    )
+
+    superbuild.run(
+        source_dir=tmp_path / "palace",
+        build_dir=tmp_path / "superbuild",
+        install_prefix=tmp_path / "install",
+        prefix=tmp_path / "install",
+        jobs=2,
+        compile_flags="-march=x86-64-v3",
+        tests=False,
+        system="Linux",
+    )
+
+    configure, build = calls
+    assert configure[-1] == str(tmp_path / "palace")
+    assert "-DCMAKE_CXX_FLAGS=-march=x86-64-v3" in configure
+    assert build[:2] == ["cmake", "--build"]
+
+
+def test_windows_takes_no_compile_flags(tmp_path):
+    with pytest.raises(ValueError, match="Windows"):
+        superbuild.run(
+            source_dir=tmp_path / "palace",
+            build_dir=tmp_path / "superbuild",
+            install_prefix=tmp_path / "install",
+            prefix=tmp_path / "install",
+            jobs=1,
+            compile_flags="-march=x86-64-v3",
+            system="Windows",
+        )

@@ -713,3 +713,65 @@ def test_build_on_windows_link_checks_the_payload_before_packaging_it(
             msmpi_dir=inputs["msmpi"],
             payload_dir=inputs["payload"],
         )
+
+
+def test_build_grafts_the_x86_64_v3_copies_between_repair_and_retag(
+    tmp_path, monkeypatch
+):
+    """The copies take the names auditwheel gave the baseline libraries, so
+    they go in after the repair; the retag then rewrites the RECORD anyway."""
+    install = _install_tree(tmp_path / "install")
+    output_dir = tmp_path / "wheelhouse"
+    output_dir.mkdir()
+    events = []
+
+    def fake_check_call(command, **_):
+        if command[:3] == ["python", "-m", "build"]:
+            out = Path(command[command.index("--outdir") + 1])
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "palace_solver-1.0-cp312-cp312-linux_x86_64.whl").write_bytes(b"PK")
+            events.append("build")
+        elif command[:2] == ["auditwheel", "repair"]:
+            out = Path(command[command.index("--wheel-dir") + 1])
+            (
+                out / "palace_solver-1.0-cp312-cp312-manylinux_2_28_x86_64.whl"
+            ).write_bytes(b"PK")
+            events.append("repair")
+        elif command[:2] == ["wheel", "tags"]:
+            wheel = Path(command[-1])
+            wheel.rename(
+                wheel.with_name("palace_solver-1.0-py3-none-manylinux_2_28_x86_64.whl")
+            )
+            events.append("retag")
+        else:
+            pytest.fail(f"unexpected command {command}")
+
+    def fake_graft(wheel, *, install_prefix, hwcaps_prefix):
+        events.append(("graft", wheel.name, install_prefix, hwcaps_prefix))
+        return []
+
+    monkeypatch.setattr(assemble.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(assemble.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(assemble, "check_call", fake_check_call)
+    monkeypatch.setattr(assemble.hwcaps, "graft", fake_graft)
+    monkeypatch.setattr(assemble.notices_module, "audit_wheel", lambda **_: [])
+
+    final = assemble.build(
+        project_dir=tmp_path / "project",
+        install_prefix=install,
+        output_dir=output_dir,
+        hwcaps_prefix=tmp_path / "install-x86-64-v3",
+    )
+
+    assert final.name == "palace_solver-1.0-py3-none-manylinux_2_28_x86_64.whl"
+    assert events == [
+        "build",
+        "repair",
+        (
+            "graft",
+            "palace_solver-1.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+            install,
+            tmp_path / "install-x86-64-v3",
+        ),
+        "retag",
+    ]

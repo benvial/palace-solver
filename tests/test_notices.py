@@ -822,3 +822,17 @@ def test_cli_renders_the_windows_notices_from_the_payload_dir(tmp_path):
     text = (tmp_path / "NOTICES").read_text()
     for title in _WINDOWS_SECTION_TITLES.values():
         assert text.count(title) == 1, title
+
+
+def test_the_audit_reads_the_x86_64_v3_copies_too(tmp_path):
+    """A copy in palace_solver.libs/glibc-hwcaps/x86-64-v3/ is a vendored
+    library like any other, and one built nowhere here must fail the audit."""
+    wheel = _wheel_carrying(
+        tmp_path / "palace_solver-0.18.1-py3-none-any.whl",
+        ["libmfem-7df8df2e.so.4.9.0", "glibc-hwcaps/x86-64-v3/libstranger-0a1b2c3d.so"],
+    )
+    prefix = _install_prefix(tmp_path / "install", ["libmfem.so.4.9.0"])
+
+    assert notices.vendored_libraries(wheel) == ["libmfem", "libstranger"]
+    with pytest.raises(notices.UnattributedLibraryError, match="libstranger"):
+        notices.audit_wheel(wheel=wheel, install_prefix=prefix)

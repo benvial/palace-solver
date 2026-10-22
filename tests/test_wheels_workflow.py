@@ -1170,3 +1170,9 @@ def test_the_wheel_runs_evidence_is_never_published(wheel_run_step, download):
     assert not evidence["with"]["name"].startswith(pattern)
     assert evidence["with"]["retention-days"] == 7
     assert evidence["if"].startswith("failure()")
+
+
+def test_the_cache_key_covers_the_hwcaps_build_module(keyed):
+    """wheelbuild/hwcaps.py names the flags the x86-64-v3 prefix in the Linux
+    x86_64 tree is compiled with, and decides when that prefix is reused."""
+    assert "wheelbuild/hwcaps.py" in keyed

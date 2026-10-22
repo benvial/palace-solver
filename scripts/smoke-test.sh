@@ -64,6 +64,40 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.link_check --require-mpi "$binary"
 PYTHONPATH="$repo_root" python3 -m wheelbuild.link_check \
   "$(dirname "$binary")" "$libraries"
 
+# The Linux x86_64 wheel's x86-64-v3 copies of the compute libraries
+# (wheelbuild/hwcaps.py). Their RPATH is their own, one directory further down
+# than the baseline's, so they are link-checked on their own. Then the question
+# that matters: which libpalace the loader picks. On a glibc that searches the
+# x86-64-v3 directory it must be the copy; with AVX2 masked off, as on a CPU
+# without it, it must be the baseline again.
+hwcaps_dir="$libraries/glibc-hwcaps/x86-64-v3"
+if [[ -d "$hwcaps_dir" ]]; then
+  echo "==> x86-64-v3 copies"
+  PYTHONPATH="$repo_root" python3 -m wheelbuild.link_check "$hwcaps_dir"
+  loaded_palace() {
+    env "$@" LD_DEBUG=libs "$binary" --version 2>&1 >/dev/null \
+      | sed -n 's|.*calling init: \(.*/libpalace-[^/]*\)$|\1|p' | head -1
+  }
+  # Captured first: `| grep -q` would end the pipe early and trip pipefail.
+  loader_help="$(/lib64/ld-linux-x86-64.so.2 --help 2>/dev/null || true)"
+  if [[ "$loader_help" == *"x86-64-v3 (supported, searched)"* ]]; then
+    chosen="$(loaded_palace)"
+    echo "loaded: $chosen"
+    if [[ "$chosen" != */glibc-hwcaps/x86-64-v3/libpalace-* ]]; then
+      echo "ERROR: this loader searches x86-64-v3 but loaded '$chosen'" >&2
+      exit 1
+    fi
+    chosen="$(loaded_palace GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX2)"
+    echo "loaded with AVX2 masked: $chosen"
+    if [[ -z "$chosen" || "$chosen" == */glibc-hwcaps/* ]]; then
+      echo "ERROR: with AVX2 masked the loader picked '$chosen', not the baseline" >&2
+      exit 1
+    fi
+  else
+    echo "this glibc or CPU does not search x86-64-v3; the baseline runs here"
+  fi
+fi
+
 example_dir="$workdir/example"
 copy_example "$config" "$example_dir"
 cd "$example_dir"

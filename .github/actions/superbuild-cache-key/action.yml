@@ -20,6 +20,9 @@ description: >-
 # because it chooses the image the tree is compiled in, and a tree built in a
 # different image is a different tree.
 #
+# wheelbuild/hwcaps.py is keyed because it names the flags the x86-64-v3
+# prefix in the Linux x86_64 tree is compiled with.
+#
 # The test for membership is whether editing the file changes the bytes in the
 # tree, not whether the build imports it. wheelbuild/platforms.py is
 # deliberately absent on that test: it decides which filenames the MPICH and
@@ -72,7 +75,7 @@ runs:
       env:
         PLATFORM_TAG: ${{ inputs.platform-tag }}
         PALACE_VERSION: ${{ inputs.palace-version }}
-        INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py') }}
+        INPUTS_HASH: ${{ hashFiles('scripts/build-in-container.sh', 'scripts/build-wheel.sh', 'scripts/build-macos.sh', 'scripts/build-windows.sh', 'wheelbuild/superbuild.py', 'wheelbuild/mpich.py', 'wheelbuild/openblas.py', 'wheelbuild/prefix.py', 'wheelbuild/hwcaps.py') }}
         WINDOWS_PATCHES_HASH: ${{ hashFiles('wheelbuild/data/patches/windows/**') }}
       # hashFiles returns an empty string when it matches no file, which would
       # give a key every tree's fallback matches and a pruner suffix no live
