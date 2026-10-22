@@ -42,9 +42,11 @@ from wheelbuild._process import check_call
 #: capped at ``UPLOAD_LIMIT_CAP`` of 1 GiB — so if one is ever granted for
 #: palace-solver this number moves with it. None has been asked for: at
 #: 0.18.1.post1 the largest of the three wheels is the x86_64 one at 68.7 MiB,
-#: which is 69% of this, and the smallest is macOS at 55.5 MiB. The other limit
-#: is the 10 GiB per-*project* quota, which no build can check because it counts
-#: every file of every version; see the wheel size budget in ``CONTEXT.md``.
+#: which is 69% of this, and the smallest is macOS at 55.5 MiB. The x86-64-v3
+#: copies of :mod:`wheelbuild.hwcaps` take the x86_64 wheel to 90.0 MiB, 90%.
+#: The other limit is the 10 GiB per-*project* quota, which no build can check
+#: because it counts every file of every version; see the wheel size budget in
+#: ``CONTEXT.md``.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
 
 #: The delocate the macOS driver installs, pinned at the floor rather than the
