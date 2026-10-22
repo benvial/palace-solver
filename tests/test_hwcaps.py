@@ -231,6 +231,15 @@ def test_a_copy_needing_another_library_is_not_the_baseline_rebuilt():
         hwcaps.check_same_build("libceed", baseline, copy)
 
 
+def test_a_copy_needing_the_same_libraries_in_another_order_is_the_baseline_rebuilt():
+    """CMake's link order is not stable across builds of one tree: CI's cached
+    baseline listed libscalapack after libmumps_common, a fresh build before."""
+    baseline = BUILT["libpalace.so"]
+    copy = hwcaps.Interface(baseline.soname, tuple(reversed(baseline.needed)))
+
+    hwcaps.check_same_build("libpalace", baseline, copy)
+
+
 def test_renames_are_the_ones_auditwheel_applied():
     renamed = hwcaps.renames(BUILT["libpalace.so"], REPAIRED["libpalace-192ee1a6.so"])
 

@@ -100,6 +100,19 @@ class Interface:
     soname: str
     needed: tuple[str, ...]
 
+    def matches(self, other: Interface) -> bool:
+        """Whether the loader would see the same library: same SONAME, same NEEDED.
+
+        NEEDED is compared as a set of names, not a sequence. The linker writes
+        it in the order the build system hands it the libraries, and that order
+        is not stable across CMake runs of the same tree: the baseline restored
+        from CI's cache listed ``libscalapack`` later than a fresh build of the
+        same commit did.
+        """
+        return self.soname == other.soname and sorted(self.needed) == sorted(
+            other.needed
+        )
+
 
 def enabled_by_default(
     *, system: str | None = None, machine: str | None = None
@@ -303,14 +316,15 @@ def check_same_build(name: str, baseline: Interface, copy: Interface) -> None:
     """Refuse a copy that is not the baseline library rebuilt.
 
     Both come from the same Palace tree with the same feature flags, so they
-    name the same SONAME and need the same libraries, in the same order. A
-    difference means another version or another configuration, and a copy
-    loaded in the baseline's place would then be a different library.
+    name the same SONAME and need the same libraries, though not always in the
+    same order (see :meth:`Interface.matches`). A difference means another
+    version or another configuration, and a copy loaded in the baseline's place
+    would then be a different library.
 
     Raises:
         InterfaceMismatchError: If either differs.
     """
-    if copy != baseline:
+    if not copy.matches(baseline):
         raise InterfaceMismatchError(
             f"the {LEVEL} {name} is not the baseline one rebuilt: SONAME "
             f"{copy.soname!r} against {baseline.soname!r}, NEEDED {list(copy.needed)} "
@@ -417,7 +431,7 @@ def graft(
                 check_call(
                     patchelf_command(target, repaired, renames(baseline, repaired))
                 )
-                if read_interface(target) != repaired:
+                if not read_interface(target).matches(repaired):
                     raise InterfaceMismatchError(
                         f"the {LEVEL} {name} does not match {member} after patchelf"
                     )
