@@ -23,7 +23,7 @@ import argparse
 import os
 import platform
 import sys
-from collections.abc import Sequence
+from collections.abc import MutableMapping, Sequence
 from pathlib import Path
 
 from wheelbuild import mpich, patches
@@ -60,6 +60,18 @@ FEATURE_FLAGS = (
 
 #: Palace's own CMake build tree, inside the superbuild's.
 PALACE_BUILD_DIR = "palace-build"
+
+#: Compiler-flag variables the superbuild must not inherit from the caller's
+#: environment. CMake seeds ``CMAKE_<LANG>_FLAGS`` from them, but the one that
+#: breaks the build is libCEED: Palace drives its Makefile with ``OPT=...``, and
+#: that Makefile takes an inherited ``CFLAGS`` *instead of* the flags it builds
+#: from ``OPT``, which carry ``-fPIC``. A ``CFLAGS=-g0`` in the environment
+#: (Modal's image sets one) is enough for libCEED to fail to link with
+#: ``relocation R_X86_64_32 ... recompile with -fPIC``. Any flag the wheel is
+#: compiled with belongs on the configure line :func:`cmake_arguments` builds,
+#: in a file the build cache key covers, rather than in an environment nothing
+#: records.
+INHERITED_FLAG_VARIABLES = ("CFLAGS", "CXXFLAGS", "FFLAGS")
 
 
 #: The generator on Windows. Palace drives libCEED, GSLIB and LIBXSMM with
@@ -287,6 +299,20 @@ def unit_test_commands(
     ]
 
 
+def drop_inherited_flags(environ: MutableMapping[str, str]) -> list[str]:
+    """Remove :data:`INHERITED_FLAG_VARIABLES` from ``environ``.
+
+    Args:
+        environ: The environment the superbuild's commands inherit.
+
+    Returns:
+        The names that were set, so the caller can say what it dropped.
+    """
+    return [
+        name for name in INHERITED_FLAG_VARIABLES if environ.pop(name, None) is not None
+    ]
+
+
 def run_windows(
     *,
     source_dir: Path,
@@ -357,7 +383,8 @@ def run(
     """Configure and build Palace, installing into ``install_prefix``.
 
     Palace's tests are built and installed too, for the upstream test gate
-    (:func:`unit_test_commands`).
+    (:func:`unit_test_commands`). Compiler flags in the environment are dropped
+    first; see :data:`INHERITED_FLAG_VARIABLES`.
 
     Args:
         source_dir: Palace source tree.
@@ -368,6 +395,12 @@ def run(
         jobs: Parallel build jobs.
         system: ``platform.system()`` value; defaults to the running platform.
     """
+    dropped = drop_inherited_flags(os.environ)
+    if dropped:
+        print(
+            f"superbuild: ignoring {', '.join(dropped)} from the environment",
+            flush=True,
+        )
     if (system or platform.system()) == "Windows":
         run_windows(
             source_dir=source_dir,

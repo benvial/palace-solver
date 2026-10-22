@@ -1,3 +1,4 @@
+import os
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -326,3 +327,45 @@ def test_windows_run_does_not_ask_for_an_mpich(tmp_path, monkeypatch):
         jobs=1,
         system="Windows",
     )
+
+
+def test_only_the_compiler_flag_variables_are_dropped():
+    environ = {
+        "CFLAGS": "-g0",
+        "CXXFLAGS": "-g0",
+        "FFLAGS": "-O0",
+        "LDFLAGS": "-L/opt/lib",
+        "PATH": "/usr/bin",
+    }
+
+    assert superbuild.drop_inherited_flags(environ) == ["CFLAGS", "CXXFLAGS", "FFLAGS"]
+    assert environ == {"LDFLAGS": "-L/opt/lib", "PATH": "/usr/bin"}
+
+
+@pytest.mark.parametrize("system", ["Linux", "Darwin", "Windows"])
+def test_no_superbuild_command_inherits_cflags(tmp_path, monkeypatch, system):
+    """libCEED's Makefile takes an inherited CFLAGS in place of its own flags,
+    which carry -fPIC, and then fails to link; Modal's image sets CFLAGS=-g0."""
+    for name in ("prepare_palace", "discard_stale_dependencies", "apply_dependencies"):
+        monkeypatch.setattr(superbuild.patches, name, lambda *_args: None)
+    monkeypatch.setattr(superbuild.patches, "verify", lambda *_args: None)
+    monkeypatch.setattr(superbuild, "mpi_home", lambda prefix: prefix)
+    monkeypatch.setenv("CFLAGS", "-g0")
+    seen = []
+    monkeypatch.setattr(
+        superbuild,
+        "check_call",
+        lambda _command, **_kwargs: seen.append(os.environ.get("CFLAGS")),
+    )
+
+    superbuild.run(
+        source_dir=tmp_path / "palace",
+        build_dir=tmp_path / "superbuild",
+        install_prefix=tmp_path / "install",
+        prefix=tmp_path / "install",
+        jobs=1,
+        system=system,
+    )
+
+    assert seen
+    assert set(seen) == {None}
