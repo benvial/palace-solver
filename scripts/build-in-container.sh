@@ -5,6 +5,7 @@
 #
 # The build cache (sources, superbuild tree, install prefix) lives in
 # ./.build-cache so a second run skips the 30-60 minute dependency compile.
+# HWCAPS_X86_64_V3, when set, is passed through; see scripts/build-wheel.sh.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +19,7 @@ exec docker run --rm \
   -e BUILD_ROOT=/build \
   -e OUTPUT_DIR=/repo/wheelhouse \
   -e JOBS="${JOBS:-$(nproc)}" \
+  -e HWCAPS_X86_64_V3 \
   -w /repo \
   "$image" \
   /repo/scripts/build-wheel.sh "$@"

@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from palace_solver import BINARY_NAME, LAUNCHER_NAME
-from wheelbuild import link_check, msmpi, platforms
+from wheelbuild import hwcaps, link_check, msmpi, platforms
 from wheelbuild import notices as notices_module
 from wheelbuild._process import check_call
 
@@ -42,9 +42,11 @@ from wheelbuild._process import check_call
 #: capped at ``UPLOAD_LIMIT_CAP`` of 1 GiB — so if one is ever granted for
 #: palace-solver this number moves with it. None has been asked for: at
 #: 0.18.1.post1 the largest of the three wheels is the x86_64 one at 68.7 MiB,
-#: which is 69% of this, and the smallest is macOS at 55.5 MiB. The other limit
-#: is the 10 GiB per-*project* quota, which no build can check because it counts
-#: every file of every version; see the wheel size budget in ``CONTEXT.md``.
+#: which is 69% of this, and the smallest is macOS at 55.5 MiB. The x86-64-v3
+#: copies of :mod:`wheelbuild.hwcaps` take the x86_64 wheel to 90.0 MiB, 90%.
+#: The other limit is the 10 GiB per-*project* quota, which no build can check
+#: because it counts every file of every version; see the wheel size budget in
+#: ``CONTEXT.md``.
 PYPI_SIZE_LIMIT_BYTES = 100 * 1024 * 1024
 
 #: The delocate the macOS driver installs, pinned at the floor rather than the
@@ -582,12 +584,17 @@ def build(
     notices: Path | None = None,
     msmpi_dir: Path | None = None,
     payload_dir: Path | None = None,
+    hwcaps_prefix: Path | None = None,
 ) -> Path:
     """Run the full assemble → repair → retag pipeline.
 
     On Windows the repair has already run: ``payload_dir`` is its output, it is
     staged with the executables, and the staged ``bin`` is link-checked before
     it is packaged. The built wheel then goes straight to the retag.
+
+    On Linux x86_64 the repaired wheel also takes the x86-64-v3 copies of the
+    compute libraries, before the retag, when ``hwcaps_prefix`` names them;
+    see :mod:`wheelbuild.hwcaps`.
 
     Args:
         project_dir: Repository root holding ``pyproject.toml``.
@@ -598,6 +605,8 @@ def build(
             :func:`check_msmpi_dir`.
         payload_dir: On Windows, the DLL closure ``wheelbuild.pe_repair``
             copied; see :func:`check_payload_dir`.
+        hwcaps_prefix: On Linux x86_64, where ``wheelbuild.hwcaps`` installed
+            the x86-64-v3 build; ``None`` ships the baseline alone.
 
     Returns:
         Path of the final wheel.
@@ -611,6 +620,8 @@ def build(
             not the bytes that were fetched and verified.
         wheelbuild.link_check.UnresolvedImportError: On Windows, if a staged
             executable or DLL imports a DLL that is not beside it.
+        wheelbuild.hwcaps.InterfaceMismatchError: If an x86-64-v3 copy is not
+            its baseline library rebuilt.
     """
     package_dir = project_dir / "palace_solver"
     stage(
@@ -652,6 +663,12 @@ def build(
     repaired = pick_wheel(
         before=before_repair, after=_wheels(output_dir), fallback=raw_wheel
     )
+    if hwcaps_prefix is not None:
+        # After the repair, because the copies take the names it gave the
+        # baseline libraries; before the retag, which rewrites RECORD anyway.
+        hwcaps.graft(
+            repaired, install_prefix=install_prefix, hwcaps_prefix=hwcaps_prefix
+        )
 
     before_retag = _wheels(output_dir)
     check_call(retag_command(repaired))
@@ -745,6 +762,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default=None,
         help="Windows only: where wheelbuild.pe_repair copied the DLL closure",
     )
+    parser.add_argument(
+        "--hwcaps-prefix",
+        type=Path,
+        default=None,
+        help="Linux x86_64 only: where wheelbuild.hwcaps installed the x86-64-v3 "
+        "build whose compute libraries the wheel carries beside the baseline",
+    )
     args = parser.parse_args(argv)
     try:
         check_msmpi_dir(args.msmpi_dir)
@@ -759,6 +783,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         notices=args.notices,
         msmpi_dir=args.msmpi_dir,
         payload_dir=args.payload_dir,
+        hwcaps_prefix=args.hwcaps_prefix,
     )
     return 0
 

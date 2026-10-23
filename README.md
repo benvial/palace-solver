@@ -24,7 +24,11 @@ A release carries one wheel per platform and `pip` installs the one that
 matches:
 
 - **Linux x86-64** — `manylinux_2_28_x86_64`; glibc 2.28 or newer, which is
-  RHEL 8, Debian 10, Ubuntu 20.04 and anything later. Any x86-64 CPU.
+  RHEL 8, Debian 10, Ubuntu 20.04 and anything later. Any x86-64 CPU. With
+  glibc 2.33 or newer (RHEL 9, Debian 12, Ubuntu 21.04) on a CPU with AVX2 and
+  FMA, the solver loads builds of its compute libraries made for that CPU
+  level on its own; nothing to configure. They ran an adaptive frequency sweep
+  1.1x to 1.3x faster, depending on the CPU.
 - **Linux 64-bit arm** — `manylinux_2_28_aarch64`; the same glibc floor, and
   any ARMv8-A core or later. That includes Graviton2 and every later arm
   server core, and needs neither SVE nor an ARMv8.1+ extension.

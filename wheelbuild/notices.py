@@ -733,7 +733,10 @@ def vendored_libraries(wheel: Path) -> list[str]:
     whose name the filter did not expect would be dropped silently, and this
     function is the audit's only view of what the repair added. A name
     :func:`library_stem` cannot reduce to a known library therefore fails the
-    build, which is the direction to fail in.
+    build, which is the direction to fail in. "In" means at any depth: the
+    Linux x86_64 wheel also carries x86-64-v3 copies of some libraries in
+    ``palace_solver.libs/glibc-hwcaps/x86-64-v3/`` (:mod:`wheelbuild.hwcaps`),
+    and they are audited like the libraries they stand in for.
 
     The Windows layout has no vendor directory to trust that way: its DLLs lie
     beside the executables, in a directory the repair shares with the package.
@@ -755,7 +758,8 @@ def vendored_libraries(wheel: Path) -> list[str]:
         {
             library_stem(member.name)
             for member in members
-            if member.parent.name.endswith(_VENDOR_DIRECTORIES) or _is_dll(member.name)
+            if any(part.endswith(_VENDOR_DIRECTORIES) for part in member.parts[:-1])
+            or _is_dll(member.name)
         }
     )
 

@@ -8,6 +8,10 @@
 #                keep it on a cached volume to reuse the dependency tree
 #   JOBS         parallel build jobs (default: nproc)
 #   OUTPUT_DIR   where the repaired wheel is written (default <repo>/wheelhouse)
+#   HWCAPS_X86_64_V3
+#                1 to ship x86-64-v3 copies of the compute libraries beside the
+#                baseline ones, 0 not to (default: 1 on x86_64, 0 elsewhere);
+#                see wheelbuild/hwcaps.py
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -18,6 +22,11 @@ palace_version="${1:-$(python3 -c 'import re,pathlib; print(re.search(r"__versio
 build_root="${BUILD_ROOT:-/build}"
 output_dir="${OUTPUT_DIR:-$repo_root/wheelhouse}"
 jobs="${JOBS:-$(nproc)}"
+hwcaps="${HWCAPS_X86_64_V3:-$(PYTHONPATH="$repo_root" python3 -m wheelbuild.hwcaps default)}"
+if [[ "$hwcaps" != 0 && "$hwcaps" != 1 ]]; then
+  echo "ERROR: HWCAPS_X86_64_V3 is 0 or 1, not '$hwcaps'" >&2
+  exit 1
+fi
 # The Palace source tree below is a git repository, and Palace's CMake runs
 # `git describe` in it at configure time to stamp `palace --version`. It is
 # created once and then restored from a cache — or, locally, from a directory
@@ -181,6 +190,25 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.superbuild \
   --prefix "$install_prefix" \
   --jobs "$jobs"
 
+# A second superbuild of the same tree with -march=x86-64-v3, whose libpalace,
+# libmfem, libHYPRE and libceed the wheel carries in
+# palace_solver.libs/glibc-hwcaps/x86-64-v3/. glibc 2.33 and newer load them
+# in place of the baseline ones on a CPU that has AVX2 and FMA; anything else
+# loads the baseline. It reuses the MPICH and OpenBLAS above, and keeps only its
+# install prefix, stamped, so the build cache does not carry a second tree.
+hwcaps_prefix="$build_root/install-x86-64-v3"
+assemble_hwcaps=()
+if [[ "$hwcaps" == 1 ]]; then
+  echo "==> x86-64-v3 copies of the compute libraries"
+  PYTHONPATH="$repo_root" python3 -m wheelbuild.hwcaps build \
+    --source-dir "$source_dir" \
+    --build-dir "$build_root/superbuild-x86-64-v3" \
+    --install-prefix "$hwcaps_prefix" \
+    --prefix "$install_prefix" \
+    --jobs "$jobs"
+  assemble_hwcaps=(--hwcaps-prefix "$hwcaps_prefix")
+fi
+
 echo "==> third-party notices"
 PYTHONPATH="$repo_root" python3 -m wheelbuild.notices \
   --source-root "$superbuild_dir" \
@@ -193,4 +221,5 @@ PYTHONPATH="$repo_root" python3 -m wheelbuild.assemble \
   --project-dir "$repo_root" \
   --install-prefix "$install_prefix" \
   --output-dir "$output_dir" \
-  --notices "$build_root/THIRD-PARTY-NOTICES"
+  --notices "$build_root/THIRD-PARTY-NOTICES" \
+  ${assemble_hwcaps[@]+"${assemble_hwcaps[@]}"}

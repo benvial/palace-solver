@@ -14,9 +14,16 @@ scripts/interop-test.sh wheelhouse/*.whl CONFIG # real solve under both launcher
 ```
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS →
-superbuild → notice harvest → wheel assembly → `auditwheel repair` → retag to
+superbuild → (x86_64) a second superbuild for x86-64-v3 → notice harvest →
+wheel assembly → `auditwheel repair` → (x86_64) the x86-64-v3 copies → retag to
 `py3-none-manylinux_2_28_<arch>`. The steps are Python modules under
-`wheelbuild/` and are unit-tested with `pytest`.
+`wheelbuild/` and are unit-tested with `pytest`. `HWCAPS_X86_64_V3=0` leaves the
+second superbuild and the copies out; see [The x86-64-v3 copies](#the-x86-64-v3-copies).
+
+The superbuild ignores `CFLAGS`, `CXXFLAGS` and `FFLAGS` from the environment
+(`wheelbuild/superbuild.py` drops them and says so). libCEED's Makefile would
+otherwise take an inherited `CFLAGS` in place of its own flags and fail to link
+without `-fPIC`. Flags the wheel is compiled with go on the CMake configure line.
 
 ## macOS
 
@@ -106,10 +113,44 @@ x86-64 architectural level, which the build already leaves in place. That
 baseline is the hardware floor the README states, so moving it is a change to
 what the published wheel claims.
 
+## The x86-64-v3 copies
+
+The Linux x86_64 wheel carries a second build of the four libraries where
+Palace spends its p-multigrid time — `libpalace`, `libmfem`, `libHYPRE` and
+`libceed` — compiled from the same recipe with `-O3 -march=x86-64-v3` (AVX2,
+FMA, BMI2). They sit in `palace_solver.libs/glibc-hwcaps/x86-64-v3/` under the
+same file names, SONAMEs and NEEDED entries as the baseline ones beside them.
+Nothing in the package chooses: glibc 2.33 and newer search that subdirectory
+of every library directory first on a CPU that supports the level, and load the
+baseline otherwise; an older glibc never looks there. The baseline is what the
+wheel claims, so the hardware floor does not move.
+
+`wheelbuild/hwcaps.py` builds them as a second superbuild into
+`$BUILD_ROOT/install-x86-64-v3`, which needs a build machine that can run
+x86-64-v3 code (PETSc's configure runs what it compiles), and keeps only that
+prefix, stamped with its configure line, so the build cache does not carry a
+second tree. After `auditwheel repair` it copies the four libraries into the
+wheel, renames their SONAME and NEEDED entries the way `auditwheel` renamed the
+baseline's, and refuses a copy whose interface differs from the baseline
+build's. Each copy costs its compressed size again against PyPI's per-file
+limit.
+
+To see which build a machine loads:
+
+```bash
+LD_DEBUG=libs "$(python -c 'import palace_solver; print(palace_solver.binary_path())')" --version 2>&1 \
+  | grep 'calling init:.*libpalace'
+```
+
+`GLIBC_TUNABLES=glibc.cpu.hwcaps=-AVX2` in front of it masks AVX2 and brings
+the baseline back, which is how the smoke test checks both.
+
 ## Testing a build
 
 - `scripts/smoke-test.sh` installs the wheel into a clean virtual environment
-  and solves one problem on one rank and on two.
+  and solves one problem on one rank and on two. On a wheel with x86-64-v3
+  copies it also link-checks them and checks which `libpalace` the loader
+  picks, with and without AVX2 masked.
 - `scripts/interop-test.sh` solves a real example on two ranks under both
   `palace-mpiexec` and the `mpiexec` from the PyPI `mpich` wheel, requires the
   results to agree, checks that a rank launched without a rendezvous is
