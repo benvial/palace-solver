@@ -15,12 +15,13 @@ strict: a statement, option or custom-check factory it does not know raises,
 so a Palace bump that changes the harness stops the run instead of drifting
 past it.
 
-Upstream registers seven custom checks (far-field magnitudes, complex
-magnitudes, Floquet dB, wave-port losslessness, ROM eigenvalues and both ROM
-round-trips). They are left out: the files they own get the structure checks
-only. They encode numerical semantics the gate owns, and a packaging fault
-garbles every file of a case, not one. Revisit only if a packaging bug ever
-shows up that only such a file would catch.
+Upstream registers custom checks, through eleven factories and two inline
+lambdas (far-field magnitudes, complex magnitudes and values, port S-parameters,
+Floquet dB, wave-port losslessness and input impedance, absorbing reflection,
+ROM eigenvalues and both ROM round-trips). They are left out: the files they
+own get the structure checks only. They encode numerical semantics the gate
+owns, and a packaging fault garbles every file of a case, not one. Revisit only
+if a packaging bug ever shows up that only such a file would catch.
 
 The verdict reuses the gate's **test exclusions** and their accountability
 rules (:func:`wheelbuild.upstream_gate.judge`), with the exclusions scoped to
@@ -66,6 +67,24 @@ SKIPPED = (
     "cpw_wave_uniform",
     "cpw_lumped_adaptive",
     "cpw_wave_adaptive",
+    # New at 0.19.0. The two on the CPW mesh cost what cpw_lumped_uniform does per
+    # sample. The rest are further magnetostatic London cases on meshes the kept
+    # ones already run: circular_hole_london_flux, square_hole_flux_loop,
+    # two_sided_london_hex and coaxial_magnetostatic_superconductor stay, for
+    # the sheet, the flux loop, the two-sided film and the p=3 path.
+    "cpw_lumped_conductivity",
+    "cpw_lumped_conductivity_crack",
+    "circular_hole_london_two_sided",
+    "circular_hole_london_two_sided_nc_amr",
+    "circular_hole_london_nc_amr",
+    "circular_hole_london_nc_amr_rebalance",
+    "two_sided_london_pec",
+    "double_hole_london_flux",
+    "double_hole_london_flux_excitation",
+    "narrow_ring_london_flux",
+    "coaxial_magnetostatic_pec",
+    "microstrip_pec",
+    "microstrip_superconductor",
 )
 SKIP_REASON = "cost; the upstream test gate runs them"
 
@@ -75,8 +94,12 @@ CUSTOM_CHECKS = frozenset(
     {
         "TestFarfield",
         "CompareComplexMagnitudes",
+        "CompareComplexValues",
+        "ComparePortSParameters",
         "TestFloquetSParams",
         "TestWavePortLossless",
+        "TestWavePortInputImpedance",
+        "TestAbsorbingReflection",
         "CompareRomEigenvalues",
         "TestWavePortCoupledRoundTrip",
         "TestWavePortSRoundTrip",
@@ -356,7 +379,32 @@ _RUN = re.compile(
 _CHECK = re.compile(
     rf"opts\.custom_checks ?\[ ?({_STRING}) ?\] ?= ?({_IDENTIFIER}) ?\(.*\)"
 )
+#: A check written in place: a lambda over the (actual, reference, path) tables,
+#: whose captures may hold factories, each of which must be a known one.
+_INLINE_CHECK = re.compile(
+    rf"opts\.custom_checks ?\[ ?({_STRING}) ?\] ?= ?\[(.*?)\] ?"
+    r"\( ?palace::Table ?&\w* ?, ?palace::Table ?&\w* ?, ?"
+    r"const std::filesystem::path ?&\w* ?\) ?\{.*\}"
+)
+_CAPTURED_FACTORY = re.compile(rf"{_IDENTIFIER} ?= ?({_IDENTIFIER}) ?\(")
 _ASSIGNMENT = re.compile(rf"opts\.({_IDENTIFIER}) ?= ?(.+)")
+
+
+def _checked_file(statement: str) -> str | None:
+    """The file a custom-check statement owns, or None if it is not one.
+
+    Raises:
+        CasesError: If the check names a factory :data:`CUSTOM_CHECKS` lacks.
+    """
+    if check := _CHECK.fullmatch(statement):
+        factories = {check[2]}
+    elif check := _INLINE_CHECK.fullmatch(statement):
+        factories = set(_CAPTURED_FACTORY.findall(check[2]))
+    else:
+        return None
+    if unknown := factories - CUSTOM_CHECKS:
+        raise CasesError(f"unknown custom-check factory {sorted(unknown)}")
+    return _string(check[1])
 
 
 def _parse_case(
@@ -373,10 +421,8 @@ def _parse_case(
             raise CasesError(f"statement after RunRegressionCase: {statement!r}")
         if call := _RUN.fullmatch(statement):
             runs.append((_string(call[1]), _string(call[2]), _string(call[3])))
-        elif check := _CHECK.fullmatch(statement):
-            if check[2] not in CUSTOM_CHECKS:
-                raise CasesError(f"unknown custom-check factory {check[2]!r}")
-            checks.append(_string(check[1]))
+        elif (checked := _checked_file(statement)) is not None:
+            checks.append(checked)
         elif option := _ASSIGNMENT.fullmatch(statement):
             if option[1] in values:
                 raise CasesError(f"opts.{option[1]} is set twice")

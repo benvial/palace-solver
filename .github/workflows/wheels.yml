@@ -473,7 +473,7 @@ jobs:
       # that passes fails the row as surely as one that fails.
       - name: Upstream test gate, unit tests
         if: runner.os != 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 10
         env:
           MANYLINUX_IMAGE: ${{ matrix.image }}
           BUILD_CACHE: ${{ matrix.build_root }}
@@ -492,7 +492,7 @@ jobs:
       # platform.
       - name: Upstream test gate, unit tests on Windows
         if: runner.os == 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 10
         shell: msys2 {0}
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
@@ -502,10 +502,11 @@ jobs:
             --platform "$PLATFORM_TAG" \
             --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/units.xml"
 
-      # All 46 non-[Long] regression cases on two ranks, upstream's default.
+      # All 64 non-[Long] regression cases on two ranks, upstream's default.
+      # macOS took 50 minutes on 0.18.1's 46.
       - name: Upstream test gate, regression
         if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 90
         env:
           MANYLINUX_IMAGE: ${{ matrix.image }}
           BUILD_CACHE: ${{ matrix.build_root }}
@@ -521,7 +522,7 @@ jobs:
 
       - name: Upstream test gate, regression on Windows
         if: runner.os == 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 90
         shell: msys2 {0}
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
@@ -637,7 +638,7 @@ jobs:
             -o "$RUNNER_TEMP/palace.tar.gz"
           python -m wheelbuild.wheel_regression extract "$RUNNER_TEMP/palace.tar.gz" "$RUNNER_TEMP/palace"
 
-      # 40 cases at two ranks, half the cores' worth at a time, 20 minutes
+      # 45 cases at two ranks, half the cores' worth at a time, 20 minutes
       # each. The step's ceiling is ticket 09's: a row that breaks it is a
       # scope decision, never a quiet raise.
       - name: Wheel regression run

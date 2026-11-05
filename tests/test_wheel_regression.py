@@ -41,12 +41,12 @@ def test_the_kept_cases_cpp_is_the_pinned_palaces():
     assert CASES.is_file(), f"copy test/unit/regression/cases.cpp to {CASES}"
 
 
-def test_the_pinned_cases_cpp_parses_into_46_cases_and_40_after_the_skip_list():
+def test_the_pinned_cases_cpp_parses_into_64_cases_and_45_after_the_skip_list():
     cases = wheel_regression.parse_cases(_pinned())
     selected = wheel_regression.select_cases(cases)
 
-    assert len(cases) == 46
-    assert len(selected) == 40
+    assert len(cases) == 64
+    assert len(selected) == 45
     assert not {case.name for case in selected} & set(wheel_regression.SKIPPED)
     assert "transmon_coarse" not in _by_name(cases)  # [Long]
 
@@ -93,7 +93,8 @@ def test_every_custom_check_file_is_recorded_as_structure_only():
     assert ("antenna_short_dipole", "farfield-rE.csv") in checked
     assert ("cpw2d_thin", "mode-V.csv") in checked
     assert ("floquet_wave", "port-floquet-S.csv") in checked
-    assert len(checked) == 17
+    assert ("adapter_driven_synth", "port-S.csv") in checked
+    assert len(checked) == 27
 
 
 @pytest.mark.parametrize(
@@ -120,6 +121,50 @@ def test_a_mutated_cases_cpp_is_refused(original, mutated, message):
 
     with pytest.raises(CasesError, match=message):
         wheel_regression.parse_cases(text.replace(original, mutated, 1))
+
+
+@pytest.mark.parametrize(
+    "check",
+    [
+        pytest.param(
+            "[](palace::Table &actual, palace::Table &, "
+            "const std::filesystem::path &) { CHECK(actual[0].data[0] < 1.0e-7); }",
+            id="no-capture",
+        ),
+        pytest.param(
+            "[a = TestFarfield(1.0e-4), b = ComparePortSParameters(1.0e-4, 1.0e-7)]"
+            "(palace::Table &x, palace::Table &y, const std::filesystem::path &z) "
+            "{ a(x, y, z); b(x, y, z); }",
+            id="capturing-factories",
+        ),
+    ],
+)
+def test_a_check_written_as_a_lambda_is_recorded(check):
+    text = f"""
+TEST_CASE("c", "[Regression]")
+{{
+  palace::test::RegressionOptions opts;
+  opts.custom_checks["a.csv"] = {check};
+  palace::test::RunRegressionCase("d", "c.json", "p", opts);
+}}
+"""
+
+    assert wheel_regression.parse_cases(text)[0].options.custom_checks == ("a.csv",)
+
+
+def test_a_lambda_capturing_an_unknown_factory_is_refused():
+    text = """
+TEST_CASE("c", "[Regression]")
+{
+  palace::test::RegressionOptions opts;
+  opts.custom_checks["a.csv"] = [a = TestNewThing(1.0)](palace::Table &x,
+      palace::Table &y, const std::filesystem::path &z) { a(x, y, z); };
+  palace::test::RunRegressionCase("d", "c.json", "p", opts);
+}
+"""
+
+    with pytest.raises(CasesError, match="factory"):
+        wheel_regression.parse_cases(text)
 
 
 def test_a_case_that_never_runs_is_refused():
