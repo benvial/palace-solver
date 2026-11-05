@@ -35,10 +35,15 @@ FEATURE_FLAGS = (
     "-DBUILD_SHARED_LIBS=ON",
     "-DPALACE_WITH_CUDA=OFF",
     "-DPALACE_WITH_HIP=OFF",
-    # MAGMA and GPU-aware MPI are GPU-only; upstream forces MAGMA off
+    # MAGMA, GPU-aware MPI and cuDSS are GPU-only; upstream forces MAGMA off
     # without CUDA or HIP, and this says so rather than relying on it.
     "-DPALACE_WITH_MAGMA=OFF",
     "-DPALACE_WITH_GPU_AWARE_MPI=OFF",
+    "-DPALACE_WITH_CUDSS=OFF",
+    # Enzyme only derives manufactured sources for two unit-test files, and
+    # needs an LLVM and Clang plugin that no platform's build has; the
+    # analytic form of those tests still runs.
+    "-DPALACE_WITH_ENZYME=OFF",
     "-DPALACE_WITH_64BIT_INT=OFF",
     # ILP64 BLAS/LAPACK, which upstream marks experimental.
     "-DPALACE_WITH_64BIT_BLAS_INT=OFF",
