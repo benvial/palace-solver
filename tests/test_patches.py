@@ -30,6 +30,7 @@ CARRIED = [
     "palace/07-windows-regression-staging.patch",
     "palace/08-windows-test-zlib-order.patch",
     "palace/09-windows-test-utf8-arguments.patch",
+    "libxsmm/01-llp64.patch",
     "libxsmm/02-win64-trans-a.patch",
     "libceed/01-windows.patch",
     "strumpack/01-llp64.patch",

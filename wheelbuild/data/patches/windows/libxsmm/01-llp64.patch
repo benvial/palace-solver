@@ -1,0 +1,548 @@
+Carried patch, Windows only: LIBXSMM's POWER generator under LLP64.
+
+LIBXSMM 2.1.0's ppc64le generator keeps 64-bit prefixed instruction words in
+unsigned long, which is 32 bits on Windows. -Werror=overflow fails
+generator_gemm_mma_microkernel.c, and generator_ppc64le_instructions.c switches
+on a 64-bit form index whose case labels all truncate to 0, a duplicate case
+error. The code never runs on x86; it is still compiled. The type is the same
+width on LP64, so nothing changes there. Still present in 2.1.0, the tag Palace
+0.19.0 pins.
+
+--- a/src/generator_gemm_mma_microkernel.c
++++ b/src/generator_gemm_mma_microkernel.c
+@@ -456,3 +456,3 @@ void libxsmm_generator_mma_alu( libxsmm_generated_code *io_generated_code,
+   } else {
+-    unsigned long l_op;
++    unsigned long long l_op;
+     switch ( i_datatype ) {
+--- a/src/generator_ppc64le_instructions.c
++++ b/src/generator_ppc64le_instructions.c
+@@ -1118,3 +1118,3 @@ unsigned int libxsmm_ppc64le_instr_xx4_form( unsigned int  i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_8ls( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_8ls( unsigned long long i_instr,
+                                                 unsigned char i_r,
+@@ -1125,16 +1125,16 @@ unsigned long libxsmm_ppc64le_instr_d_form_8ls( unsigned long i_instr,
+                                                 unsigned int  i_d1 ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set R */
+-  l_instr |= (unsigned long)(0x01 & i_r) << (32 + 31 - 11 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_r) << (32 + 31 - 11 - 0);
+   /* Set d0 */
+-  l_instr |= (unsigned long)(0x0003ffff & i_d0) << (32 + 31 - 14 - 17);
++  l_instr |= (unsigned long long)(0x0003ffff & i_d0) << (32 + 31 - 14 - 17);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 5 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 5 - 0);
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set d1 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_d1) << (31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_d1) << (31 - 16 - 15);
+   return l_instr;
+@@ -1144,3 +1144,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_8ls( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long long i_instr,
+                                                  unsigned char i_r,
+@@ -1151,16 +1151,16 @@ unsigned long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long i_instr,
+                                                  unsigned int  i_d1 ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set R */
+-  l_instr |= (unsigned long)(0x01 & i_r) << (32 + 31 - 11 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_r) << (32 + 31 - 11 - 0);
+   /* Set d0 */
+-  l_instr |= (unsigned long)(0x03ffff & i_d0) << (32 + 31 - 14 - 17);
++  l_instr |= (unsigned long long)(0x03ffff & i_d0) << (32 + 31 - 14 - 17);
+   /* Set Tp */
+-  l_instr |= (unsigned long)(0x0f & i_tp) << (31 - 6 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_tp) << (31 - 6 - 3);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 10 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 10 - 0);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set d1 */
+-  l_instr |= (unsigned long)(0xffff & i_d1) << (31 - 16 - 15);
++  l_instr |= (unsigned long long)(0xffff & i_d1) << (31 - 16 - 15);
+   return l_instr;
+@@ -1170,3 +1170,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_mls( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_mls( unsigned long long i_instr,
+                                                 unsigned char i_r,
+@@ -1176,14 +1176,14 @@ unsigned long libxsmm_ppc64le_instr_d_form_mls( unsigned long i_instr,
+                                                 unsigned int  i_si1 ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set R */
+-  l_instr |= (unsigned long)(0x01 & i_r) << (32 + 31 - 11 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_r) << (32 + 31 - 11 - 0);
+   /* Set SI0 */
+-  l_instr |= (unsigned long)(0x0003ffff & i_si0) << (32 + 31 - 14 - 17);
++  l_instr |= (unsigned long long)(0x0003ffff & i_si0) << (32 + 31 - 14 - 17);
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set SI1 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_si1) << (31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_si1) << (31 - 16 - 15);
+   return l_instr;
+@@ -1193,3 +1193,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_mls( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long long i_instr,
+                                                    unsigned int  i_imm0,
+@@ -1199,14 +1199,14 @@ unsigned long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long i_instr,
+                                                    unsigned int  i_imm1 ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set IMM0 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_imm0) << (32 + 31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_imm0) << (32 + 31 - 16 - 15);
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set IX */
+-  l_instr |= (unsigned long)(0x01 & i_ix) << (31 - 14 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ix) << (31 - 14 - 0);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 15 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 15 - 0);
+   /* Set IMM1 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_imm1) << (31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_imm1) << (31 - 16 - 15);
+ 
+@@ -1217,3 +1217,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long long i_instr,
+                                                    unsigned int  i_imm0,
+@@ -1222,12 +1222,12 @@ unsigned long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long i_instr,
+                                                    unsigned int  i_imm1 ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set IMM0 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_imm0) << (32 + 31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_imm0) << (32 + 31 - 16 - 15);
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 15 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 15 - 0);
+   /* Set IMM1 */
+-  l_instr |= (unsigned long)(0x0000ffff & i_imm1) << (31 - 16 - 15);
++  l_instr |= (unsigned long long)(0x0000ffff & i_imm1) << (31 - 16 - 15);
+ 
+@@ -1238,3 +1238,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long long i_instr,
+                                                        unsigned char i_xmsk,
+@@ -1246,18 +1246,18 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long i_instr,
+                                                        unsigned char i_bx ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set XMSK */
+-  l_instr |= (unsigned long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
+   /* Set YMSK */
+-  l_instr |= (unsigned long)(0x0f & i_ymsk) << (32 + 31 - 28 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_ymsk) << (32 + 31 - 28 - 3);
+   /* Set AT */
+-  l_instr |= (unsigned long)(0x07 & i_at) << (31 - 6 - 2);
++  l_instr |= (unsigned long long)(0x07 & i_at) << (31 - 6 - 2);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set B */
+-  l_instr |= (unsigned long)(0x1f & i_b) << (31 - 16 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_b) << (31 - 16 - 4);
+   /* Set AX */
+-  l_instr |= (unsigned long)(0x01 & i_ax) << (31 - 29 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ax) << (31 - 29 - 0);
+   /* Set BX */
+-  l_instr |= (unsigned long)(0x01 & i_bx) << (31 - 30 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_bx) << (31 - 30 - 0);
+ 
+@@ -1268,3 +1268,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long long i_instr,
+                                                        unsigned char i_xmsk,
+@@ -1276,18 +1276,18 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long i_instr,
+                                                        unsigned char i_bx ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set XMSK */
+-  l_instr |= (unsigned long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
+   /* Set YMSK */
+-  l_instr |= (unsigned long)(0x03 & i_ymsk) << (32 + 31 - 28 - 1);
++  l_instr |= (unsigned long long)(0x03 & i_ymsk) << (32 + 31 - 28 - 1);
+   /* Set AT */
+-  l_instr |= (unsigned long)(0x07 & i_at) << (31 - 6 - 2);
++  l_instr |= (unsigned long long)(0x07 & i_at) << (31 - 6 - 2);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set B */
+-  l_instr |= (unsigned long)(0x1f & i_b) << (31 - 16 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_b) << (31 - 16 - 4);
+   /* Set AX */
+-  l_instr |= (unsigned long)(0x01 & i_ax) << (31 - 29 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ax) << (31 - 29 - 0);
+   /* Set BX */
+-  l_instr |= (unsigned long)(0x01 & i_bx) << (31 - 30 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_bx) << (31 - 30 - 0);
+ 
+@@ -1298,3 +1298,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long long i_instr,
+                                                        unsigned char i_pmsk,
+@@ -1307,20 +1307,20 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long i_instr,
+                                                        unsigned char i_bx ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set PMSK */
+-  l_instr |= (unsigned long)(0x03 & i_pmsk) << (32 + 31 - 16 - 1);
++  l_instr |= (unsigned long long)(0x03 & i_pmsk) << (32 + 31 - 16 - 1);
+   /* Set XMSK */
+-  l_instr |= (unsigned long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_xmsk) << (32 + 31 - 24 - 3);
+   /* Set YMSK */
+-  l_instr |= (unsigned long)(0x0f & i_ymsk) << (32 + 31 - 28 - 3);
++  l_instr |= (unsigned long long)(0x0f & i_ymsk) << (32 + 31 - 28 - 3);
+   /* Set AT */
+-  l_instr |= (unsigned long)(0x07 & i_at) << (31 - 6 - 2);
++  l_instr |= (unsigned long long)(0x07 & i_at) << (31 - 6 - 2);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set B */
+-  l_instr |= (unsigned long)(0x1f & i_b) << (31 - 16 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_b) << (31 - 16 - 4);
+   /* Set AX */
+-  l_instr |= (unsigned long)(0x01 & i_ax) << (31 - 29 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ax) << (31 - 29 - 0);
+   /* Set BX */
+-  l_instr |= (unsigned long)(0x01 & i_bx) << (31 - 30 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_bx) << (31 - 30 - 0);
+ 
+@@ -1331,3 +1331,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long long i_instr,
+                                                    unsigned char i_t,
+@@ -1340,20 +1340,20 @@ unsigned long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long i_instr,
+                                                    unsigned char i_tx ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set B */
+-  l_instr |= (unsigned long)(0x1f & i_b) << (31 - 16 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_b) << (31 - 16 - 4);
+   /* Set C */
+-  l_instr |= (unsigned long)(0x1f & i_c) << (31 - 21 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_c) << (31 - 21 - 4);
+   /* Set CX */
+-  l_instr |= (unsigned long)(0x01 & i_cx) << (31 - 28 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_cx) << (31 - 28 - 0);
+   /* Set AX */
+-  l_instr |= (unsigned long)(0x01 & i_ax) << (31 - 29 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ax) << (31 - 29 - 0);
+   /* Set BX */
+-  l_instr |= (unsigned long)(0x01 & i_bx) << (31 - 30 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_bx) << (31 - 30 - 0);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 31 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 31 - 0);
+ 
+@@ -1364,3 +1364,3 @@ unsigned long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx4_form_8rr2( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx4_form_8rr2( unsigned long long i_instr,
+                                                    unsigned char i_imm,
+@@ -1374,22 +1374,22 @@ unsigned long libxsmm_ppc64le_instr_xx4_form_8rr2( unsigned long i_instr,
+                                                    unsigned char i_tx ) {
+-  unsigned long l_instr = i_instr;
++  unsigned long long l_instr = i_instr;
+ 
+   /* Set IMM */
+-  l_instr |= (unsigned long)(0xff & i_imm) << (32 + 31 - 24 - 7);
++  l_instr |= (unsigned long long)(0xff & i_imm) << (32 + 31 - 24 - 7);
+   /* Set T */
+-  l_instr |= (unsigned long)(0x1f & i_t) << (31 - 6 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_t) << (31 - 6 - 4);
+   /* Set A */
+-  l_instr |= (unsigned long)(0x1f & i_a) << (31 - 11 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_a) << (31 - 11 - 4);
+   /* Set B */
+-  l_instr |= (unsigned long)(0x1f & i_b) << (31 - 16 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_b) << (31 - 16 - 4);
+   /* Set C */
+-  l_instr |= (unsigned long)(0x1f & i_c) << (31 - 21 - 4);
++  l_instr |= (unsigned long long)(0x1f & i_c) << (31 - 21 - 4);
+   /* Set CX */
+-  l_instr |= (unsigned long)(0x01 & i_cx) << (31 - 28 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_cx) << (31 - 28 - 0);
+   /* Set AX */
+-  l_instr |= (unsigned long)(0x01 & i_ax) << (31 - 29 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_ax) << (31 - 29 - 0);
+   /* Set BX */
+-  l_instr |= (unsigned long)(0x01 & i_bx) << (31 - 30 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_bx) << (31 - 30 - 0);
+   /* Set TX */
+-  l_instr |= (unsigned long)(0x01 & i_tx) << (31 - 31 - 0);
++  l_instr |= (unsigned long long)(0x01 & i_tx) << (31 - 31 - 0);
+ 
+@@ -1820,3 +1820,3 @@ void libxsmm_ppc64le_instr_pnop( libxsmm_generated_code *io_generated_code,
+                                  unsigned int            i_label ) {
+-  unsigned long l_op = LIBXSMM_PPC64LE_INSTR_PNOP | (unsigned long)( 0xffff & i_label );
++  unsigned long long l_op = LIBXSMM_PPC64LE_INSTR_PNOP | (unsigned long long)( 0xffff & i_label );
+   libxsmm_ppc64le_instr_prefix_append( io_generated_code, l_op );
+@@ -1826,3 +1826,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_append( libxsmm_generated_code *io_generated_code,
+-                                          unsigned long           i_op ) {
++                                          unsigned long long           i_op ) {
+   if ( io_generated_code->code_type > 1 ) {
+@@ -1854,3 +1854,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_4( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1860,6 +1860,6 @@ void libxsmm_ppc64le_instr_prefix_4( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -1888,3 +1888,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_5( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1895,6 +1895,6 @@ void libxsmm_ppc64le_instr_prefix_5( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -1928,3 +1928,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_6( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1936,6 +1936,6 @@ void libxsmm_ppc64le_instr_prefix_6( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -1969,3 +1969,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_7( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1978,6 +1978,6 @@ void libxsmm_ppc64le_instr_prefix_7( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -2011,3 +2011,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_8( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -2021,6 +2021,6 @@ void libxsmm_ppc64le_instr_prefix_8( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -2054,3 +2054,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_9( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -2065,6 +2065,6 @@ void libxsmm_ppc64le_instr_prefix_9( libxsmm_generated_code *io_generated_code,
+   if ( io_generated_code->code_type > 1 ) {
+-    unsigned long l_op;
++    unsigned long long l_op;
+ 
+-    unsigned long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
+-    unsigned long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_fid = i_instr & ~LIBXSMM_PPC64LE_64FMASK;
++    unsigned long long l_instr = i_instr & LIBXSMM_PPC64LE_64FMASK;
+ 
+@@ -2808,4 +2808,4 @@ void libxsmm_ppc64le_instr_vec_imm64_splat( libxsmm_generated_code *io_generated
+                                             void                   *i_const ) {
+-  unsigned long l_const = *(unsigned long*)i_const;
+-  if ( (unsigned long)0 != l_const ) {
++  unsigned long long l_const = *(unsigned long long*)i_const;
++  if ( (unsigned long long)0 != l_const ) {
+     unsigned int l_h3 = (unsigned int)( 0xffff & l_const );
+@@ -2817,3 +2817,3 @@ void libxsmm_ppc64le_instr_vec_imm64_splat( libxsmm_generated_code *io_generated
+     libxsmm_ppc64le_instr_prefix_5( io_generated_code, LIBXSMM_PPC64LE_INSTR_XXSPLTI32DX, l_h0, i_dst, 0, (0x20 & i_dst) >> 5, l_h1);
+-  } else if ( (unsigned long)(-1) == l_const ) {
++  } else if ( (unsigned long long)(-1) == l_const ) {
+     libxsmm_ppc64le_instr_vec_mone( io_generated_code, i_dst );
+@@ -3733,3 +3733,3 @@ void libxsmm_ppc64le_instr_jump_ctr_imm( libxsmm_generated_code *io_generated_co
+                                          libxsmm_ppc64le_reg    *io_reg_tracker,
+-                                         unsigned long           i_ptr ) {
++                                         unsigned long long           i_ptr ) {
+   unsigned int l_reg = libxsmm_ppc64le_get_reg( io_generated_code, io_reg_tracker, LIBXSMM_PPC64LE_GPR );
+@@ -3762,3 +3762,3 @@ void libxsmm_ppc64le_instr_jump_lr_imm( libxsmm_generated_code *io_generated_cod
+                                         libxsmm_ppc64le_reg    *io_reg_tracker,
+-                                        unsigned long           i_ptr ) {
++                                        unsigned long long           i_ptr ) {
+   unsigned int l_reg = libxsmm_ppc64le_get_reg( io_generated_code, io_reg_tracker, LIBXSMM_PPC64LE_GPR );
+--- a/src/generator_ppc64le_instructions.h
++++ b/src/generator_ppc64le_instructions.h
+@@ -1245,3 +1245,3 @@ unsigned int libxsmm_ppc64le_instr_xx4_form( unsigned int  i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_8ls( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_8ls( unsigned long long i_instr,
+                                                 unsigned char i_r,
+@@ -1254,3 +1254,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_8ls( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long long i_instr,
+                                                  unsigned char i_r,
+@@ -1263,3 +1263,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_8lsp( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_mls( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_mls( unsigned long long i_instr,
+                                                 unsigned char i_r,
+@@ -1271,3 +1271,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_mls( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long long i_instr,
+                                                    unsigned int  i_imm0,
+@@ -1279,3 +1279,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_0_8rr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long long i_instr,
+                                                    unsigned int  i_imm0,
+@@ -1286,3 +1286,3 @@ unsigned long libxsmm_ppc64le_instr_d_form_1_8rr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long long i_instr,
+                                                        unsigned char i_xmsk,
+@@ -1296,3 +1296,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr0( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long long i_instr,
+                                                        unsigned char i_xmsk,
+@@ -1306,3 +1306,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr1( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long long i_instr,
+                                                        unsigned char i_pmsk,
+@@ -1317,3 +1317,3 @@ unsigned long libxsmm_ppc64le_instr_xx3_form_0_mmirr3( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long long i_instr,
+                                                    unsigned char i_t,
+@@ -1328,3 +1328,3 @@ unsigned long libxsmm_ppc64le_instr_xx4_form_8rr0( unsigned long i_instr,
+ LIBXSMM_API_INTERN
+-unsigned long libxsmm_ppc64le_instr_xx4_form_8rr2( unsigned long i_instr,
++unsigned long long libxsmm_ppc64le_instr_xx4_form_8rr2( unsigned long long i_instr,
+                                                    unsigned char i_imm,
+@@ -1438,3 +1438,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_append( libxsmm_generated_code *io_generated_code,
+-                                          unsigned long           i_op );
++                                          unsigned long long           i_op );
+ 
+@@ -1443,3 +1443,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_4( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1452,3 +1452,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_5( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1462,3 +1462,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_6( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1473,3 +1473,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_7( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1485,3 +1485,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_8( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1498,3 +1498,3 @@ LIBXSMM_API_INTERN
+ void libxsmm_ppc64le_instr_prefix_9( libxsmm_generated_code *io_generated_code,
+-                                     unsigned long           i_instr,
++                                     unsigned long long           i_instr,
+                                      unsigned int            i_0,
+@@ -1938,3 +1938,3 @@ void libxsmm_ppc64le_instr_jump_ctr_imm( libxsmm_generated_code *io_generated_co
+                                          libxsmm_ppc64le_reg    *io_reg_tracker,
+-                                         unsigned long           i_ptr );
++                                         unsigned long long           i_ptr );
+ 
+@@ -1947,3 +1947,3 @@ void libxsmm_ppc64le_instr_jump_lr_imm( libxsmm_generated_code *io_generated_cod
+                                         libxsmm_ppc64le_reg    *io_reg_tracker,
+-                                        unsigned long           i_ptr );
++                                        unsigned long long           i_ptr );
+ 
+@@ -1956,3 +1956,3 @@ void libxsmm_ppc64le_instr_jump_ctr_imm( libxsmm_generated_code *io_generated_co
+                                          libxsmm_ppc64le_reg    *io_reg_tracker,
+-                                         unsigned long           i_ptr );
++                                         unsigned long long           i_ptr );
+ 
