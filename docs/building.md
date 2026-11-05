@@ -68,6 +68,9 @@ PYTHON=/c/Python312/python.exe scripts/build-windows.sh 0.19.0   # BUILD_ROOT de
 MSYS2 supplies gcc, g++ and gfortran, GNU make, the POSIX tools Palace's
 superbuild drives, and MS-MPI's import library and gfortran bridge
 (`mingw-w64-msmpi`); the packages are the ones the `wheels` workflow installs.
+The driver deletes that package's `mpicc`-style wrappers from your MSYS2, because
+CMake's FindMPI cannot read their output; `pacman -S mingw-w64-ucrt-x86_64-msmpi`
+restores them.
 MSYS2's own python cannot run the steps, because it reports a platform that
 would mis-tag the wheel. The driver fetches and hash-checks the MS-MPI
 redistributable, builds OpenBLAS, then runs the superbuild with the carried

@@ -22,7 +22,9 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import subprocess
 import sys
+import time
 from collections.abc import MutableMapping, Sequence
 from pathlib import Path
 
@@ -65,6 +67,10 @@ FEATURE_FLAGS = (
 
 #: Palace's own CMake build tree, inside the superbuild's.
 PALACE_BUILD_DIR = "palace-build"
+
+#: Seconds to wait after each failed configure before the next attempt; see
+#: :func:`configure_with_retries`.
+CONFIGURE_RETRY_DELAYS = (60, 300)
 
 #: Compiler-flag variables the superbuild must not inherit from the caller's
 #: environment. CMake seeds ``CMAKE_<LANG>_FLAGS`` from them, but the one that
@@ -201,7 +207,8 @@ def windows_cmake_arguments(
 
     No ``MPI_HOME``: MS-MPI's headers, import library and the ``libmsmpifec``
     gfortran bridge come from MSYS2's ``mingw-w64-msmpi``, and FindMPI finds
-    them on its own. The prefix is still searched first, for OpenBLAS.
+    them on its own once ``scripts/build-windows.sh`` has removed the package's
+    compiler wrappers. The prefix is still searched first, for OpenBLAS.
 
     Args:
         source_dir: Palace source tree (the superbuild's top-level CMake dir).
@@ -314,6 +321,37 @@ def unit_test_commands(
     ]
 
 
+def configure_with_retries(command: Sequence[str], *, cwd: Path) -> None:
+    """Run the superbuild's configure, again if it fails.
+
+    Palace's configure downloads its MFEM, hypre and STRUMPACK patches from
+    github.com one commit diff at a time, and a single refused request ends it,
+    after an hour of building if this is the x86-64-v3 pass. CMake keeps a
+    downloaded file whose hash still matches, so another attempt asks only for
+    what is missing. A configure that fails for any other reason fails the same
+    way each time, a few minutes later than it would have.
+
+    Args:
+        command: The configure command.
+        cwd: The superbuild's build directory.
+
+    Raises:
+        subprocess.CalledProcessError: If the last attempt fails too.
+    """
+    for delay in CONFIGURE_RETRY_DELAYS:
+        try:
+            check_call(command, cwd=cwd)
+        except subprocess.CalledProcessError as error:  # noqa: PERF203
+            print(
+                f"configure exited {error.returncode}; trying again in {delay} s",
+                flush=True,
+            )
+            time.sleep(delay)
+        else:
+            return
+    check_call(command, cwd=cwd)
+
+
 def drop_inherited_flags(environ: MutableMapping[str, str]) -> list[str]:
     """Remove :data:`INHERITED_FLAG_VARIABLES` from ``environ``.
 
@@ -364,7 +402,7 @@ def run_windows(
         install_prefix=install_prefix,
         project_include=include,
     )
-    check_call(configure, cwd=build_dir)
+    configure_with_retries(configure, cwd=build_dir)
     check_call(
         ["cmake", "--build", ".", f"-j{jobs}", "--target", *patches.patch_targets()],
         cwd=build_dir,
@@ -443,7 +481,7 @@ def run(
         mpi_home=mpi_home(prefix),
         compile_flags=compile_flags,
     )
-    check_call(configure, cwd=build_dir)
+    configure_with_retries(configure, cwd=build_dir)
     check_call(["cmake", "--build", ".", f"-j{jobs}"], cwd=build_dir)
     rpath = build_rpath_command(
         build_dir=build_dir, install_prefix=install_prefix, system=system

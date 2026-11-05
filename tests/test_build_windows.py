@@ -93,3 +93,15 @@ def test_the_rolling_gfortran_bridge_is_logged_by_package():
 
 def test_the_wheel_tools_install_the_pefile_the_tests_ran_against():
     assert "PEFILE_REQUIREMENT" in _script()
+
+
+def test_mpi_wrappers_are_gone_and_findmpi_is_proved_before_anything_compiles():
+    """mingw-w64-msmpi's wrappers answer -show in a form FindMPI cannot read."""
+    script = _script()
+
+    removal = script.index('rm -f "/ucrt64/bin/$wrapper.exe"')
+    probe = script.index("find_package(MPI REQUIRED)")
+    assert removal < probe < script.index("==> OpenBLAS")
+    assert script.index('export CMAKE_GENERATOR="MSYS Makefiles"') < probe
+    for wrapper in ("mpicc", "mpicxx", "mpic++", "mpif77", "mpif90", "mpifort"):
+        assert wrapper in script[:removal]
