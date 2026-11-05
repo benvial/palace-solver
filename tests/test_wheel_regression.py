@@ -41,13 +41,10 @@ def test_the_kept_cases_cpp_is_the_pinned_palaces():
     assert CASES.is_file(), f"copy test/unit/regression/cases.cpp to {CASES}"
 
 
-def test_the_pinned_cases_cpp_parses_into_64_cases_and_45_after_the_skip_list():
+def test_the_pinned_cases_cpp_parses_into_64_cases():
     cases = wheel_regression.parse_cases(_pinned())
-    selected = wheel_regression.select_cases(cases)
 
     assert len(cases) == 64
-    assert len(selected) == 45
-    assert not {case.name for case in selected} & set(wheel_regression.SKIPPED)
     assert "transmon_coarse" not in _by_name(cases)  # [Long]
 
 
@@ -207,22 +204,6 @@ def test_comments_and_non_regression_cases_are_ignored():
     assert case == Case(
         "a", "dir", "a.json", "sub", Options(excluded_columns=("x//y", "z"))
     )
-
-
-def test_a_skipped_case_that_cases_cpp_no_longer_has_is_refused():
-    cases = [
-        case
-        for case in wheel_regression.parse_cases(_pinned())
-        if case.name != "cpw_wave_adaptive"
-    ]
-
-    with pytest.raises(CasesError, match="cpw_wave_adaptive"):
-        wheel_regression.select_cases(cases)
-
-
-# --------------------------------------------------------------------------
-# Configuration files
-# --------------------------------------------------------------------------
 
 
 def test_the_config_preprocessor_matches_palaces():

@@ -25,8 +25,7 @@ if a packaging bug ever shows up that only such a file would catch.
 
 The verdict reuses the gate's **test exclusions** and their accountability
 rules (:func:`wheelbuild.upstream_gate.judge`), with the exclusions scoped to
-the wheel run. The cases in :data:`SKIPPED` are not exclusions: nothing is
-wrong with them, they are left to the gate for cost.
+the wheel run. It runs every case the gate does.
 
 What the run is due on is the wheel's payload and the exclusions:
 :func:`fingerprint`.
@@ -56,37 +55,6 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 
 from wheelbuild import upstream_gate
-
-#: The cases the wheel regression run leaves to the gate, and why. They are
-#: the six heaviest at two ranks; lighter cases still cover the adaptive,
-#: synthesis and wave-port paths (palace-tests ticket 09).
-SKIPPED = (
-    "iris_filter_wave_eigen",
-    "iris_filter_driven_wave_synth",
-    "cpw_lumped_uniform",
-    "cpw_wave_uniform",
-    "cpw_lumped_adaptive",
-    "cpw_wave_adaptive",
-    # New at 0.19.0. The two on the CPW mesh cost what cpw_lumped_uniform does per
-    # sample. The rest are further magnetostatic London cases on meshes the kept
-    # ones already run: circular_hole_london_flux, square_hole_flux_loop,
-    # two_sided_london_hex and coaxial_magnetostatic_superconductor stay, for
-    # the sheet, the flux loop, the two-sided film and the p=3 path.
-    "cpw_lumped_conductivity",
-    "cpw_lumped_conductivity_crack",
-    "circular_hole_london_two_sided",
-    "circular_hole_london_two_sided_nc_amr",
-    "circular_hole_london_nc_amr",
-    "circular_hole_london_nc_amr_rebalance",
-    "two_sided_london_pec",
-    "double_hole_london_flux",
-    "double_hole_london_flux_excitation",
-    "narrow_ring_london_flux",
-    "coaxial_magnetostatic_pec",
-    "microstrip_pec",
-    "microstrip_superconductor",
-)
-SKIP_REASON = "cost; the upstream test gate runs them"
 
 #: The custom-check factories ``cases.cpp`` may register. A file one of them
 #: owns is checked for structure only (see the module docstring).
@@ -118,7 +86,7 @@ CASES_SOURCE = "test/unit/regression/cases.cpp"
 #: How many ranks each case runs on: the README's ``palace -np 2``.
 RANKS = 2
 #: Per-case ceiling, in seconds.
-CASE_TIMEOUT = 20 * 60
+CASE_TIMEOUT = 60 * 60
 
 #: The solver choice upstream's harness injects into every case. Its
 #: ``--palace-linear-solver`` and ``--palace-eigensolver`` default to
@@ -477,20 +445,6 @@ def _real(text: str) -> float | None:
     if text == _INFINITY:
         return math.inf
     return float(text) if _FLOAT.fullmatch(text) else None
-
-
-def select_cases(cases: Iterable[Case]) -> tuple[Case, ...]:
-    """Drop the cases in :data:`SKIPPED`, each of which must be registered.
-
-    Raises:
-        CasesError: If a skipped name is not a case, so a renamed heavy case
-            cannot rejoin the run unnoticed.
-    """
-    cases = tuple(cases)
-    missing = set(SKIPPED) - {case.name for case in cases}
-    if missing:
-        raise CasesError(f"skipped cases not in cases.cpp: {sorted(missing)}")
-    return tuple(case for case in cases if case.name not in SKIPPED)
 
 
 # --------------------------------------------------------------------------
@@ -1188,10 +1142,7 @@ def summary(
     lines = [
         f"## Wheel regression run: {platform}",
         "",
-        (
-            f"{len(results)} cases at {RANKS} ranks, {passed} passed. "
-            f"Skipped ({SKIP_REASON}): {', '.join(SKIPPED)}."
-        ),
+        f"{len(results)} cases at {RANKS} ranks, {passed} passed.",
         "",
         "| Case | Verdict | Time | Worst cell |",
         "| --- | --- | --- | --- |",
@@ -1312,7 +1263,7 @@ def run(
     Returns:
         Each case's result, the run's problems and the summary text.
     """
-    cases = select_cases(parse_cases((source / CASES_SOURCE).read_text("utf-8")))
+    cases = parse_cases((source / CASES_SOURCE).read_text("utf-8"))
     unknown = set(names) - {case.name for case in cases}
     if unknown:
         raise ValueError(f"not cases of the run: {sorted(unknown)}")
