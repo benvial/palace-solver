@@ -94,9 +94,10 @@ vendored here rather than a `mpirun` found on `PATH`, and the ranks are started
 as the `palace` console script rather than as the raw binary, so each of them
 runs the launcher check. `--nt` sets `OMP_NUM_THREADS`, and leaving it unset
 means one thread rather than one per core, as upstream. `OPENBLAS_NUM_THREADS`
-is always set to the same count, overriding the environment: the vendored
-OpenBLAS threads through OpenMP and hangs when asked for more threads than the
-OpenMP team has.
+is always set, overriding the environment: the vendored OpenBLAS threads through
+OpenMP and hangs when asked for more threads than the OpenMP team has. It is the
+same count across several ranks and one on a single rank, where threaded BLAS
+inside MUMPS's own OpenMP threads makes no progress.
 
 ## MPI
 

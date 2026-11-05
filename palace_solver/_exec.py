@@ -72,6 +72,7 @@ MSMPI_LOCAL_ONLY_ENV = "MSMPI_LOCAL_ONLY"
 #: Thread count of the vendored OpenBLAS, held to ``OMP_NUM_THREADS``; see
 #: :func:`_apply_thread_count`.
 OPENBLAS_THREADS_ENV = "OPENBLAS_NUM_THREADS"
+RANK_COUNT_ENV = "PMI_SIZE"
 
 
 @dataclass(frozen=True)
@@ -217,7 +218,7 @@ def main(argv: Sequence[str] | None = None, *, system: str | None = None) -> Non
         print(USAGE, end="")
         raise SystemExit(0)
     _prepare_platform(system)
-    _apply_thread_count(invocation.num_threads)
+    _apply_thread_count(invocation.num_threads, single_rank=_is_single_rank(invocation))
     if invocation.serial or invocation.num_procs is None or invocation.num_procs == 1:
         _run_rank(invocation.palace_args, system=system)
     else:
@@ -269,30 +270,54 @@ def _prepare_platform(system: str | None) -> None:
     os.environ.setdefault(MSMPI_LOCAL_ONLY_ENV, "1")
 
 
-def _apply_thread_count(num_threads: int | None) -> None:
+def _is_single_rank(invocation: Invocation) -> bool:
+    """Whether the run has one rank, as this script is able to tell.
+
+    A rank a process manager started has no ``--np`` to read: the launcher
+    invoked this script again without it, so the count comes from the process
+    manager's ``PMI_SIZE``, which both Hydra and MS-MPI's ``mpiexec`` set.
+    Another launcher reads as one rank, which costs threaded BLAS and cannot
+    hang.
+    """
+    if invocation.serial or invocation.num_procs == 1:
+        return True
+    if invocation.num_procs is not None:
+        return False
+    return os.environ.get(RANK_COUNT_ENV, "1") == "1"
+
+
+def _apply_thread_count(num_threads: int | None, *, single_rank: bool) -> None:
     """Fix ``OMP_NUM_THREADS`` for the run, as upstream's wrapper does.
 
     Palace's OpenMP build otherwise takes a thread per core in every rank,
     which oversubscribes a multi-rank run, so an unset variable means one
     thread rather than "as many as there are".
 
-    ``OPENBLAS_NUM_THREADS`` is then set to the same count, whatever the
-    environment says. The vendored OpenBLAS is built with ``USE_OPENMP=1`` and
-    runs its threaded kernels inside an OpenMP team; asked for more threads
-    than that team has, its ``dgemm`` waits forever for workers that do not
-    exist, which hangs the first factorization of a run. Platforms that export
-    ``OPENBLAS_NUM_THREADS`` per core, as Modal does, hit this on every
-    ``--nt 1`` launch.
+    ``OPENBLAS_NUM_THREADS`` is then set whatever the environment says, because
+    the vendored OpenBLAS is built with ``USE_OPENMP=1`` and runs its threaded
+    kernels inside an OpenMP team. Asked for more threads than that team has,
+    its ``dgemm`` waits forever for workers that do not exist, which hangs the
+    first factorization of a run; platforms that export the variable per core,
+    as Modal does, hit this on every ``--nt 1`` launch. So it is the OpenMP
+    count, or one on a single rank. PETSc's initialization calls
+    ``openblas_set_num_threads``, after which OpenBLAS no longer drops to one
+    thread inside a parallel region, and on one rank MUMPS's tree-parallel
+    threads each enter the threaded ``dgemm``: a direct solve at ``-np 1 -nt 4``
+    made no progress in 240 s on about one core, against 40 s with one BLAS
+    thread. At two ranks it does not happen, and BLAS threads help.
 
     Args:
         num_threads: Thread count from ``--nt``, or ``None`` to keep whatever
             the environment already says.
+        single_rank: Whether this run has one rank; see :func:`_is_single_rank`.
     """
     if num_threads is not None:
         os.environ["OMP_NUM_THREADS"] = str(num_threads)
     else:
         os.environ.setdefault("OMP_NUM_THREADS", "1")
-    os.environ[OPENBLAS_THREADS_ENV] = os.environ["OMP_NUM_THREADS"]
+    os.environ[OPENBLAS_THREADS_ENV] = (
+        "1" if single_rank else os.environ["OMP_NUM_THREADS"]
+    )
 
 
 def _run_rank(palace_args: list[str], *, system: str | None = None) -> None:
