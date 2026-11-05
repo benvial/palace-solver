@@ -1,7 +1,7 @@
 """Apply the carried patches the Windows build needs, and prove they stayed.
 
-Seventeen fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
-The owner is the upstream whose files a patch edits -- Palace or one of the six
+Fifteen fixes, one file each, under ``wheelbuild/data/patches/windows/<owner>/``.
+The owner is the upstream whose files a patch edits -- Palace or one of the five
 dependencies its superbuild fetches -- and ``NN`` in ``NN-<slug>.patch`` is the
 apply order within it. Linux and macOS never read this directory: only the
 Windows arm of :func:`wheelbuild.superbuild.run` calls into this module, so
@@ -15,7 +15,7 @@ The recipe, decided in ``.scratch/windows-wheel/issues/02-carried-patch-hook.md`
    ``palace --version`` reports the release as it does on the other platforms;
    the tarball commit keeps ``upstream-v<version>``.
 2. The superbuild is configured with a project include that gives every
-   ExternalProject a ``<name>-patch`` step target, and those six are built:
+   ExternalProject a ``<name>-patch`` step target, and those five are built:
    every tree fetched and upstream-patched, nothing compiled.
 3. Each dependency patch then goes over its fetched tree, on top of upstream's
    own patches.
@@ -99,10 +99,9 @@ class Dependency:
     discard: tuple[str, ...]
 
 
-#: The six dependencies, in the order Palace's superbuild names them. Their
-#: directories are Palace v0.18.1's ``cmake/External*.cmake``.
+#: The five dependencies, in the order Palace's superbuild names them. Their
+#: directories are Palace v0.19.0's ``cmake/External*.cmake``.
 DEPENDENCIES = (
-    Dependency("hypre", "hypre", "hypre", ("hypre", "hypre-cmake", "hypre-build")),
     Dependency("libxsmm", "libxsmm", "libxsmm", ("libxsmm", "libxsmm-cmake")),
     Dependency("libceed", "libCEED", "libCEED", ("libCEED", "libCEED-cmake")),
     Dependency(
