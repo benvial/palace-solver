@@ -8,10 +8,16 @@ builds the four platforms as four rows of one matrix, each on a native runner �
 ## Linux
 
 ```bash
-scripts/build-in-container.sh 0.17.0      # docker, caches in ./.build-cache
+scripts/build-in-container.sh 0.19.0      # docker, caches in ./.build-cache
 scripts/smoke-test.sh wheelhouse/*.whl CONFIG   # clean venv, 1 rank and -n 2
 scripts/interop-test.sh wheelhouse/*.whl CONFIG # real solve under both launchers
 ```
+
+A build cache belongs to one Palace release. Its CMake cache names that release's
+source directory and its install prefix holds that release's dependencies, so
+empty `./.build-cache` before building another one. CMake refuses the old tree
+otherwise (`does not match the source`), and CI never restores one: its fallback
+stops at the Palace version.
 
 `scripts/build-wheel.sh` is the in-container pipeline: MPICH → OpenBLAS →
 superbuild → (x86_64) a second superbuild for x86-64-v3 → notice harvest →
@@ -56,7 +62,7 @@ recipe. It runs under MSYS2's UCRT64 bash, with a native Windows CPython in
 `PYTHON` for every `wheelbuild` step:
 
 ```bash
-PYTHON=/c/Python312/python.exe scripts/build-windows.sh 0.18.1   # BUILD_ROOT defaults to D:\b
+PYTHON=/c/Python312/python.exe scripts/build-windows.sh 0.19.0   # BUILD_ROOT defaults to D:\b
 ```
 
 MSYS2 supplies gcc, g++ and gfortran, GNU make, the POSIX tools Palace's

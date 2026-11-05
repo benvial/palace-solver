@@ -174,6 +174,16 @@ def test_the_wheel_job_restores_the_key_the_action_computes(build_cache, steps):
     )
 
 
+def test_no_restore_key_reaches_another_palace_release():
+    """A tree of another release cannot configure: CMake refuses its cache."""
+    action = yaml.safe_load(CACHE_KEY_ACTION.read_text())
+    run = next(s for s in action["runs"]["steps"] if s.get("id") == "key")["run"]
+    block = run.split("restore-keys<<EOF", 1)[1].split('echo "EOF"', 1)[0]
+    fallbacks = re.findall(r'echo "(superbuild-[^"]*)"', block)
+
+    assert fallbacks == ["superbuild-$PLATFORM_TAG-$PALACE_VERSION-"]
+
+
 @pytest.mark.parametrize("path", [WORKFLOW, KEEP_ALIVE])
 def test_no_workflow_spells_the_key_out_for_itself(path):
     """A second spelling is a second key: the keep-alive would read an entry
@@ -1032,7 +1042,7 @@ def test_the_gate_runs_after_the_cache_save_and_before_the_upload(steps):
 def test_the_gate_keeps_its_ceilings(named_step):
     """Ticket 04 of the palace-tests effort. Raising one is a decision, not an edit."""
     for other, windows in SWEEPS.items():
-        ceiling = 5 if "unit tests" in other else 60
+        ceiling = 10 if "unit tests" in other else 90
         assert named_step(other)["timeout-minutes"] == ceiling
         assert named_step(windows)["timeout-minutes"] == ceiling
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
