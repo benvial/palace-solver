@@ -15,17 +15,17 @@ strict: a statement, option or custom-check factory it does not know raises,
 so a Palace bump that changes the harness stops the run instead of drifting
 past it.
 
-Upstream registers seven custom checks (far-field magnitudes, complex
-magnitudes, Floquet dB, wave-port losslessness, ROM eigenvalues and both ROM
-round-trips). They are left out: the files they own get the structure checks
-only. They encode numerical semantics the gate owns, and a packaging fault
-garbles every file of a case, not one. Revisit only if a packaging bug ever
-shows up that only such a file would catch.
+Upstream registers custom checks, through eleven factories and two inline
+lambdas (far-field magnitudes, complex magnitudes and values, port S-parameters,
+Floquet dB, wave-port losslessness and input impedance, absorbing reflection,
+ROM eigenvalues and both ROM round-trips). They are left out: the files they
+own get the structure checks only. They encode numerical semantics the gate
+owns, and a packaging fault garbles every file of a case, not one. Revisit only
+if a packaging bug ever shows up that only such a file would catch.
 
 The verdict reuses the gate's **test exclusions** and their accountability
 rules (:func:`wheelbuild.upstream_gate.judge`), with the exclusions scoped to
-the wheel run. The cases in :data:`SKIPPED` are not exclusions: nothing is
-wrong with them, they are left to the gate for cost.
+the wheel run. It runs every case the gate does.
 
 What the run is due on is the wheel's payload and the exclusions:
 :func:`fingerprint`.
@@ -56,27 +56,18 @@ from typing import Any
 
 from wheelbuild import upstream_gate
 
-#: The cases the wheel regression run leaves to the gate, and why. They are
-#: the six heaviest at two ranks; lighter cases still cover the adaptive,
-#: synthesis and wave-port paths (palace-tests ticket 09).
-SKIPPED = (
-    "iris_filter_wave_eigen",
-    "iris_filter_driven_wave_synth",
-    "cpw_lumped_uniform",
-    "cpw_wave_uniform",
-    "cpw_lumped_adaptive",
-    "cpw_wave_adaptive",
-)
-SKIP_REASON = "cost; the upstream test gate runs them"
-
 #: The custom-check factories ``cases.cpp`` may register. A file one of them
 #: owns is checked for structure only (see the module docstring).
 CUSTOM_CHECKS = frozenset(
     {
         "TestFarfield",
         "CompareComplexMagnitudes",
+        "CompareComplexValues",
+        "ComparePortSParameters",
         "TestFloquetSParams",
         "TestWavePortLossless",
+        "TestWavePortInputImpedance",
+        "TestAbsorbingReflection",
         "CompareRomEigenvalues",
         "TestWavePortCoupledRoundTrip",
         "TestWavePortSRoundTrip",
@@ -95,7 +86,7 @@ CASES_SOURCE = "test/unit/regression/cases.cpp"
 #: How many ranks each case runs on: the README's ``palace -np 2``.
 RANKS = 2
 #: Per-case ceiling, in seconds.
-CASE_TIMEOUT = 20 * 60
+CASE_TIMEOUT = 60 * 60
 
 #: The solver choice upstream's harness injects into every case. Its
 #: ``--palace-linear-solver`` and ``--palace-eigensolver`` default to
@@ -356,7 +347,32 @@ _RUN = re.compile(
 _CHECK = re.compile(
     rf"opts\.custom_checks ?\[ ?({_STRING}) ?\] ?= ?({_IDENTIFIER}) ?\(.*\)"
 )
+#: A check written in place: a lambda over the (actual, reference, path) tables,
+#: whose captures may hold factories, each of which must be a known one.
+_INLINE_CHECK = re.compile(
+    rf"opts\.custom_checks ?\[ ?({_STRING}) ?\] ?= ?\[(.*?)\] ?"
+    r"\( ?palace::Table ?&\w* ?, ?palace::Table ?&\w* ?, ?"
+    r"const std::filesystem::path ?&\w* ?\) ?\{.*\}"
+)
+_CAPTURED_FACTORY = re.compile(rf"{_IDENTIFIER} ?= ?({_IDENTIFIER}) ?\(")
 _ASSIGNMENT = re.compile(rf"opts\.({_IDENTIFIER}) ?= ?(.+)")
+
+
+def _checked_file(statement: str) -> str | None:
+    """The file a custom-check statement owns, or None if it is not one.
+
+    Raises:
+        CasesError: If the check names a factory :data:`CUSTOM_CHECKS` lacks.
+    """
+    if check := _CHECK.fullmatch(statement):
+        factories = {check[2]}
+    elif check := _INLINE_CHECK.fullmatch(statement):
+        factories = set(_CAPTURED_FACTORY.findall(check[2]))
+    else:
+        return None
+    if unknown := factories - CUSTOM_CHECKS:
+        raise CasesError(f"unknown custom-check factory {sorted(unknown)}")
+    return _string(check[1])
 
 
 def _parse_case(
@@ -373,10 +389,8 @@ def _parse_case(
             raise CasesError(f"statement after RunRegressionCase: {statement!r}")
         if call := _RUN.fullmatch(statement):
             runs.append((_string(call[1]), _string(call[2]), _string(call[3])))
-        elif check := _CHECK.fullmatch(statement):
-            if check[2] not in CUSTOM_CHECKS:
-                raise CasesError(f"unknown custom-check factory {check[2]!r}")
-            checks.append(_string(check[1]))
+        elif (checked := _checked_file(statement)) is not None:
+            checks.append(checked)
         elif option := _ASSIGNMENT.fullmatch(statement):
             if option[1] in values:
                 raise CasesError(f"opts.{option[1]} is set twice")
@@ -431,20 +445,6 @@ def _real(text: str) -> float | None:
     if text == _INFINITY:
         return math.inf
     return float(text) if _FLOAT.fullmatch(text) else None
-
-
-def select_cases(cases: Iterable[Case]) -> tuple[Case, ...]:
-    """Drop the cases in :data:`SKIPPED`, each of which must be registered.
-
-    Raises:
-        CasesError: If a skipped name is not a case, so a renamed heavy case
-            cannot rejoin the run unnoticed.
-    """
-    cases = tuple(cases)
-    missing = set(SKIPPED) - {case.name for case in cases}
-    if missing:
-        raise CasesError(f"skipped cases not in cases.cpp: {sorted(missing)}")
-    return tuple(case for case in cases if case.name not in SKIPPED)
 
 
 # --------------------------------------------------------------------------
@@ -1142,10 +1142,7 @@ def summary(
     lines = [
         f"## Wheel regression run: {platform}",
         "",
-        (
-            f"{len(results)} cases at {RANKS} ranks, {passed} passed. "
-            f"Skipped ({SKIP_REASON}): {', '.join(SKIPPED)}."
-        ),
+        f"{len(results)} cases at {RANKS} ranks, {passed} passed.",
         "",
         "| Case | Verdict | Time | Worst cell |",
         "| --- | --- | --- | --- |",
@@ -1266,7 +1263,7 @@ def run(
     Returns:
         Each case's result, the run's problems and the summary text.
     """
-    cases = select_cases(parse_cases((source / CASES_SOURCE).read_text("utf-8")))
+    cases = parse_cases((source / CASES_SOURCE).read_text("utf-8"))
     unknown = set(names) - {case.name for case in cases}
     if unknown:
         raise ValueError(f"not cases of the run: {sorted(unknown)}")

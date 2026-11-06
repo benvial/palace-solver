@@ -13,36 +13,34 @@ pre-pass. Accepted because the tarball is pinned by the same wrapper commit,
 and the pin bump that could stale it retires this patch.
 
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index e4aca6f..7d6186c 100644
+index 7f4c108..746bb03 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -110,6 +110,10 @@ set(FETCHCONTENT_QUIET no)
- 
- FetchContent_Populate(${PROJECT_NAME} URL ${url})
+@@ -117,6 +117,10 @@ if(WIN32 AND BUILD_SHARED_LIBS)
+   set(CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS ON)
+ endif()
  
 +if(MUMPS_parallel AND WIN32 AND CMAKE_Fortran_COMPILER_ID STREQUAL "GNU")
 +  include(cmake/mumps_mingw_mpi.cmake)
 +endif()
 +
- # --- MUMPS build
- 
- # --- mpiseq (No MPI)
+ # --- RPATH handling for transitive dependencies
+ if(MUMPS_ENABLE_RPATH AND NOT WIN32)
+   set(CMAKE_INSTALL_RPATH "${CMAKE_INSTALL_FULL_LIBDIR}")
 diff --git a/cmake/mumps_mingw_mpi.cmake b/cmake/mumps_mingw_mpi.cmake
 new file mode 100644
-index 0000000..fb75efd
+index 0000000..abbf78f
 --- /dev/null
 +++ b/cmake/mumps_mingw_mpi.cmake
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,23 @@
 +# Backport of scivision/mumps 09a718d177 (2026-10-01): gfortran cannot compile
 +# MUMPS's *ana_aux_par.F against MS-MPI's mpif.h, whose !GCC$ DLLIMPORT
 +# attributes clash with module-level declarations; the patch switches those
 +# four files to "USE MPI". Based on MSYS2's mingw-w64-mumps 0004-mpi-module.patch.
-+# Adapted to this pin: the fetched source is <lowercase project>_SOURCE_DIR.
 +
 +find_package(Git REQUIRED)
 +set(_patch "${CMAKE_CURRENT_SOURCE_DIR}/cmake/mumps_mingw_mpi.patch")
-+string(TOLOWER "${PROJECT_NAME}" _mumps_name)
-+set(_mumps_source "${${_mumps_name}_SOURCE_DIR}")
++set(_mumps_source "${mumps_upstream_SOURCE_DIR}")
 +
 +execute_process(
 +  COMMAND "${GIT_EXECUTABLE}" apply --ignore-whitespace --reverse --check -p1 "${_patch}"

@@ -27,7 +27,7 @@ from wheelbuild._process import check_call
 OPENBLAS_VERSION = "0.3.34"
 
 #: Most threads the vendored OpenBLAS can use, fixed at build time. How many it
-#: does use is ``OPENBLAS_NUM_THREADS``, which the ``palace`` wrapper holds to
+#: does use is ``OPENBLAS_NUM_THREADS``, which the ``palace`` wrapper sets from
 #: ``OMP_NUM_THREADS``.
 NUM_THREADS = 64
 

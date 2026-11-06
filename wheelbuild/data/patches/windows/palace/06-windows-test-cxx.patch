@@ -4,18 +4,18 @@ The upstream test gate builds test/unit, and five of its files do not compile
 with MinGW, for the two causes palace/04 fixes in the library itself.
 std::filesystem::path does not convert to std::string where its value_type is
 wchar_t, so .string() (or .string().c_str()) goes wherever a path meets a
-std::string or a const char*: test-postoperatorcsv.cpp (10 sites),
+std::string or a const char*: test-postoperatorcsv.cpp (11 sites),
 test-lumpedportintegration.cpp (4), test-postoperator-boundary-viz.cpp (3) and
-test-schema.cpp (2). And uint is a glibc and macOS typedef MinGW lacks, so
+test-schema.cpp (3). And uint is a glibc and macOS typedef MinGW lacks, so
 uint(1) and uint(0) become 1u and 0u in test-lumpedportintegration.cpp (4) and
-test-romoperator.cpp (10). Nothing a test checks changes, and Linux and macOS
+test-romoperator.cpp (13). Nothing a test checks changes, and Linux and macOS
 compile the same values.
 
 diff --git a/test/unit/test-lumpedportintegration.cpp b/test/unit/test-lumpedportintegration.cpp
-index b5b1f3b..d4be35d 100644
+index ca6b2d1..521a403 100644
 --- a/test/unit/test-lumpedportintegration.cpp
 +++ b/test/unit/test-lumpedportintegration.cpp
-@@ -70,7 +70,7 @@ TEST_CASE("LumpedPort batched voltages", "[lumped_port][Serial][Parallel][GPU]")
+@@ -71,7 +71,7 @@ TEST_CASE("LumpedPort batched voltages", "[lumped_port][Serial][Parallel][GPU]")
    CAPTURE(mesh_is_hex, order);
  
    IoData iodata{Units(1.0e-6, 7.0)};
@@ -24,7 +24,7 @@ index b5b1f3b..d4be35d 100644
    iodata.model.L0 = 1.0e-6;
    iodata.model.Lc = 7.0;
    iodata.model.crack_bdr_elements = false;
-@@ -87,7 +87,7 @@ TEST_CASE("LumpedPort batched voltages", "[lumped_port][Serial][Parallel][GPU]")
+@@ -88,7 +88,7 @@ TEST_CASE("LumpedPort batched voltages", "[lumped_port][Serial][Parallel][GPU]")
         json::array(
             {json::object({{"Index", 1},
                            {"R", 50.0},
@@ -33,7 +33,7 @@ index b5b1f3b..d4be35d 100644
                            {"Attributes", json::array({1})},
                            {"Direction", "+Y"}}),
              json::object(
-@@ -196,7 +196,7 @@ TEST_CASE("LumpedPort_BasicTests_1ElementPort_Cube321", "[lumped_port][Serial][P
+@@ -197,7 +197,7 @@ TEST_CASE("LumpedPort_BasicTests_1ElementPort_Cube321", "[lumped_port][Serial][P
    double Lc = 7.0;
  
    IoData iodata{Units(L0, Lc)};
@@ -42,7 +42,7 @@ index b5b1f3b..d4be35d 100644
    iodata.model.L0 = L0;
    iodata.model.Lc = Lc;
    iodata.model.crack_bdr_elements = false;
-@@ -216,7 +216,7 @@ TEST_CASE("LumpedPort_BasicTests_1ElementPort_Cube321", "[lumped_port][Serial][P
+@@ -217,7 +217,7 @@ TEST_CASE("LumpedPort_BasicTests_1ElementPort_Cube321", "[lumped_port][Serial][P
        {"PEC", json::object({{"Attributes", boundary_pec_attr}})},
        {"LumpedPort", json::array({json::object({{"Index", 1},
                                                  {"R", 50.0},
@@ -51,7 +51,7 @@ index b5b1f3b..d4be35d 100644
                                                  {"Attributes", json::array({1})},
                                                  {"Direction", "+Y"}})})}};
    iodata.boundaries = config::BoundaryData(boundary_json_1);
-@@ -559,7 +559,7 @@ TEST_CASE("LumpedPort_BasicTests_3ElementPort_Cube321", "[lumped_port][Serial][P
+@@ -560,7 +560,7 @@ TEST_CASE("LumpedPort_BasicTests_3ElementPort_Cube321", "[lumped_port][Serial][P
    double Lc = 7.0;
  
    IoData iodata{Units(L0, Lc)};
@@ -60,7 +60,7 @@ index b5b1f3b..d4be35d 100644
    iodata.model.L0 = L0;
    iodata.model.Lc = Lc;
    iodata.model.crack_bdr_elements = false;
-@@ -580,7 +580,7 @@ TEST_CASE("LumpedPort_BasicTests_3ElementPort_Cube321", "[lumped_port][Serial][P
+@@ -581,7 +581,7 @@ TEST_CASE("LumpedPort_BasicTests_3ElementPort_Cube321", "[lumped_port][Serial][P
         json::array({json::object(
             {{"Index", 1},
              {"R", 50.0},
@@ -69,7 +69,7 @@ index b5b1f3b..d4be35d 100644
              {"Elements",
               json::array(
                   {json::object({{"Attributes", json::array({1})},  // dx,dy=1,1
-@@ -903,7 +903,7 @@ TEST_CASE("LumpedPort_ReactiveExcitation_Cube321", "[lumped_port][Serial][Parall
+@@ -904,7 +904,7 @@ TEST_CASE("LumpedPort_ReactiveExcitation_Cube321", "[lumped_port][Serial][Parall
    double Lc = 7.0;
    IoData iodata{Units(L0, Lc)};
    iodata.model.mesh =
@@ -78,7 +78,7 @@ index b5b1f3b..d4be35d 100644
    iodata.model.L0 = L0;
    iodata.model.Lc = Lc;
    iodata.model.crack_bdr_elements = false;
-@@ -919,7 +919,7 @@ TEST_CASE("LumpedPort_ReactiveExcitation_Cube321", "[lumped_port][Serial][Parall
+@@ -920,7 +920,7 @@ TEST_CASE("LumpedPort_ReactiveExcitation_Cube321", "[lumped_port][Serial][Parall
  
    // Build the excited reactive port. Only include nonzero circuit elements.
    json port = {{"Index", 1},
@@ -88,10 +88,10 @@ index b5b1f3b..d4be35d 100644
                 {"Direction", "+Y"}};
    if (case_R > 0.0)
 diff --git a/test/unit/test-postoperator-boundary-viz.cpp b/test/unit/test-postoperator-boundary-viz.cpp
-index bb123a0..c800e99 100644
+index 899904f..b966d12 100644
 --- a/test/unit/test-postoperator-boundary-viz.cpp
 +++ b/test/unit/test-postoperator-boundary-viz.cpp
-@@ -649,7 +649,8 @@ TEST_CASE_METHOD(test::SharedTempDir,
+@@ -650,7 +650,8 @@ TEST_CASE_METHOD(test::SharedTempDir,
  
    auto serial_mesh = MakeSmallTetInterfaceSerialMesh();
    mfem::ParMesh pmesh(comm, *serial_mesh);
@@ -101,7 +101,7 @@ index bb123a0..c800e99 100644
    collection.SetBoundaryOutput(true);
    collection.SetCycle(1);
    collection.SetDataFormat(mfem::VTKFormat::BINARY32);
-@@ -772,8 +773,8 @@ TEST_CASE_METHOD(test::SharedTempDir, "CeedParaView deregisters all domain point
+@@ -773,8 +774,8 @@ TEST_CASE_METHOD(test::SharedTempDir, "CeedParaView deregisters all domain point
  
    auto serial_mesh = MakeSmallTetInterfaceSerialMesh();
    mfem::ParMesh pmesh(comm, *serial_mesh);
@@ -112,7 +112,7 @@ index bb123a0..c800e99 100644
    collection.SetCycle(1);
    collection.SetDataFormat(mfem::VTKFormat::BINARY32);
    collection.SetCompressionLevel(0);
-@@ -833,7 +834,8 @@ TEST_CASE_METHOD(test::SharedTempDir,
+@@ -834,7 +835,8 @@ TEST_CASE_METHOD(test::SharedTempDir,
    int partitioning[2] = {0, 1};
    mfem::ParMesh pmesh(comm, serial_mesh, partitioning);
  
@@ -123,10 +123,10 @@ index bb123a0..c800e99 100644
    collection.SetCycle(1);
    collection.SetDataFormat(mfem::VTKFormat::BINARY32);
 diff --git a/test/unit/test-postoperatorcsv.cpp b/test/unit/test-postoperatorcsv.cpp
-index ede465d..329c492 100644
+index ed2ea56..ab91284 100644
 --- a/test/unit/test-postoperatorcsv.cpp
 +++ b/test/unit/test-postoperatorcsv.cpp
-@@ -32,12 +32,12 @@ IoData load_iodata(std::string_view relative_path)
+@@ -33,7 +33,7 @@ IoData load_iodata(std::string_view relative_path)
    fs::path io_file(PALACE_TEST_DATA_DIR);
    io_file /= relative_path;
    assert(fs::exists(io_file));
@@ -135,13 +135,7 @@ index ede465d..329c492 100644
  }
  
  std::vector<std::unique_ptr<Mesh>> load_mesh(MPI_Comm &world_comm_, IoData &iodata_)
- {
--  iodata_.model.mesh = fs::path(PALACE_TEST_DATA_DIR) / "mesh/fichera-tet.mesh";
-+  iodata_.model.mesh = (fs::path(PALACE_TEST_DATA_DIR) / "mesh/fichera-tet.mesh").string();
- 
-   // Load Mesh — copy from main.cpp
-   std::vector<std::unique_ptr<Mesh>> mesh_;
-@@ -76,7 +76,8 @@ public:
+@@ -77,7 +77,8 @@ public:
    void restart1_fresh_folder()
    {
      iodata.problem.output =
@@ -151,7 +145,7 @@ index ede465d..329c492 100644
      REQUIRE(!fs::exists(fs::path(iodata.problem.output) /
                          "port-V.csv"));  // Restart is 1 Indexed.
  
-@@ -123,7 +124,7 @@ public:
+@@ -124,7 +125,7 @@ public:
    void restart1_restart_in_middle()
    {
      iodata.problem.output =
@@ -160,7 +154,7 @@ index ede465d..329c492 100644
      REQUIRE(fs::exists(fs::path(iodata.problem.output) / "port-V.csv"));
  
      // No restart, no previous file to load.
-@@ -207,7 +208,8 @@ public:
+@@ -214,7 +215,8 @@ public:
    void restart1_restart_with_empty()
    {
      iodata.problem.output =
@@ -170,7 +164,7 @@ index ede465d..329c492 100644
      REQUIRE(fs::exists(fs::path(iodata.problem.output) / "port-V.csv"));
  
      // No restart, no previous file to load.
-@@ -250,7 +252,7 @@ public:
+@@ -257,7 +259,7 @@ public:
      iodata.solver.driven.restart = 3;  // non-trivial restart for check to trigger
                                         // Try and load wrong table with incorrect width.
      iodata.problem.output =
@@ -179,7 +173,7 @@ index ede465d..329c492 100644
      REQUIRE(fs::exists(fs::path(iodata.problem.output) / "port-V.csv"));
  
      PostOperatorCSVManualTest post_op_csv{iodata, space_op};
-@@ -265,7 +267,8 @@ public:
+@@ -272,7 +274,8 @@ public:
    {
      iodata.solver.driven.restart = 3 + 1;
      iodata.problem.output =
@@ -189,7 +183,7 @@ index ede465d..329c492 100644
      PostOperatorCSVManualTest post_op_csv{iodata, space_op};
      if (Mpi::Root(Mpi::World()))
      {
-@@ -278,7 +281,8 @@ public:
+@@ -285,7 +288,8 @@ public:
    {
      iodata.solver.driven.restart = 3 + 1;
      iodata.problem.output =
@@ -199,7 +193,7 @@ index ede465d..329c492 100644
      PostOperatorCSVManualTest post_op_csv{iodata, space_op};
      if (Mpi::Root(Mpi::World()))
      {
-@@ -290,7 +294,7 @@ public:
+@@ -297,7 +301,7 @@ public:
    void restart2_restart_in_middle_ex1()
    {
      iodata.problem.output =
@@ -208,7 +202,7 @@ index ede465d..329c492 100644
      REQUIRE(fs::exists(fs::path(iodata.problem.output) / "port-V.csv"));
  
      // No restart, no previous file to load.
-@@ -382,7 +386,7 @@ public:
+@@ -389,7 +393,7 @@ public:
    void restart2_restart_in_middle_ex2()
    {
      iodata.problem.output =
@@ -217,11 +211,29 @@ index ede465d..329c492 100644
      REQUIRE(fs::exists(fs::path(iodata.problem.output) / "port-V.csv"));
  
      // No restart, no previous file to load.
+@@ -450,7 +454,7 @@ public:
+   void restart3_farfield_reload()
+   {
+     iodata.problem.output =
+-        fs::path(PALACE_TEST_DATA_DIR) / "postoperatorcsv_restart/restart3_c63";
++        (fs::path(PALACE_TEST_DATA_DIR) / "postoperatorcsv_restart/restart3_c63").string();
+     REQUIRE(fs::exists(fs::path(iodata.problem.output) / "farfield-rE.csv"));
+ 
+     SurfacePostOperator surf_post_op(iodata, space_op.GetMaterialOp(),
+@@ -538,7 +542,7 @@ public:
+   void restart3_farfield_missing_data()
+   {
+     iodata.problem.output =
+-        fs::path(PALACE_TEST_DATA_DIR) / "postoperatorcsv_restart/restart3_test_tmp";
++        (fs::path(PALACE_TEST_DATA_DIR) / "postoperatorcsv_restart/restart3_test_tmp").string();
+     REQUIRE(!fs::exists(fs::path(iodata.problem.output) / "farfield-rE.csv"));
+ 
+     iodata.solver.driven.restart = 3 + 1;  // Restart is 1 Indexed.
 diff --git a/test/unit/test-romoperator.cpp b/test/unit/test-romoperator.cpp
-index da495d5..8c8cc2b 100644
+index fbdee2a..d110bdd 100644
 --- a/test/unit/test-romoperator.cpp
 +++ b/test/unit/test-romoperator.cpp
-@@ -185,7 +185,7 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir, "RomOperator-Synthesis-Port-Cube1
+@@ -219,7 +219,7 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir, "RomOperator-Synthesis-Port-Cube1
        // {"PEC", json::object({{"Attributes", json::array({})}})},
        {"LumpedPort", json::array({json::object({{"Index", 1},
                                                  {"R", port_ref_R},
@@ -230,7 +242,7 @@ index da495d5..8c8cc2b 100644
                                                  {"Attributes", json::array({100})},
                                                  {"Direction", "+X"}})})}};
  
-@@ -400,7 +400,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-Synthesis-Port-Cube32
+@@ -434,7 +434,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-Synthesis-Port-Cube32
                  {"R", port1_ref_R},
                  {"C", port1_ref_C},
                  {"L", port1_ref_L},
@@ -239,7 +251,7 @@ index da495d5..8c8cc2b 100644
                  {"Elements",
                   json::array(
                       {json::object({{"Attributes", json::array({1})},  // dx,dy=1,1
-@@ -411,7 +411,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-Synthesis-Port-Cube32
+@@ -445,7 +445,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-Synthesis-Port-Cube32
                                      {"Direction", "+X"}})})}}),
             json::object({{"Index", 2},
                           {"R", port2_ref_R},
@@ -248,7 +260,7 @@ index da495d5..8c8cc2b 100644
                           {"Elements", json::array({json::object(
                                            {{"Attributes", json::array({14})},  // dx,dy=1,1
                                             {"Direction", "+Z"}})})}})          //,
-@@ -709,12 +709,12 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir, "RomOperator-Synthesis-PortOrthog
+@@ -743,12 +743,12 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir, "RomOperator-Synthesis-PortOrthog
    setup_json["Boundaries"] = {
        {"LumpedPort", json::array({json::object({{"Index", 1},
                                                  {"R", 50.0},
@@ -263,7 +275,7 @@ index da495d5..8c8cc2b 100644
                                                  {"Attributes", json::array({102})},
                                                  {"Direction", "+X"}})})}};
  
-@@ -769,7 +769,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-UpdatePROM-LinearDepe
+@@ -803,7 +803,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir, "RomOperator-UpdatePROM-LinearDepe
         json::array({json::object(
             {{"Index", 1},
              {"R", 50.0},
@@ -272,7 +284,7 @@ index da495d5..8c8cc2b 100644
              {"Elements", json::array({json::object({{"Attributes", json::array({14})},
                                                      {"Direction", "+Z"}})})}})})}};
  
-@@ -851,7 +851,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+@@ -885,7 +885,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
                   {"R", port1_ref_R},
                   {"C", port1_ref_C},
                   {"L", port1_ref_L},
@@ -281,7 +293,7 @@ index da495d5..8c8cc2b 100644
                   {"IncludeInSynthesis", false},
                   {"Elements",
                    json::array({json::object(
-@@ -863,7 +863,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+@@ -897,7 +897,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
              json::object(
                  {{"Index", 2},
                   {"R", port2_ref_R},
@@ -290,7 +302,34 @@ index da495d5..8c8cc2b 100644
                   {"Elements", json::array({json::object({{"Attributes", json::array({14})},
                                                           {"Direction", "+Z"}})})}})})}};
  
-@@ -924,7 +924,7 @@ TEST_CASE("RomOperator-Synthesis-ExcludedExcitedRejected", "[romoperator][Serial
+@@ -973,7 +973,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+             {"R", 50.0},
+             {"L", 1.0e-9},
+             {"C", 1.0e-12},
+-            {"Excitation", uint(1)},
++            {"Excitation", 1u},
+             {"Elements", json::array({json::object({{"Attributes", json::array({14})},
+                                                     {"Direction", "+Z"}})})}})})}};
+   setup_json["Solver"] = {
+@@ -1116,7 +1116,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+       {"PEC", {{"Attributes", json::array({8})}}},
+       {"LumpedPort", json::array({json::object({{"Index", 1},
+                                                 {"Attributes", json::array({7})},
+-                                                {"Excitation", uint(1)},
++                                                {"Excitation", 1u},
+                                                 {"R", 377.0},
+                                                 {"Direction", "+X"}})})}};
+   setup_json["Solver"] = {
+@@ -1199,7 +1199,7 @@ TEST_CASE_METHOD(palace::test::SharedTempDir,
+                                               {"Attributes", json::array({14})},
+                                               {"Mode", 1},
+                                               {"Offset", 0.0},
+-                                              {"Excitation", uint(1)}}),
++                                              {"Excitation", 1u}}),
+                                 json::object({{"Index", 2},
+                                               {"Attributes", json::array({18})},
+                                               {"Mode", 1},
+@@ -1295,7 +1295,7 @@ TEST_CASE("RomOperator-Synthesis-ExcludedExcitedRejected", "[romoperator][Serial
    setup_json["Boundaries"] = {
        {"LumpedPort", json::array({json::object({{"Index", 1},
                                                  {"R", 50.0},
@@ -299,7 +338,7 @@ index da495d5..8c8cc2b 100644
                                                  {"IncludeInSynthesis", false},
                                                  {"Attributes", json::array({100})},
                                                  {"Direction", "+X"}})})}};
-@@ -955,7 +955,7 @@ TEST_CASE("RomOperator-Synthesis-WavePortExcludedExcitedRejected", "[romoperator
+@@ -1326,7 +1326,7 @@ TEST_CASE("RomOperator-Synthesis-WavePortExcludedExcitedRejected", "[romoperator
    setup_json["Boundaries"] = {
        {"WavePort", json::array({json::object({{"Index", 1},
                                                {"Mode", 1},
@@ -309,7 +348,7 @@ index da495d5..8c8cc2b 100644
                                                {"Attributes", json::array({100})}})})}};
    setup_json["Solver"] = {{"Order", 1UL},
 diff --git a/test/unit/test-schema.cpp b/test/unit/test-schema.cpp
-index e55ef9e..0dacc69 100644
+index f6ee93e..d67a3db 100644
 --- a/test/unit/test-schema.cpp
 +++ b/test/unit/test-schema.cpp
 @@ -199,7 +199,7 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir, "Schema Validation - Config with
@@ -330,3 +369,12 @@ index e55ef9e..0dacc69 100644
    json config = json::parse(buffer);
  
    // Verify range expansion worked.
+@@ -670,7 +670,7 @@ TEST_CASE_METHOD(palace::test::PerRankTempDir,
+     })";
+   }
+ 
+-  std::stringstream buffer = PreprocessFile(temp_path.c_str());
++  std::stringstream buffer = PreprocessFile(temp_path.string().c_str());
+   json config = json::parse(buffer);
+   CHECK(config["Model"]["Mesh"] == "mesh[1-3].msh");
+   CHECK(config["Problem"]["Output"] == "postpro/run[2024-09]\"[1-2]\"");

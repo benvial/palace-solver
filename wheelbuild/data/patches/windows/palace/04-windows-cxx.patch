@@ -1,6 +1,6 @@
 Carried patch, Windows only: Palace's C++ under MinGW.
 
-Three causes, five files: M_PI needs _USE_MATH_DEFINES under -std=c++17
+Three causes, five files: M_PI needs _USE_MATH_DEFINES under -std=c++20
 (one target_compile_definitions under if(MINGW)); std::filesystem::path does
 not convert to std::string where its value_type is wchar_t (a
 TableWithCSVFile constructor taking a path, and .string() at five sites);
@@ -8,14 +8,14 @@ std::max(0L, memory) where std::distance returns long long on LLP64. All
 portable: identical behaviour on Linux and macOS.
 
 diff --git a/palace/CMakeLists.txt b/palace/CMakeLists.txt
-index 4816f3a..3370210 100644
+index bf21d57..fec0c03 100644
 --- a/palace/CMakeLists.txt
 +++ b/palace/CMakeLists.txt
-@@ -299,6 +299,10 @@ endif()
+@@ -345,6 +345,10 @@ endif()
  set(LIB_TARGET_NAME libpalace)
  add_library(${LIB_TARGET_NAME} "")
  target_include_directories(${LIB_TARGET_NAME} PUBLIC ${CMAKE_SOURCE_DIR})
-+# MinGW's <math.h> defines M_PI only with _USE_MATH_DEFINES under strict -std=c++17.
++# MinGW's <math.h> defines M_PI only with _USE_MATH_DEFINES under strict -std=c++20.
 +if(MINGW)
 +  target_compile_definitions(${LIB_TARGET_NAME} PUBLIC _USE_MATH_DEFINES)
 +endif()
@@ -23,10 +23,10 @@ index 4816f3a..3370210 100644
  
  # Add source files
 diff --git a/palace/drivers/basesolver.cpp b/palace/drivers/basesolver.cpp
-index 0a20d9c..e80cf91 100644
+index 51ef6c0..8b55fc6 100644
 --- a/palace/drivers/basesolver.cpp
 +++ b/palace/drivers/basesolver.cpp
-@@ -115,7 +115,7 @@ namespace
+@@ -114,7 +114,7 @@ namespace
  
  json LoadMetadata(const fs::path &post_dir)
  {
@@ -35,7 +35,7 @@ index 0a20d9c..e80cf91 100644
    std::ifstream fi(path);
    if (!fi.is_open())
    {
-@@ -128,8 +128,8 @@ void WriteMetadata(const fs::path &post_dir, const json &meta)
+@@ -127,8 +127,8 @@ void WriteMetadata(const fs::path &post_dir, const json &meta)
  {
    // Write to a temporary file and atomically rename it into place so a concurrent reader
    // (e.g. an external monitor polling palace.json mid-run) never observes a partial file.
@@ -47,10 +47,10 @@ index 0a20d9c..e80cf91 100644
      std::ofstream fo(tmp_path);
      if (!fo.is_open())
 diff --git a/palace/drivers/drivensolver.cpp b/palace/drivers/drivensolver.cpp
-index 6b89630..efa59e6 100644
+index ce402dd..8588684 100644
 --- a/palace/drivers/drivensolver.cpp
 +++ b/palace/drivers/drivensolver.cpp
-@@ -391,7 +391,7 @@ ErrorIndicator DrivenSolver::SweepAdaptive(SpaceOperator &space_op) const
+@@ -348,7 +348,7 @@ ErrorIndicator DrivenSolver::SweepAdaptive(SpaceOperator &space_op) const
      auto memory = std::distance(max_errors.rbegin(),
                                  std::find_if(max_errors.rbegin(), max_errors.rend(),
                                               [=](auto x) { return x > offline_tol; }));
@@ -60,10 +60,10 @@ index 6b89630..efa59e6 100644
      // Greedy procedure for basis construction (offline phase). Basis is initialized with
      // solutions at frequency sweep endpoints and explicit sample frequencies.
 diff --git a/palace/models/postoperator.cpp b/palace/models/postoperator.cpp
-index 43d6f5e..d7ecce2 100644
+index 3a4ec9b..2a0231b 100644
 --- a/palace/models/postoperator.cpp
 +++ b/palace/models/postoperator.cpp
-@@ -719,8 +719,8 @@ void PostOperator<solver_t>::InitializeParaviewDataCollection(
+@@ -771,8 +771,8 @@ void PostOperator<solver_t>::InitializeParaviewDataCollection(
      paraview_dir_b /= sub_folder_name;
    }
    // Set up postprocessing for output to disk.
@@ -74,7 +74,7 @@ index 43d6f5e..d7ecce2 100644
  
    const mfem::VTKFormat format = mfem::VTKFormat::BINARY32;
    const bool use_ho = true;
-@@ -1512,7 +1512,7 @@ void PostOperator<solver_t>::WriteMFEMGridFunctionsFinal(const ErrorIndicator *i
+@@ -1565,7 +1565,7 @@ void PostOperator<solver_t>::WriteMFEMGridFunctionsFinal(const ErrorIndicator *i
  
    // Save ParMesh files; necessary to visualize grid functions.
    fs::path mesh_filename = fs::path(gridfunction_output_dir) / "mesh";
@@ -84,22 +84,24 @@ index 43d6f5e..d7ecce2 100644
    mesh::NondimensionalizeMesh(mesh, mesh_Lc0);
    Mpi::Barrier(fem_op->GetComm());
 diff --git a/palace/utils/tablecsv.hpp b/palace/utils/tablecsv.hpp
-index e6364a6..b79919e 100644
+index bd0df3f..aed81d3 100644
 --- a/palace/utils/tablecsv.hpp
 +++ b/palace/utils/tablecsv.hpp
-@@ -5,9 +5,11 @@
+@@ -5,11 +5,13 @@
  #define PALACE_UTILS_TABLECSV_HPP
  
  #include <cstddef>
 +#include <filesystem>
+ #include <functional>
+ #include <map>
  #include <optional>
  #include <string>
  #include <string_view>
 +#include <type_traits>
- #include <unordered_map>
  #include <vector>
  
-@@ -157,6 +159,15 @@ public:
+ namespace palace
+@@ -176,6 +178,15 @@ public:
  
    TableWithCSVFile() = default;
    explicit TableWithCSVFile(std::string csv_file_fullpath, bool load_existing_file = false);

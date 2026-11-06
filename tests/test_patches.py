@@ -30,7 +30,6 @@ CARRIED = [
     "palace/07-windows-regression-staging.patch",
     "palace/08-windows-test-zlib-order.patch",
     "palace/09-windows-test-utf8-arguments.patch",
-    "hypre/01-mingw-ffs.patch",
     "libxsmm/01-llp64.patch",
     "libxsmm/02-win64-trans-a.patch",
     "libceed/01-windows.patch",
@@ -109,7 +108,6 @@ def test_the_mumps_exception_is_documented_in_its_patch():
 
 def test_the_pre_pass_builds_one_patch_target_per_dependency():
     assert patches.patch_targets() == [
-        "hypre-patch",
         "libxsmm-patch",
         "libCEED-patch",
         "strumpack-patch",
