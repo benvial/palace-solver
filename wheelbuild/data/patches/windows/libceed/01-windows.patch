@@ -8,10 +8,13 @@ and mkdir is _mkdir. The Makefile's sed s:%prefix%:...: breaks on the colon in
 D:/; it uses | instead. On Windows the library is libceed.dll with a
 libceed.dll.a import library, because MinGW ld does not search *.so, XSMM_DIR
 loses its abspath, which MSYS2 make reads as relative, and LIBXSMM is found by
-directory rather than by the pkg-config file. Linux and macOS build as before.
+directory rather than by the pkg-config file. The CPU code-generation backends
+(/cpu/self/gen/*), new in 1.0, compile C++ at run time and load it with dlopen
+from <dlfcn.h>; on Windows they are left out and backends/weak/ceed-cpu-gen-weak.c
+registers them as not compiled, as libCEED does for any backend it did not
+build. Palace does not use them. Linux and macOS build as before.
 
 diff --git a/Makefile b/Makefile
-index ce01a80..8b092a4 100644
 --- a/Makefile
 +++ b/Makefile
 @@ -35,6 +35,8 @@ XDG_CACHE_HOME      ?= $(HOME)/.cache
@@ -23,7 +26,7 @@ index ce01a80..8b092a4 100644
  
  
  # ------------------------------------------------------------
-@@ -260,7 +262,7 @@ MFLAGS := -j $(NPROCS) --warn-undefined-variables \
+@@ -260,14 +262,14 @@ MFLAGS := -j $(NPROCS) --warn-undefined-variables \
  PYTHON ?= python3
  PROVE ?= prove
  PROVE_OPTS ?= -j $(NPROCS)
@@ -32,6 +35,14 @@ index ce01a80..8b092a4 100644
  
  ceed.pc := $(LIBDIR)/pkgconfig/ceed.pc
  libceed.so := $(LIBDIR)/libceed.$(SO_EXT)
+ libceed.a := $(LIBDIR)/libceed.a
+ libceed := $(if $(STATIC),$(libceed.a),$(libceed.so))
+ CEED_LIBS = -lceed
+-BACKENDS_BUILTIN := /cpu/self/ref/serial /cpu/self/ref/blocked /cpu/self/opt/serial /cpu/self/opt/blocked /cpu/self/gen/serial /cpu/self/gen/blocked
++BACKENDS_BUILTIN := /cpu/self/ref/serial /cpu/self/ref/blocked /cpu/self/opt/serial /cpu/self/opt/blocked $(if $(WINDOWS),,/cpu/self/gen/serial /cpu/self/gen/blocked)
+ BACKENDS_MAKE := $(BACKENDS_BUILTIN)
+ PKGCONF ?= pkgconf
+ pkgconf = $(shell env PKG_CONFIG_PATH=$(PKG_CONFIG_PATH) $(PKGCONF) $1 | $(SED) -e 's/^"//g' -e 's/"$$//g')
 @@ -311,6 +313,8 @@ lib: $(libceed) $(ceed.pc)
  par:;@$(MAKE) $(MFLAGS) V=$(V) lib
  
@@ -41,7 +52,25 @@ index ce01a80..8b092a4 100644
  
  # ------------------------------------------------------------
  # Source files
-@@ -643,13 +647,14 @@ XSMM_BACKENDS = /cpu/self/xsmm/serial /cpu/self/xsmm/blocked
+@@ -548,6 +552,9 @@ libceed.c += $(opt.c)
+ libceed.h += $(ref.h) $(blocked.h) $(opt.h)
+ 
+ # CPU Codegen Backends
++# Not on Windows: they compile C++ at run time and dlopen the result, and
++# backends/weak/ceed-cpu-gen-weak.c registers them as not compiled instead.
++ifeq ($(WINDOWS),)
+ LIBCEED_CONTAINS_CXX = 1
+ libceed.c        += $(cpu-gen.c)
+ libceed.cpp      += $(cpu-gen.cpp)
+@@ -555,6 +562,7 @@ libceed.h        += $(cpu-gen.h)
+ CEED_CPU_JIT_CXX ?= $(CXX)
+ CEED_CPU_JIT_OPT ?= $(OPT)
+ CPPFLAGS         += -DCEED_CPU_JIT_OPT='$(CEED_CPU_JIT_OPT)' -DCEED_CPU_JIT_CXX='$(CEED_CPU_JIT_CXX)'
++endif
+ 
+ # Memcheck Backends
+ MEMCHK_STATUS   = Disabled
+@@ -643,13 +651,14 @@ XSMM_BACKENDS = /cpu/self/xsmm/serial /cpu/self/xsmm/blocked
  ifneq ($(wildcard $(XSMM_DIR)/lib/libxsmm.*),)
    # Prefer the pkg-config file, which has the installed include directory (include/libxsmm
    # for LIBXSMM 2.x) and the libraries LIBXSMM needs
@@ -58,7 +87,7 @@ index ce01a80..8b092a4 100644
    endif
    # LIBXSMM 2.0 has no BLAS fallback (libxsmm/libxsmm#981); builds of earlier main snapshots
    # with BLAS enabled can pass the BLAS library here
-@@ -1014,9 +1019,9 @@ $(OBJDIR)/ceed.pc : pkgconfig-prefix = $(prefix)
+@@ -1014,9 +1023,9 @@ $(OBJDIR)/ceed.pc : pkgconfig-prefix = $(prefix)
  .INTERMEDIATE : $(OBJDIR)/ceed.pc
  %/ceed.pc : ceed.pc.template | $$(@D)/.DIR
  	@$(SED) \
@@ -71,7 +100,7 @@ index ce01a80..8b092a4 100644
  
  GIT_DESCRIBE = $(shell git -c safe.directory=$PWD describe --always --dirty 2>/dev/null || printf "unknown\n")
  
-@@ -1052,6 +1057,7 @@ install : lib $(OBJDIR)/ceed.pc
+@@ -1052,6 +1061,7 @@ install : lib $(OBJDIR)/ceed.pc
  	$(INSTALL_DATA) include/ceed/cuda.h "$(DESTDIR)$(includedir)/ceed/"
  	$(INSTALL_DATA) include/ceed/hip.h "$(DESTDIR)$(includedir)/ceed/"
  	$(INSTALL_DATA) $(libceed) "$(DESTDIR)$(libdir)/"
@@ -79,8 +108,24 @@ index ce01a80..8b092a4 100644
  	$(INSTALL_DATA) $(OBJDIR)/ceed.pc "$(DESTDIR)$(pkgconfigdir)/"
  	$(INSTALL_DATA) include/ceed.h "$(DESTDIR)$(includedir)/"
  	$(INSTALL_DATA) include/ceedf.h "$(DESTDIR)$(includedir)/"
+diff --git a/backends/weak/ceed-cpu-gen-weak.c b/backends/weak/ceed-cpu-gen-weak.c
+new file mode 100644
+--- /dev/null
++++ b/backends/weak/ceed-cpu-gen-weak.c
+@@ -0,0 +1,12 @@
++// Copyright (c) 2017-2026, Lawrence Livermore National Security, LLC and other CEED contributors.
++// All Rights Reserved. See the top-level LICENSE and NOTICE files for details.
++//
++// SPDX-License-Identifier: BSD-2-Clause
++//
++// This file is part of CEED:  http://github.com/ceed
++
++#include "ceed-backend-weak.h"
++// LCOV_EXCL_START
++#include "../ceed-backend-list-cpu-gen.h"
++// LCOV_EXCL_STOP
++#undef CEED_BACKEND
 diff --git a/interface/ceed.c b/interface/ceed.c
-index 7443b69..186f582 100644
 --- a/interface/ceed.c
 +++ b/interface/ceed.c
 @@ -19,7 +19,13 @@
