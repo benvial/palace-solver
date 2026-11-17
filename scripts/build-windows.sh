@@ -133,6 +133,16 @@ for wrapper in mpicc mpicxx mpic++ mpif77 mpif90 mpifort; do
   rm -f "/ucrt64/bin/$wrapper.exe"
 done
 
+# That route reads the MS-MPI SDK's location from MSMPI_INC and MSMPI_LIB64,
+# which only the SDK installer sets. With MSMPI_INC unset it adds
+# get_filename_component("" REALPATH), the directory being configured, to every
+# MPI include path. MFEM exports those paths, and CMake refuses an exported
+# include directory inside the source tree, so MFEM's configure fails. Point
+# both at mingw-w64-msmpi, which keeps mpi.h, mpif.h and mpifptr.h in include/.
+MSMPI_INC="$(cygpath -m /ucrt64/include)"
+MSMPI_LIB64="$(cygpath -m /ucrt64/lib)"
+export MSMPI_INC MSMPI_LIB64
+
 # The packages roll, and OpenBLAS alone takes most of an hour, so whether FindMPI
 # still reads this MS-MPI is settled first.
 echo "==> FindMPI"
@@ -146,6 +156,13 @@ find_package(MPI REQUIRED)
 if(NOT MPI_Fortran_LIBRARIES MATCHES "msmpifec")
   message(FATAL_ERROR "no gfortran bridge in ${MPI_Fortran_LIBRARIES}")
 endif()
+foreach(lang C CXX Fortran)
+  foreach(dir IN LISTS MPI_${lang}_INCLUDE_DIRS)
+    if(dir STREQUAL CMAKE_SOURCE_DIR)
+      message(FATAL_ERROR "MPI_${lang}_INCLUDE_DIRS names the source directory: ${MPI_${lang}_INCLUDE_DIRS}")
+    endif()
+  endforeach()
+endforeach()
 PROBE
 cmake -S "$(win "$mpi_probe")" -B "$(win "$mpi_probe/build")"
 rm -rf "$mpi_probe"

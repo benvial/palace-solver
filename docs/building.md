@@ -70,7 +70,10 @@ superbuild drives, and MS-MPI's import library and gfortran bridge
 (`mingw-w64-msmpi`); the packages are the ones the `wheels` workflow installs.
 The driver deletes that package's `mpicc`-style wrappers from your MSYS2, because
 CMake's FindMPI cannot read their output; `pacman -S mingw-w64-ucrt-x86_64-msmpi`
-restores them.
+restores them. It also points `MSMPI_INC` and `MSMPI_LIB64` at that package,
+because FindMPI's MS-MPI route reads them, and with `MSMPI_INC` unset it adds
+the directory being configured to the MPI include paths, which MFEM refuses to
+export.
 MSYS2's own python cannot run the steps, because it reports a platform that
 would mis-tag the wheel. The driver fetches and hash-checks the MS-MPI
 redistributable, builds OpenBLAS, then runs the superbuild with the carried

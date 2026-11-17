@@ -105,3 +105,14 @@ def test_mpi_wrappers_are_gone_and_findmpi_is_proved_before_anything_compiles():
     assert script.index('export CMAKE_GENERATOR="MSYS Makefiles"') < probe
     for wrapper in ("mpicc", "mpicxx", "mpic++", "mpif77", "mpif90", "mpifort"):
         assert wrapper in script[:removal]
+
+
+def test_findmpi_s_ms_mpi_route_is_told_where_the_sdk_is():
+    """Unset, MSMPI_INC resolves to the directory being configured, which then
+    sits in MFEM's exported include paths and fails its configure."""
+    script = _script()
+
+    probe = script.index("find_package(MPI REQUIRED)")
+    assert script.index("export MSMPI_INC MSMPI_LIB64") < probe
+    assert "cygpath -m /ucrt64/include" in script
+    assert "if(dir STREQUAL CMAKE_SOURCE_DIR)" in script[probe:]
