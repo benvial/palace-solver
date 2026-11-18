@@ -462,12 +462,16 @@ def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, ro
     assert value == json.dumps(matrix.select(rows, "win_amd64"))
 
 
-def test_only_main_saves_a_build_cache(named_step):
+def test_off_main_only_a_cold_build_saves_a_build_cache(named_step):
     """Four entries fill the 10 GB budget, so a save from any other ref evicts
-    one of main's (windows-wheel ticket 22)."""
-    save = named_step("Save build cache")
+    one of main's (windows-wheel ticket 22). A build that restored nothing, a
+    version bump's, saves anyway: otherwise every push to its pull request is
+    cold. A tag never saves; no other ref could restore its entry."""
+    condition = " ".join(named_step("Save build cache")["if"].split())
 
-    assert "github.ref == 'refs/heads/main'" in save["if"]
+    assert "github.ref == 'refs/heads/main'" in condition
+    assert "steps.build-cache.outputs.cache-matched-key == ''" in condition
+    assert "!startsWith(github.ref, 'refs/tags/')" in condition
 
 
 def test_the_pass_records_save_on_every_ref(named_step):

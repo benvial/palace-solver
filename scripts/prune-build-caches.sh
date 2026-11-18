@@ -27,11 +27,13 @@
 # deletes a Windows entry saved before the patches were keyed, which no current
 # run can restore exactly and which would otherwise never be replaced.
 #
-# Only main saves superbuild caches (see "Save build cache" in
-# .github/workflows/wheels.yml). A pull request, a branch dispatch or a tag
-# restores main's entry, rebuilds from it what its own tree changed, and saves
-# nothing, so a pull request that edits the build scripts rebuilds from main's
-# fallback on every push rather than cold, and leaves nothing here to prune.
+# Main saves superbuild caches; another ref saves one only when it built cold
+# (see "Save build cache" in .github/workflows/wheels.yml). A pull request, a
+# branch dispatch or a tag restores main's entry, rebuilds from it what its own
+# tree changed, and saves nothing, so a pull request that edits the build
+# scripts rebuilds from main's fallback on every push rather than cold. A
+# version bump's pull request does save, under its own ref; those entries are
+# not pruned here and expire after seven days without a read.
 # Only refs/heads/main is listed.
 #
 # Run it with --dry-run to see what a push to main would delete. Needs a
