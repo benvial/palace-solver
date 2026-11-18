@@ -228,33 +228,41 @@ def test_an_unset_thread_count_means_one_thread_not_one_per_core(tmp_path, monke
 
 
 @pytest.mark.parametrize(
-    ("argv", "omp_env", "expected"),
+    ("argv", "environment", "expected"),
     [
-        (["config.json"], None, "1"),
-        (["config.json"], "3", "3"),
-        (["--nt", "4", "config.json"], "2", "4"),
+        # One rank: one BLAS thread, whatever the OpenMP count.
+        (["config.json"], {}, ("1", "1")),
+        (["config.json"], {"OMP_NUM_THREADS": "3"}, ("3", "1")),
+        (["--nt", "4", "config.json"], {"OMP_NUM_THREADS": "2"}, ("4", "1")),
+        (["--np", "1", "--nt", "4", "config.json"], {}, ("4", "1")),
+        (["--serial", "--np", "2", "--nt", "4", "config.json"], {}, ("4", "1")),
+        (["config.json"], {"OMP_NUM_THREADS": "4", "PMI_SIZE": "1"}, ("4", "1")),
+        # Several ranks: as many BLAS threads as OpenMP threads.
+        (["--np", "2", "--nt", "4", "config.json"], {}, ("4", "4")),
+        (["config.json"], {"OMP_NUM_THREADS": "4", "PMI_SIZE": "2"}, ("4", "4")),
     ],
 )
-def test_openblas_threads_follow_the_openmp_count_not_the_environment(
-    tmp_path, monkeypatch, argv, omp_env, expected
+def test_openblas_threads_are_set_from_the_openmp_count_and_the_ranks(
+    monkeypatch, argv, environment, expected
 ):
     """An inherited OPENBLAS_NUM_THREADS above the OpenMP count hangs the
     OpenMP-built OpenBLAS in its first threaded dgemm (issue #24), so the
-    wrapper overrides it rather than deferring to it.
+    wrapper overrides it rather than deferring to it. On one rank it is one,
+    because threaded BLAS inside MUMPS's OpenMP threads makes no progress.
     """
-    _fake_binary(tmp_path)
-    monkeypatch.setattr(palace_solver, "_PACKAGE_DIR", tmp_path)
-    monkeypatch.setattr(_exec.os, "execv", lambda *_: None)
-    if omp_env is None:
-        monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
-    else:
-        monkeypatch.setenv("OMP_NUM_THREADS", omp_env)
+    monkeypatch.setattr(_exec, "_run_under_launcher", lambda *_, **__: None)
+    monkeypatch.setattr(_exec, "_run_rank", lambda *_, **__: None)
+    monkeypatch.delenv("OMP_NUM_THREADS", raising=False)
+    monkeypatch.delenv("PMI_SIZE", raising=False)
     monkeypatch.setenv("OPENBLAS_NUM_THREADS", "16")
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
 
     _exec.main(argv)
 
-    assert os.environ["OMP_NUM_THREADS"] == expected
-    assert os.environ["OPENBLAS_NUM_THREADS"] == expected
+    assert (os.environ["OMP_NUM_THREADS"], os.environ["OPENBLAS_NUM_THREADS"]) == (
+        expected
+    )
 
 
 def test_help_prints_the_wrapper_options(capsys):

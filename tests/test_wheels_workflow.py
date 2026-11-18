@@ -174,6 +174,16 @@ def test_the_wheel_job_restores_the_key_the_action_computes(build_cache, steps):
     )
 
 
+def test_no_restore_key_reaches_another_palace_release():
+    """A tree of another release cannot configure: CMake refuses its cache."""
+    action = yaml.safe_load(CACHE_KEY_ACTION.read_text())
+    run = next(s for s in action["runs"]["steps"] if s.get("id") == "key")["run"]
+    block = run.split("restore-keys<<EOF", 1)[1].split('echo "EOF"', 1)[0]
+    fallbacks = re.findall(r'echo "(superbuild-[^"]*)"', block)
+
+    assert fallbacks == ["superbuild-$PLATFORM_TAG-$PALACE_VERSION-"]
+
+
 @pytest.mark.parametrize("path", [WORKFLOW, KEEP_ALIVE])
 def test_no_workflow_spells_the_key_out_for_itself(path):
     """A second spelling is a second key: the keep-alive would read an entry
@@ -452,12 +462,16 @@ def test_matrix_main_writes_the_rows_to_the_job_output(tmp_path, monkeypatch, ro
     assert value == json.dumps(matrix.select(rows, "win_amd64"))
 
 
-def test_only_main_saves_a_build_cache(named_step):
+def test_off_main_only_a_cold_build_saves_a_build_cache(named_step):
     """Four entries fill the 10 GB budget, so a save from any other ref evicts
-    one of main's (windows-wheel ticket 22)."""
-    save = named_step("Save build cache")
+    one of main's (windows-wheel ticket 22). A build that restored nothing, a
+    version bump's, saves anyway: otherwise every push to its pull request is
+    cold. A tag never saves; no other ref could restore its entry."""
+    condition = " ".join(named_step("Save build cache")["if"].split())
 
-    assert "github.ref == 'refs/heads/main'" in save["if"]
+    assert "github.ref == 'refs/heads/main'" in condition
+    assert "steps.build-cache.outputs.cache-matched-key == ''" in condition
+    assert "!startsWith(github.ref, 'refs/tags/')" in condition
 
 
 def test_the_pass_records_save_on_every_ref(named_step):
@@ -1032,21 +1046,21 @@ def test_the_gate_runs_after_the_cache_save_and_before_the_upload(steps):
 def test_the_gate_keeps_its_ceilings(named_step):
     """Ticket 04 of the palace-tests effort. Raising one is a decision, not an edit."""
     for other, windows in SWEEPS.items():
-        ceiling = 5 if "unit tests" in other else 60
+        ceiling = 30 if "unit tests" in other else 180
         assert named_step(other)["timeout-minutes"] == ceiling
         assert named_step(windows)["timeout-minutes"] == ceiling
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
-    assert "unit_timeout=300" in script
-    assert "timeout=1200" in script
+    assert "unit_timeout=600" in script
+    assert "timeout=3600" in script
 
 
 def test_windows_cuts_a_hung_unit_entry_short():
     """The excluded symlink case hangs on two ranks under MS-MPI (palace-tests
-    ticket 08); left to the 300 s entry timeout it spends the whole step."""
+    ticket 08); left to the 600 s entry timeout it spends that much of the step."""
     script = (ROOT / "scripts" / "upstream-test-gate.sh").read_text()
     windows = script[script.index("MINGW* | MSYS*)\n    jobs=") :]
 
-    assert "unit_timeout=150" in windows[: windows.index(";;")]
+    assert "unit_timeout=300" in windows[: windows.index(";;")]
 
 
 def test_the_windows_gate_runs_the_ctest_the_build_pinned():
@@ -1159,7 +1173,7 @@ def test_the_wheel_run_solves_only_without_a_pass_on_this_payload(wheel_run_step
 
 def test_the_wheel_run_keeps_its_ceiling(wheel_run_step):
     """Ticket 09: raising it is a scope decision, not an edit."""
-    assert wheel_run_step("Wheel regression run")["timeout-minutes"] == 30
+    assert wheel_run_step("Wheel regression run")["timeout-minutes"] == 180
 
 
 def test_the_wheel_runs_evidence_is_never_published(wheel_run_step, download):

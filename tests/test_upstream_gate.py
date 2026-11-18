@@ -26,8 +26,8 @@ def test_the_exclusion_file_is_well_formed():
 
 
 def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windows():
-    """Ticket 04 of the palace-tests effort: 18 cases everywhere, and on Windows
-    the symlink case (ticket 06). The LIBXSMM defect ticket 08 excluded is
+    """Ticket 04 of the palace-tests effort: 25 cases everywhere at 0.19.0, and on
+    Windows the symlink case (ticket 06). The LIBXSMM defect ticket 08 excluded is
     fixed by a carried patch, so the gate holds it to passing again."""
     exclusions = upstream_gate.load_exclusions()
     everywhere = [
@@ -35,12 +35,12 @@ def test_the_mfem_exclusions_cover_every_platform_and_the_symlink_one_only_windo
     ]
     windows = [e for e in exclusions if e.platforms == ("win_amd64",)]
 
-    assert len(everywhere) == 18
+    assert len(everywhere) == 25
     assert all("MFEM_USE_EXCEPTIONS" in e.reason for e in everywhere)
     assert [e.test for e in windows] == [
         "RemovePreviousOutput removes a symlink without following it"
     ]
-    assert len(exclusions) == 19
+    assert len(exclusions) == 26
 
 
 def _write(tmp_path, text):

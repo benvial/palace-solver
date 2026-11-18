@@ -6,7 +6,7 @@ GetProcessMemoryInfo instead. The only POSIX-only file in Palace's own
 sources. Portable: Linux and macOS compile the same code as before.
 
 diff --git a/palace/utils/memoryreporting.cpp b/palace/utils/memoryreporting.cpp
-index 2d754b9..681057e 100644
+index 1db4d83..0ecf442 100644
 --- a/palace/utils/memoryreporting.cpp
 +++ b/palace/utils/memoryreporting.cpp
 @@ -3,7 +3,9 @@
@@ -50,7 +50,7 @@ index 2d754b9..681057e 100644
 +#elif defined(__APPLE__)
    task_vm_info_data_t vm_info;
    mach_msg_type_number_t count = TASK_VM_INFO_COUNT;
-   if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vm_info, &count) ==
+   if (task_info(mach_task_self(), TASK_VM_INFO, reinterpret_cast<task_info_t>(&vm_info),
 @@ -69,6 +87,14 @@ long GetCurrentMemory()
  // Note that Linux reports the result in kilobytes, MacOS in bytes.
  long GetPeakMemory()

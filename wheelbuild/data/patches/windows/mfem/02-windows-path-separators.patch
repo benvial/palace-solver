@@ -13,6 +13,8 @@ Together these meant 0.18.1.post3 wrote no ParaView output at all. Under
 _WIN32 both places split on '\' as well. No effect on Linux and macOS. Still
 present on MFEM master.
 
+diff --git a/fem/datacollection.cpp b/fem/datacollection.cpp
+index e2c2acb..86dbbd6 100644
 --- a/fem/datacollection.cpp
 +++ b/fem/datacollection.cpp
 @@ -28,6 +28,14 @@
@@ -30,15 +32,15 @@ present on MFEM master.
  namespace mfem
  {
  
-@@ -36,7 +44,6 @@
+@@ -36,7 +44,6 @@ int DataCollection::create_directory(const std::string &dir_name,
                                       const Mesh *mesh, int myid)
  {
     // create directories recursively
 -   const char path_delim = '/';
     std::string::size_type pos = 0;
-    int err_flag;
+    int err_flag = 0;
  #ifdef MFEM_USE_MPI
-@@ -45,7 +52,7 @@
+@@ -60,7 +67,7 @@ int DataCollection::create_directory(const std::string &dir_name,
  
     do
     {
@@ -47,7 +49,7 @@ present on MFEM master.
        std::string subdir = dir_name.substr(0, pos);
  
  #ifndef MFEM_USE_MPI
-@@ -75,7 +82,7 @@
+@@ -91,7 +98,7 @@ int DataCollection::create_directory(const std::string &dir_name,
  
  DataCollection::DataCollection(const std::string& collection_name, Mesh *mesh_)
  {

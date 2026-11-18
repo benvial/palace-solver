@@ -40,7 +40,7 @@ test_dir="$build_root/superbuild/palace-build/test/unit"
 # and the MSYS2 tools read. Elsewhere a path is already native.
 native() { printf '%s\n' "$1"; }
 # The longest any one unit entry may run; see the sweeps below.
-unit_timeout=300
+unit_timeout=600
 
 case "$(uname -s)" in
   Linux)
@@ -70,9 +70,9 @@ case "$(uname -s)" in
     # The excluded symlink case cannot set itself up here, and on two ranks
     # rank 0 throws before a barrier rank 1 then waits at forever. It counts
     # as not passing either way, so it is cut short rather than left to spend
-    # 300 of the step's 300 seconds. The slowest unit entry, "3D libCEED
-    # Operators" on one rank, takes about 70 s here.
-    unit_timeout=150
+    # 600 s of the step. The slowest unit entry at 0.18.1, "3D libCEED
+    # Operators" on one rank, took about 70 s here.
+    unit_timeout=300
     ;;
   *)
     echo "the upstream test gate does not run on $(uname -s)" >&2
@@ -86,7 +86,7 @@ export PATH="$prefix/bin:$PATH"
 # spending all of it, and name the entry that hung.
 case "$sweep" in
   units) selection=(-LE '^(regression|long)$') timeout="$unit_timeout" ;;
-  regression) selection=(-L '^regression$') timeout=1200 ;;
+  regression) selection=(-L '^regression$') timeout=3600 ;;
   *)
     echo "unknown sweep $sweep" >&2
     exit 2

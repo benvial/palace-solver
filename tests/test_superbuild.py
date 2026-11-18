@@ -1,4 +1,5 @@
 import os
+import subprocess
 from pathlib import Path, PureWindowsPath
 
 import pytest
@@ -12,6 +13,8 @@ SPEC_FEATURE_FLAGS = [
     "-DPALACE_WITH_HIP=OFF",
     "-DPALACE_WITH_MAGMA=OFF",
     "-DPALACE_WITH_GPU_AWARE_MPI=OFF",
+    "-DPALACE_WITH_CUDSS=OFF",
+    "-DPALACE_WITH_ENZYME=OFF",
     "-DPALACE_WITH_64BIT_INT=OFF",
     "-DPALACE_WITH_64BIT_BLAS_INT=OFF",
     "-DPALACE_WITH_OPENMP=ON",
@@ -431,3 +434,39 @@ def test_windows_takes_no_compile_flags(tmp_path):
             compile_flags="-march=x86-64-v3",
             system="Windows",
         )
+
+
+@pytest.mark.parametrize(("failures", "attempts"), [(0, 1), (1, 2), (2, 3)])
+def test_a_failed_configure_is_tried_again(tmp_path, monkeypatch, failures, attempts):
+    """Palace's configure fetches patches from github.com, which refuses some."""
+    calls = []
+    slept = []
+
+    def flaky(command, *, cwd):
+        calls.append((command, cwd))
+        if len(calls) <= failures:
+            raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(superbuild, "check_call", flaky)
+    monkeypatch.setattr(superbuild.time, "sleep", slept.append)
+
+    superbuild.configure_with_retries(["cmake", "src"], cwd=tmp_path)
+
+    assert calls == [(["cmake", "src"], tmp_path)] * attempts
+    assert slept == list(superbuild.CONFIGURE_RETRY_DELAYS[:failures])
+
+
+def test_a_configure_that_keeps_failing_fails_the_build(tmp_path, monkeypatch):
+    calls = []
+
+    def broken(command, **_kwargs):
+        calls.append(command)
+        raise subprocess.CalledProcessError(1, command)
+
+    monkeypatch.setattr(superbuild, "check_call", broken)
+    monkeypatch.setattr(superbuild.time, "sleep", lambda _delay: None)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        superbuild.configure_with_retries(["cmake", "src"], cwd=tmp_path)
+
+    assert len(calls) == len(superbuild.CONFIGURE_RETRY_DELAYS) + 1

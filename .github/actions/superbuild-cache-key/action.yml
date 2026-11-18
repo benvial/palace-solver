@@ -41,6 +41,12 @@ description: >-
 # Windows-only because only Windows carries patches; the other rows' keys stay
 # as they were.
 
+# The fallback stops at the Palace version. A tree from another release is no
+# use to this one: its CMake cache names the old source directory, which CMake
+# refuses outright ("does not match the source"), and its install prefix holds
+# the old release's dependencies, which the configure would find. So the first
+# build of a release is cold, as its pull request says it is.
+
 inputs:
   platform-tag:
     description: >-
@@ -58,7 +64,7 @@ outputs:
     description: The exact key, when platform-tag and palace-version are given.
     value: ${{ steps.key.outputs.key }}
   restore-keys:
-    description: The fallbacks, newest tree first, one per line.
+    description: The fallbacks, one per line; never one from another Palace release.
     value: ${{ steps.key.outputs.restore-keys }}
   inputs-hash:
     description: The hash of the keyed build files, every row's last component.
@@ -98,6 +104,5 @@ runs:
         {
           echo "restore-keys<<EOF"
           echo "superbuild-$PLATFORM_TAG-$PALACE_VERSION-"
-          echo "superbuild-$PLATFORM_TAG-"
           echo "EOF"
         } >> "$GITHUB_OUTPUT"

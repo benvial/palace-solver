@@ -19,8 +19,9 @@ on:
       # Iteration on the Windows row. Windows work edits files the build cache
       # is keyed on, so a full run would rebuild all four rows from main's
       # fallback entries for changes that cannot affect the other three. This
-      # builds the Windows row alone. Like every run off main it restores and
-      # saves no build cache (see "Save build cache"). It is not path-filter
+      # builds the Windows row alone. Like every run off main it restores
+      # main's build cache and saves none unless it built cold (see "Save build
+      # cache"). It is not path-filter
       # gating: pull requests and pushes always build every row.
       windows_only:
         description: "Build only the Windows row (iteration; never a release)"
@@ -337,11 +338,24 @@ jobs:
       # rebuilt them cold in 1 h 43 min and 1 h 58 min against about 35 and 55
       # from a fallback. So pull requests, branch dispatches and tags restore
       # main's entry, rebuild what changed from it, and save nothing. A tag's
-      # entry no other ref could restore anyway. The cost is that such a pull
-      # request gets no warm second push, which those two rarely had.
+      # entry no other ref could restore anyway.
+      #
+      # The exception is a cold build off main: one whose restore matched no
+      # entry at all, which in practice means a Palace version bump, since the
+      # fallback stops at the version and main holds only the old release's
+      # trees. Saving nothing there made every push to the bump's pull request
+      # another cold build, about two hours on Windows (PR #28 ran six). Such a
+      # pull request saves once per platform, under its own ref, and its later
+      # pushes restore that entry and rebuild only what they changed. The
+      # eviction it causes lands on main's entries for the old release, which
+      # the merge leaves stale anyway; a release of the old version before the
+      # merge would rebuild cold.
       - name: Save build cache
         if: >-
-          always() && github.ref == 'refs/heads/main'
+          always()
+          && (github.ref == 'refs/heads/main'
+              || (!startsWith(github.ref, 'refs/tags/')
+                  && steps.build-cache.outputs.cache-matched-key == ''))
           && steps.build-cache.outputs.cache-hit != 'true'
           && steps.cache-guard.outcome == 'success'
         uses: actions/cache/save@v5
@@ -473,7 +487,7 @@ jobs:
       # that passes fails the row as surely as one that fails.
       - name: Upstream test gate, unit tests
         if: runner.os != 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 30
         env:
           MANYLINUX_IMAGE: ${{ matrix.image }}
           BUILD_CACHE: ${{ matrix.build_root }}
@@ -492,7 +506,7 @@ jobs:
       # platform.
       - name: Upstream test gate, unit tests on Windows
         if: runner.os == 'Windows'
-        timeout-minutes: 5
+        timeout-minutes: 30
         shell: msys2 {0}
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
@@ -502,10 +516,11 @@ jobs:
             --platform "$PLATFORM_TAG" \
             --tests "$BUILD_ROOT/gate/tests.json" --junit "$BUILD_ROOT/gate/units.xml"
 
-      # All 46 non-[Long] regression cases on two ranks, upstream's default.
+      # All 64 non-[Long] regression cases on two ranks, upstream's default.
+      # macOS took 50 minutes on 0.18.1's 46.
       - name: Upstream test gate, regression
         if: runner.os != 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 180
         env:
           MANYLINUX_IMAGE: ${{ matrix.image }}
           BUILD_CACHE: ${{ matrix.build_root }}
@@ -521,7 +536,7 @@ jobs:
 
       - name: Upstream test gate, regression on Windows
         if: runner.os == 'Windows' && steps.gate-passed.outputs.cache-hit != 'true'
-        timeout-minutes: 60
+        timeout-minutes: 180
         shell: msys2 {0}
         env:
           BUILD_ROOT: ${{ matrix.build_root }}
@@ -637,12 +652,12 @@ jobs:
             -o "$RUNNER_TEMP/palace.tar.gz"
           python -m wheelbuild.wheel_regression extract "$RUNNER_TEMP/palace.tar.gz" "$RUNNER_TEMP/palace"
 
-      # 40 cases at two ranks, half the cores' worth at a time, 20 minutes
-      # each. The step's ceiling is ticket 09's: a row that breaks it is a
-      # scope decision, never a quiet raise.
+      # All 64 cases at two ranks, half the cores' worth at a time, an hour
+      # each at most. A row that breaks the ceiling is a scope decision, never
+      # a quiet raise.
       - name: Wheel regression run
         if: steps.wheel-passed.outputs.cache-hit != 'true'
-        timeout-minutes: 30
+        timeout-minutes: 180
         run: |
           python -m wheelbuild.wheel_regression run \
             --source "$RUNNER_TEMP/palace" --work "$RUNNER_TEMP/work" \

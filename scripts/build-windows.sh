@@ -121,6 +121,52 @@ cmake --version | head -1
 # NMake. CMake reads this whenever no generator is given.
 export CMAKE_GENERATOR="MSYS Makefiles"
 
+# FindMPI asks an MPI compiler wrapper how to link before anything else, and
+# believes one that answers. mingw-w64-msmpi's wrappers now answer -show, in a
+# single-quoted `-l:libmsmpi.dll.a` form FindMPI cannot read, so it reports MPI
+# missing. Without a wrapper it takes its MS-MPI route, which finds the import
+# library and the gfortran bridge by name. Nothing in the build compiles through
+# the wrappers, and every sub-project runs its own FindMPI, so they go rather
+# than being worked around once in the superbuild's configure.
+# `pacman -S mingw-w64-ucrt-x86_64-msmpi` puts them back.
+for wrapper in mpicc mpicxx mpic++ mpif77 mpif90 mpifort; do
+  rm -f "/ucrt64/bin/$wrapper.exe"
+done
+
+# That route reads the MS-MPI SDK's location from MSMPI_INC and MSMPI_LIB64,
+# which only the SDK installer sets. With MSMPI_INC unset it adds
+# get_filename_component("" REALPATH), the directory being configured, to every
+# MPI include path. MFEM exports those paths, and CMake refuses an exported
+# include directory inside the source tree, so MFEM's configure fails. Point
+# both at mingw-w64-msmpi, which keeps mpi.h, mpif.h and mpifptr.h in include/.
+MSMPI_INC="$(cygpath -m /ucrt64/include)"
+MSMPI_LIB64="$(cygpath -m /ucrt64/lib)"
+export MSMPI_INC MSMPI_LIB64
+
+# The packages roll, and OpenBLAS alone takes most of an hour, so whether FindMPI
+# still reads this MS-MPI is settled first.
+echo "==> FindMPI"
+mpi_probe="$build_root/mpi-probe"
+rm -rf "$mpi_probe"
+mkdir -p "$mpi_probe"
+cat >"$mpi_probe/CMakeLists.txt" <<'PROBE'
+cmake_minimum_required(VERSION 3.27)
+project(mpi-probe LANGUAGES C CXX Fortran)
+find_package(MPI REQUIRED)
+if(NOT MPI_Fortran_LIBRARIES MATCHES "msmpifec")
+  message(FATAL_ERROR "no gfortran bridge in ${MPI_Fortran_LIBRARIES}")
+endif()
+foreach(lang C CXX Fortran)
+  foreach(dir IN LISTS MPI_${lang}_INCLUDE_DIRS)
+    if(dir STREQUAL CMAKE_SOURCE_DIR)
+      message(FATAL_ERROR "MPI_${lang}_INCLUDE_DIRS names the source directory: ${MPI_${lang}_INCLUDE_DIRS}")
+    endif()
+  endforeach()
+endforeach()
+PROBE
+cmake -S "$(win "$mpi_probe")" -B "$(win "$mpi_probe/build")"
+rm -rf "$mpi_probe"
+
 # PETSc's ./configure is `#!/usr/bin/env python3` and refuses a Windows python
 # ("Windows python detected. Please rerun ./configure with cygwin-python"),
 # which MinGW's python is. MSYS2's own /usr/bin/python3 is the one it wants,

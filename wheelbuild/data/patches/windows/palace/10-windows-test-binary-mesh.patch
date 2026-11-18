@@ -1,0 +1,24 @@
+Carried patch, Windows only: a unit test reads its binary Gmsh mesh in binary mode.
+
+"Electrostatic MMS analytic converges on curved tetrahedra" loads
+test/data/mesh/cylinder-tet-p2.msh, a binary Gmsh 2.2 file, through a
+std::ifstream opened in text mode. On Windows text mode turns CRLF into LF
+and stops at 0x1A, so MFEM's reader got corrupted node records and aborted
+with "Gmsh node indices are not unique". mfem/01 makes MFEM open its own
+named files in binary mode, but this test hands MFEM the stream. The stream
+now opens with std::ios::binary. Linux and macOS read the same bytes either
+way.
+
+diff --git a/test/unit/test-mms-electrostatic.cpp b/test/unit/test-mms-electrostatic.cpp
+index 516c30d..c08b0f7 100644
+--- a/test/unit/test-mms-electrostatic.cpp
++++ b/test/unit/test-mms-electrostatic.cpp
+@@ -168,7 +168,7 @@ std::unique_ptr<mfem::Mesh> LoadCurvedCylinderMesh(int refinement)
+ {
+   const std::string mesh_path =
+       std::string(PALACE_TEST_DATA_DIR) + "/mesh/cylinder-tet-p2.msh";
+-  std::ifstream mesh_file(mesh_path);
++  std::ifstream mesh_file(mesh_path, std::ios::binary);
+   REQUIRE(mesh_file.good());
+   constexpr bool generate_edges = false, refine = true, fix_orientation = true;
+   auto serial_mesh =
